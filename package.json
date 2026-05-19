@@ -6,6 +6,10 @@
     "files": [
         "src/",
         "bin/",
+        "install/",
+        "Dockerfile",
+        "docker-compose.yml",
+        ".env.example",
         "README.md",
         "LICENSE"
     ],

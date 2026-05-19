@@ -1,0 +1,32 @@
+# mailcow-rest-api nginx route for mailcow's existing nginx.
+#
+# Installed by install/setup.sh into:
+#   /opt/mailcow-dockerized/data/conf/nginx/site.mailcow-rest-api.custom
+#
+# The API is exposed at:
+#   https://<mailcow-host>/mailcow-rest-api/
+
+location /mailcow-rest-api/ {
+    resolver 127.0.0.11 valid=30s ipv6=off;
+
+    set $mailcow_rest_api_upstream_uri "";
+    if ($request_uri ~ ^/mailcow-rest-api(/[^?]*)) {
+        set $mailcow_rest_api_upstream_uri $1;
+    }
+
+    proxy_pass http://mailcow-rest-api:3001$mailcow_rest_api_upstream_uri$is_args$args;
+    proxy_http_version 1.1;
+
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-Prefix /mailcow-rest-api;
+    proxy_set_header Authorization $http_authorization;
+    proxy_pass_request_headers on;
+
+    proxy_read_timeout 90s;
+    proxy_send_timeout 90s;
+    client_max_body_size 100m;
+}
