@@ -1,3 +1,6 @@
+# Install this checkout outside of /opt/mailcow-dockerized (e.g. as a sibling
+# directory) so mailcow's own update.sh — which resets its working tree —
+# never touches it. The default quickstart/manual install paths already do this.
 services:
   mailcow-rest-api:
     image: ghcr.io/jr551/mailcow-rest-api:master
@@ -9,7 +12,7 @@ services:
       IMAP_HOST: ${IMAP_HOST:-dovecot-mailcow}
       SMTP_HOST: ${SMTP_HOST:-postfix-mailcow}
       MAILCOW_DB_HOST: ${MAILCOW_DB_HOST:-mysql-mailcow}
-      CACHE_PATH: /data/auth-cache.db
+      CACHE_PATH: /data/cache.db
       OCR_CACHE_PATH: /data/ocr-cache.db
       PUSH_DB_PATH: /data/push.db
       TRACKING_DB_PATH: /data/tracking.db
@@ -18,11 +21,14 @@ services:
       LITELLM_USER_STORE_PATH: /data/litellm-users.json
       S3_DRIVE_USERS_JSON: /data/drive-users.json
     volumes:
-      - ./data:/data
+      - mailcow-rest-api-data:/data
     networks:
       mailcow-network:
         aliases:
           - mailcow-rest-api
+
+volumes:
+  mailcow-rest-api-data:
 
 networks:
   mailcow-network:

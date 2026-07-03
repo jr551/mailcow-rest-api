@@ -202,6 +202,14 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
 
     await app.register(sensible);
 
+    if (config.rateLimit.enabled) {
+        await app.register(require('@fastify/rate-limit'), {
+            max: config.rateLimit.max,
+            timeWindow: config.rateLimit.windowMs,
+            allowList: ['127.0.0.1', '::1']
+        });
+    }
+
     // IP allowlist runs before auth so blocked IPs never trigger an IMAP LOGIN.
     app.addHook('onRequest', createIpAllowHook({ allowlist: config.security.ipAllowlist }));
 
