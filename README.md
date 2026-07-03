@@ -16,6 +16,7 @@
 - Optional S3/Backblaze B2 drive provisioning for browser-side file storage.
 - Optional AI routes for capabilities, configuration, summarise, draft reply, actions, translation, inbox sorting, phishing scan, TTS config, and web search.
 - Optional MCP stdio adapter through `bin/imap-rest-mcp`.
+- IP allowlisting and per-IP rate limiting in front of the IMAP auth path.
 
 ## Full API Surface
 
@@ -183,6 +184,8 @@ The default setup exposes the API through mailcow nginx at:
 
 Set `MAILCOW_PATH` if your mailcow checkout is not `/opt/mailcow-dockerized`, and set `MAILCOW_NETWORK` if your Docker network name differs from `mailcowdockerized_mailcow-network`.
 
+Install this checkout outside of `/opt/mailcow-dockerized` (e.g. as a sibling directory like `/opt/mailcow-rest-api`) so mailcow's own `update.sh` — which resets its working tree — never touches it. The quickstart and manual install commands above already do this.
+
 ## Configuration
 
 Copy `.env.example` to `.env`. Common values:
@@ -199,6 +202,7 @@ Copy `.env.example` to `.env`. Common values:
 | `LITELLM_MASTER_KEY` | empty | Enables per-user scoped LiteLLM keys |
 | `S3_DRIVE_ENABLED` | `false` | Enables drive config/quota endpoints |
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | empty | Enables push delivery |
+| `RATE_LIMIT_MAX` / `RATE_LIMIT_WINDOW_MS` | `300` / `60000` | Per-IP request cap; `RATE_LIMIT_ENABLED=false` to disable |
 
 ## Development
 

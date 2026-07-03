@@ -1,6 +1,6 @@
 {
     "name": "mailcow-rest-api",
-    "version": "0.5.14",
+    "version": "0.6.0",
     "description": "Mailcow add-on REST API, OpenAPI UI, and optional MCP server for mailbox, send, calendar, drive, push, and account workflows.",
     "main": "src/server.js",
     "files": [
@@ -46,6 +46,7 @@
     },
     "homepage": "https://github.com/jr551/mailcow-rest-api#readme",
     "dependencies": {
+        "@fastify/rate-limit": "^11.1.0",
         "@fastify/sensible": "6.0.4",
         "@fastify/static": "^8.2.0",
         "@fastify/swagger": "^9.7.0",

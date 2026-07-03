@@ -51,13 +51,25 @@ module.exports = Object.freeze({
         endpoint: process.env.MISTRAL_OCR_ENDPOINT || 'https://api.mistral.ai/v1/ocr',
         maxBytes: num(process.env.MISTRAL_OCR_MAX_BYTES, 50 * 1024 * 1024),
         cacheEnabled: bool(process.env.OCR_CACHE_ENABLED, true),
-        cachePath: process.env.OCR_CACHE_PATH || './data/cache.db',
+        cachePath: process.env.OCR_CACHE_PATH || './data/ocr-cache.db',
         cacheMaxEntries: num(process.env.OCR_CACHE_MAX_ENTRIES, 1000)
     },
 
     security: {
         ipAllowlist: process.env.IP_ALLOWLIST || '',
         trustProxy: bool(process.env.TRUST_PROXY, true)
+    },
+
+    rateLimit: {
+        // Anti-abuse backstop, not a strict per-user throttle — a webmail
+        // client legitimately bursts many requests when opening a mailbox.
+        // The default caps credential-stuffing sweeps against the IMAP
+        // LOGIN each failed Basic-auth attempt triggers (see auth.js)
+        // without disrupting normal use. 127.0.0.1/::1 are always exempt
+        // so the Docker healthcheck can't be starved by real traffic.
+        enabled: bool(process.env.RATE_LIMIT_ENABLED, true),
+        max: num(process.env.RATE_LIMIT_MAX, 300),
+        windowMs: num(process.env.RATE_LIMIT_WINDOW_MS, 60_000)
     },
 
     session: {
@@ -141,7 +153,7 @@ module.exports = Object.freeze({
         vapidPublicKey: process.env.VAPID_PUBLIC_KEY || '',
         vapidPrivateKey: process.env.VAPID_PRIVATE_KEY || '',
         vapidSubject: process.env.VAPID_SUBJECT || 'mailto:admin@example.com',
-        dbPath: process.env.PUSH_DB_PATH || './data/cache.db',
+        dbPath: process.env.PUSH_DB_PATH || './data/push.db',
         pollIntervalMs: num(process.env.PUSH_POLL_INTERVAL_MS, 5 * 60 * 1000)
     },
 
@@ -211,7 +223,7 @@ module.exports = Object.freeze({
     },
 
     tracking: {
-        dbPath: process.env.TRACKING_DB_PATH || './data/cache.db',
+        dbPath: process.env.TRACKING_DB_PATH || './data/tracking.db',
         pruneIntervalMs: num(process.env.TRACKING_PRUNE_INTERVAL_MS, 86400_000) // 24h default
     },
 
