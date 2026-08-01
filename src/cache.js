@@ -135,6 +135,28 @@ function createCache(opts) {
         return sizeStmt.get().c;
     }
 
+    // One-time migration of rows written before encryption existed.
+    //
+    // Lazy replacement-on-write isn't enough on its own: a session is only
+    // rewritten when it's recreated, so plaintext passwords would sit in
+    // the file until every existing session expired — up to the 30-day
+    // max lifetime. Seal them now instead.
+    function migratePlaintextSessions() {
+        if (!secretBox || !secretBox.enabled) return 0;
+        const rows = db.prepare('SELECT token, pass FROM sessions').all();
+        const update = db.prepare('UPDATE sessions SET pass = ? WHERE token = ?');
+        let migrated = 0;
+        const run = db.transaction((list) => {
+            for (const row of list) {
+                if (secretBox.isEncrypted(row.pass)) continue;
+                update.run(secretBox.encrypt(row.pass), row.token);
+                migrated++;
+            }
+        });
+        run(rows);
+        return migrated;
+    }
+
     let pruneTimer = null;
     if (pruneIntervalMs > 0) {
         pruneTimer = setInterval(() => {
@@ -219,7 +241,7 @@ function createCache(opts) {
         db.close();
     }
 
-    return { get, set, invalidate, prune, size, close, hashCreds, createSession, getSession, deleteSession, pruneSessions, sessionSize, listActiveSessions };
+    return { get, set, invalidate, prune, size, close, hashCreds, createSession, getSession, deleteSession, pruneSessions, sessionSize, listActiveSessions, migratePlaintextSessions };
 }
 
 module.exports = { createCache, hashCreds };

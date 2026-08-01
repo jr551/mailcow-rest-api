@@ -268,6 +268,21 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         secretBox
     });
 
+    // Seal anything written before encryption existed. Lazy
+    // replacement-on-write alone would leave real passwords readable until
+    // every pre-upgrade session expired.
+    if (secretBox.enabled) {
+        try {
+            const sessions = cache.migratePlaintextSessions ? cache.migratePlaintextSessions() : 0;
+            const senders = trackingStore.migratePlaintextSenders();
+            if (sessions || senders) {
+                app.log.info({ sessions, senders }, 'encrypted credentials written before this version');
+            }
+        } catch (err) {
+            app.log.warn({ err: err.message }, 'credential migration failed');
+        }
+    }
+
     const imageProxyCache = createImageProxyCache({
         filePath: config.imageProxy.cachePath,
         maxBytes: config.imageProxy.maxBytes

@@ -128,3 +128,37 @@ test('a session sealed with a lost key is dropped, not handed to IMAP', () => {
         } finally { wrong.close(); }
     } finally { cleanup(); }
 });
+
+test('existing plaintext rows are sealed on startup, not left to expire', () => {
+    const { dir, cleanup } = tmpDir();
+    try {
+        const file = path.join(dir, 'cache.db');
+        // A pre-upgrade database: sessions written with no encryption.
+        const before = createCache({
+            filePath: file, ttlValidMs: 60_000, ttlInvalidMs: 10_000, pruneIntervalMs: 0
+        });
+        const { token } = before.createSession('u@x.com', 'legacy-secret', 'h');
+        before.close();
+
+        const box = createSecretBox({ envValue: 'a'.repeat(64) });
+        const after = createCache({
+            filePath: file, ttlValidMs: 60_000, ttlInvalidMs: 10_000, pruneIntervalMs: 0,
+            secretBox: box
+        });
+        try {
+            assert.equal(after.migratePlaintextSessions(), 1);
+
+            // Still usable afterwards — migrating must not sign anyone out.
+            assert.equal(after.getSession(token).pass, 'legacy-secret');
+
+            // And the plaintext is gone from the file, which is the point:
+            // waiting for lazy rewrite would leave it readable for as long
+            // as the session lived.
+            after.close();
+            assert.equal(fs.readFileSync(file).includes(Buffer.from('legacy-secret')), false);
+        } catch (err) {
+            try { after.close(); } catch { /* already closed */ }
+            throw err;
+        }
+    } finally { cleanup(); }
+});

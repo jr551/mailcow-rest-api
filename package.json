@@ -1,6 +1,6 @@
 {
     "name": "mailcow-rest-api",
-    "version": "0.9.0",
+    "version": "0.9.1",
     "description": "Mailcow add-on REST API, OpenAPI UI, and optional MCP server for mailbox, send, calendar, drive, push, and account workflows.",
     "main": "src/server.js",
     "files": [

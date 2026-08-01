@@ -63,6 +63,25 @@ function createTrackingStore(opts) {
     const pruneStmt = db.prepare('DELETE FROM tracking_pixels WHERE sent_at < ?');
     const countStmt = db.prepare('SELECT COUNT(*) AS c FROM tracking_pixels');
 
+    // Same one-time migration as sessions: rows written before encryption
+    // existed keep a usable password until the 24h prune window clears
+    // them, which is 24h longer than necessary.
+    function migratePlaintextSenders() {
+        if (!secretBox || !secretBox.enabled) return 0;
+        const rows = db.prepare('SELECT ref, sender_pass FROM tracking_pixels').all();
+        const update = db.prepare('UPDATE tracking_pixels SET sender_pass = ? WHERE ref = ?');
+        let migrated = 0;
+        const run = db.transaction((list) => {
+            for (const row of list) {
+                if (secretBox.isEncrypted(row.sender_pass)) continue;
+                update.run(secretBox.encrypt(row.sender_pass), row.ref);
+                migrated++;
+            }
+        });
+        run(rows);
+        return migrated;
+    }
+
     function create({ sender, senderPass, recipient, subject, now = Date.now() }) {
         const ref = crypto.randomUUID();
         createStmt.run(ref, sender, seal(senderPass), recipient, subject, now);
@@ -142,7 +161,7 @@ function createTrackingStore(opts) {
         db.close();
     }
 
-    return { create, recordOpen, get, listBySender, remove, prune, count, close };
+    return { create, recordOpen, get, listBySender, remove, prune, count, close, migratePlaintextSenders };
 }
 
 module.exports = { createTrackingStore };
