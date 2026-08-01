@@ -113,7 +113,7 @@ function buildSearch(input) {
                     // high recall) and let the caller filter precisely by
                     // bodyStructure afterwards. requireAttachment carries
                     // that instruction out.
-                    criteria.header = ['content-type', 'multipart/'];
+                    criteria.header = { 'content-type': 'multipart/' };
                     requireAttachment = true;
                 }
                 break;

@@ -94,6 +94,16 @@ test('has:attachment returns only messages the UI marks as having attachments', 
 
         // And it must not be asking for the keyword Dovecot never sets.
         assert.equal(JSON.stringify(criteriaSeen[0]).includes('$HasAttachment'), false);
+
+        // imapflow compiles `header` by walking Object.keys(), so it must
+        // be an object keyed by header name. An array compiled to
+        // "HEADER 0 content-type" and silently matched nothing — which is
+        // how this shipped broken the first time.
+        const header = criteriaSeen[0].header;
+        assert.equal(Array.isArray(header), false, 'header criteria must not be an array');
+        assert.equal(typeof header, 'object');
+        assert.deepEqual(Object.keys(header), ['content-type']);
+        assert.match(header['content-type'], /^multipart\//);
     } finally { await app.close(); }
 });
 
