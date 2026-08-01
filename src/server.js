@@ -262,7 +262,7 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
     });
 
     imapCache = imapCache ?? createImapCache({
-        filePath: './data/imap-cache.db',
+        filePath: config.imapCache.path,
         ttlMs: config.cache.ttlValidMs,
         pruneIntervalMs: config.cache.pruneIntervalMs
     });

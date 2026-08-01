@@ -14,6 +14,18 @@ const bool = (v, d) => {
     return s === '1' || s === 'true' || s === 'yes' || s === 'y';
 };
 
+// Every sqlite file must sit on the same persistent volume as the main
+// cache. Defaulting them to a bare './data/...' meant that unless the
+// operator's compose file happened to set each one explicitly, the file
+// landed in the container's working directory and was destroyed on the
+// next `docker compose up` — silently, since sqlite just recreates it.
+// Deriving the default from CACHE_PATH's directory makes "on the volume"
+// the thing you get for free and "somewhere else" the thing you opt into.
+const nodePath = require('node:path');
+const CACHE_PATH = process.env.CACHE_PATH || './data/cache.db';
+const dataFile = (envValue, filename) =>
+    envValue || nodePath.join(nodePath.dirname(CACHE_PATH), filename);
+
 module.exports = Object.freeze({
     port: num(process.env.PORT, 3001),
     host: process.env.HOST || '0.0.0.0',
@@ -28,10 +40,14 @@ module.exports = Object.freeze({
     },
 
     cache: {
-        path: process.env.CACHE_PATH || './data/cache.db',
+        path: CACHE_PATH,
         ttlValidMs: num(process.env.CACHE_TTL_VALID_MS, 300_000),
         ttlInvalidMs: num(process.env.CACHE_TTL_INVALID_MS, 10_000),
         pruneIntervalMs: num(process.env.CACHE_PRUNE_INTERVAL_MS, 300_000)
+    },
+
+    imapCache: {
+        path: dataFile(process.env.IMAP_CACHE_PATH, 'imap-cache.db')
     },
 
     pool: {
@@ -51,7 +67,7 @@ module.exports = Object.freeze({
         endpoint: process.env.MISTRAL_OCR_ENDPOINT || 'https://api.mistral.ai/v1/ocr',
         maxBytes: num(process.env.MISTRAL_OCR_MAX_BYTES, 50 * 1024 * 1024),
         cacheEnabled: bool(process.env.OCR_CACHE_ENABLED, true),
-        cachePath: process.env.OCR_CACHE_PATH || './data/ocr-cache.db',
+        cachePath: dataFile(process.env.OCR_CACHE_PATH, 'ocr-cache.db'),
         cacheMaxEntries: num(process.env.OCR_CACHE_MAX_ENTRIES, 1000)
     },
 
@@ -156,7 +172,7 @@ module.exports = Object.freeze({
         // questions (reopening a message re-summarizes it, refreshing the
         // inbox re-triages it), so identical requests are answered from
         // sqlite instead of the provider. Scoped per user.
-        cachePath: process.env.AI_CACHE_PATH || './data/ai-cache.db',
+        cachePath: dataFile(process.env.AI_CACHE_PATH, 'ai-cache.db'),
         cacheEnabled: bool(process.env.AI_CACHE_ENABLED, true),
         cacheTtlMs: num(process.env.AI_CACHE_TTL_MS, 12 * 60 * 60 * 1000),
         cacheMaxEntries: num(process.env.AI_CACHE_MAX_ENTRIES, 5000),
@@ -188,7 +204,7 @@ module.exports = Object.freeze({
         vapidPublicKey: process.env.VAPID_PUBLIC_KEY || '',
         vapidPrivateKey: process.env.VAPID_PRIVATE_KEY || '',
         vapidSubject: process.env.VAPID_SUBJECT || 'mailto:admin@example.com',
-        dbPath: process.env.PUSH_DB_PATH || './data/push.db',
+        dbPath: dataFile(process.env.PUSH_DB_PATH, 'push.db'),
         pollIntervalMs: num(process.env.PUSH_POLL_INTERVAL_MS, 5 * 60 * 1000)
     },
 
@@ -258,18 +274,18 @@ module.exports = Object.freeze({
     },
 
     tracking: {
-        dbPath: process.env.TRACKING_DB_PATH || './data/tracking.db',
+        dbPath: dataFile(process.env.TRACKING_DB_PATH, 'tracking.db'),
         pruneIntervalMs: num(process.env.TRACKING_PRUNE_INTERVAL_MS, 86400_000) // 24h default
     },
 
     imageProxy: {
-        cachePath: process.env.IMAGE_PROXY_CACHE_PATH || './data/image-proxy.db',
+        cachePath: dataFile(process.env.IMAGE_PROXY_CACHE_PATH, 'image-proxy.db'),
         maxBytes: num(process.env.IMAGE_PROXY_MAX_BYTES, 100 * 1024 * 1024), // 100 MB total cache
         maxBytesPerDay: num(process.env.IMAGE_PROXY_MAX_BYTES_PER_DAY, 1024 * 1024 * 1024) // 1 GB per user / day
     },
 
     calendarSubs: {
-        dbPath: process.env.CALENDAR_SUBS_DB_PATH || './data/calendar-subs.db'
+        dbPath: dataFile(process.env.CALENDAR_SUBS_DB_PATH, 'calendar-subs.db')
     },
 
     // Webhook conversion accounts. Mail arriving in one of these mailboxes
@@ -311,7 +327,7 @@ module.exports = Object.freeze({
         }
         return {
             accounts,
-            dbPath: process.env.WEBHOOK_DB_PATH || './data/webhooks.db',
+            dbPath: dataFile(process.env.WEBHOOK_DB_PATH, 'webhooks.db'),
             pollIntervalMs: num(process.env.WEBHOOK_POLL_INTERVAL_MS, 60_000),
             timeoutMs: num(process.env.WEBHOOK_TIMEOUT_MS, 15_000),
             // ~7 attempts of backoff then daily retries for a week before
