@@ -1,6 +1,7 @@
 'use strict';
 
-const { withClient, withMailbox, serializeListItem, serializeEnvelope, countAttachments } = require('../imap');
+const { withClient, withMailbox, serializeListItem, serializeEnvelope, countAttachments,
+    walkStructure, streamToBuffer, downloadPartText } = require('../imap');
 const {
     messageListItemSchema,
     messageDetailSchema,
@@ -148,60 +149,6 @@ function buildSearchCriteria(input) {
     return buildSearch(input).criteria;
 }
 
-// Walk bodyStructure nodes (recursive MIME tree) and collect text parts
-// (inline text/plain, text/html) and attachments (anything else with a filename
-// or content-disposition=attachment).
-function walkStructure(node, path, acc) {
-    if (!node) return;
-    const part = path || (node.part ? node.part : '');
-    const type = (node.type || '').toLowerCase();
-    const disposition = (node.disposition || '').toLowerCase();
-    const filename = (node.dispositionParameters && node.dispositionParameters.filename) ||
-        (node.parameters && node.parameters.name) ||
-        null;
-
-    if (Array.isArray(node.childNodes) && node.childNodes.length) {
-        for (const child of node.childNodes) {
-            walkStructure(child, child.part, acc);
-        }
-        return;
-    }
-
-    let isAttachment = disposition === 'attachment' || (filename && !type.startsWith('text/'));
-    // Some gateways mark the HTML body as disposition=attachment without a
-    // filename. If we treat it as an attachment the message appears to have
-    // no body content at all.
-    if (type === 'text/html' && isAttachment && !filename) {
-        isAttachment = false;
-    }
-    if (isAttachment) {
-        acc.attachments.push({
-            id: part || '1',
-            filename,
-            contentType: type || null,
-            size: node.size || null,
-            disposition: disposition || null,
-            related: disposition === 'inline'
-        });
-        return;
-    }
-    if (type === 'text/plain' && !acc.textPart) acc.textPart = part || '1';
-    else if (type === 'text/html' && !acc.htmlPart) acc.htmlPart = part || '1';
-}
-
-async function streamToBuffer(stream) {
-    const chunks = [];
-    for await (const chunk of stream) chunks.push(chunk);
-    return Buffer.concat(chunks);
-}
-
-async function downloadPartText(client, uid, part) {
-    if (!part) return null;
-    const res = await client.download(uid, part, { uid: true });
-    if (!res || !res.content) return null;
-    const buf = await streamToBuffer(res.content);
-    return buf.toString('utf8');
-}
 
 module.exports = async function messageRoutes(app, { pool, ocrCache, imapCache }) {
     const cache = imapCache; // may be undefined in legacy tests

@@ -3,6 +3,7 @@
 const crypto = require('node:crypto');
 const { ImapFlow } = require('imapflow');
 const { request } = require('undici');
+const { walkStructure, downloadPartText } = require('./imap');
 
 // Webhook conversion accounts.
 //
@@ -118,6 +119,7 @@ function createWebhookForwarder({ config, store, logger, connect: connectOverrid
             internalDate: true,
             size: true,
             flags: true,
+            bodyStructure: true,
             source: true
         }, { uid: true });
         if (!msg) return null;
@@ -125,6 +127,25 @@ function createWebhookForwarder({ config, store, logger, connect: connectOverrid
         const source = msg.source ? Buffer.from(msg.source) : Buffer.alloc(0);
         const truncated = source.length > maxBytes;
         const env = msg.envelope || {};
+
+        // Decode the body rather than shipping only base64.
+        //
+        // The receiver is usually a model or a script, and neither can do
+        // anything useful with a base64 blob: an LLM can't reliably decode
+        // it, and it inflates the payload by a third — a 100 KB mail became
+        // 133 KB of unreadable characters in the prompt. The raw source is
+        // still included for anything that wants to parse MIME itself, but
+        // text and html are now there to be read directly.
+        const acc = { textPart: null, htmlPart: null, attachments: [] };
+        if (msg.bodyStructure) walkStructure(msg.bodyStructure, msg.bodyStructure.part || '1', acc);
+        let text = null;
+        let html = null;
+        try {
+            if (acc.textPart) text = await downloadPartText(client, String(uid), acc.textPart);
+            if (acc.htmlPart) html = await downloadPartText(client, String(uid), acc.htmlPart);
+        } catch (err) {
+            logger?.warn({ err: err.message, uid }, 'webhook body extraction failed; sending raw only');
+        }
 
         return {
             account: account.address,
@@ -146,8 +167,13 @@ function createWebhookForwarder({ config, store, logger, connect: connectOverrid
                 cc: addressList(env.cc),
                 bcc: addressList(env.bcc)
             },
-            // Full RFC822 source, base64'd. The receiver can run whatever
-            // MIME parser it likes rather than trusting ours.
+            // Decoded bodies — what a downstream model or script actually
+            // reads. Null when the message has no part of that type.
+            text,
+            html,
+            attachments: acc.attachments,
+            // Full RFC822 source, base64'd, for receivers that would rather
+            // parse MIME themselves than trust our extraction.
             raw: {
                 encoding: 'base64',
                 truncated,

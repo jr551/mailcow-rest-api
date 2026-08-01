@@ -214,8 +214,10 @@ Copy `.env.example` to `.env`. Common values:
 ### Webhook conversion accounts
 
 Set `WEBHOOK_ACCOUNTS` to turn a mailbox into a feed for some other system.
-Every message that arrives is POSTed as JSON (envelope plus the full RFC822
-source, base64-encoded) and then deleted from the mailbox.
+Every message that arrives is POSTed as JSON — envelope, the decoded `text`
+and `html` bodies, an attachment list, and the full RFC822 source
+(base64-encoded) for receivers that would rather parse MIME themselves —
+and is then deleted from the mailbox.
 
 ```json
 [

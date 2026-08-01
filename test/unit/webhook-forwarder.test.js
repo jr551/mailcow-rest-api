@@ -134,8 +134,13 @@ function makeFakeImap({ uids, onDelete }) {
                 internalDate: new Date('2026-01-01T00:00:00Z'),
                 size: 10,
                 flags: new Set(['\\Seen']),
+                bodyStructure: { type: 'text/plain', part: '1' },
                 source: Buffer.from(`Subject: msg-${uid}\r\n\r\nbody`)
             };
+        },
+        async download() {
+            const { Readable } = require('node:stream');
+            return { content: Readable.from([Buffer.from('the readable body text')]) };
         },
         async messageDelete(uid) { onDelete(Number(uid)); return true; }
     };
@@ -208,5 +213,21 @@ test('webhook: stops retrying after maxAttempts and leaves the message in place'
     try {
         assert.deepEqual(deleted, []);
         assert.equal(store.get('f@x.com', 7, 13).giving_up, 1);
+    } finally { store.close(); }
+});
+
+test('payload carries a decoded body, not just base64', async () => {
+    // A receiver is usually a model or a script; neither can do anything
+    // with base64. Shipping only `raw` meant the body was effectively
+    // unreadable and inflated the payload by a third.
+    const { received, store } = await runForwarder({ status: 200, uids: [14] });
+    try {
+        const body = received[0].body;
+        assert.equal(body.text, 'the readable body text');
+        assert.ok('html' in body, 'html key must be present even when null');
+        assert.ok(Array.isArray(body.attachments));
+        // Raw is still there for anything that wants to parse MIME itself.
+        assert.equal(body.raw.encoding, 'base64');
+        assert.ok(body.raw.data.length > 0);
     } finally { store.close(); }
 });
