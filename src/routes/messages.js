@@ -326,13 +326,25 @@ module.exports = async function messageRoutes(app, { pool, ocrCache, imapCache }
                     // query and the indicator can't disagree. bodyStructure
                     // alone is a light fetch — no envelope, headers or body.
                     if (requireAttachment && uids.length) {
-                        const withAttachments = [];
-                        for await (const msg of client.fetch(uids, { uid: true, bodyStructure: true }, { uid: true })) {
-                            if (msg.bodyStructure && countAttachments(msg.bodyStructure) > 0) {
-                                withAttachments.push(msg.uid);
+                        const uidValidity = client.mailbox?.uidValidity || 0;
+                        // Anything the list view has already rendered is
+                        // known for free — bodyStructure costs ~23ms per
+                        // message, which is over a minute for a 3000-mail
+                        // folder, so only the remainder is fetched.
+                        const known = imapCache?.getAttachmentFlags(userHash, mboxPath, uidValidity) || new Map();
+                        const unknown = uids.filter((u) => !known.has(u));
+                        const learned = [];
+                        if (unknown.length) {
+                            for await (const msg of client.fetch(unknown, { uid: true, bodyStructure: true }, { uid: true })) {
+                                const has = !!(msg.bodyStructure && countAttachments(msg.bodyStructure) > 0);
+                                known.set(msg.uid, has);
+                                learned.push([msg.uid, has]);
+                            }
+                            if (learned.length && imapCache) {
+                                imapCache.setAttachmentFlags(userHash, mboxPath, uidValidity, learned);
                             }
                         }
-                        uids = withAttachments.sort((a, b) => b - a);
+                        uids = uids.filter((u) => known.get(u) === true).sort((a, b) => b - a);
                     }
                 } else {
                     const exists = client.mailbox?.exists || 0;
@@ -360,6 +372,18 @@ module.exports = async function messageRoutes(app, { pool, ocrCache, imapCache }
                         messages.push(serializeListItem(msg));
                     }
                     messages.sort((a, b) => b.uid - a.uid);
+                    // Record what we just learned for free, so a later
+                    // has:attachment search doesn't re-fetch these.
+                    if (imapCache) {
+                        const uidValidity = client.mailbox?.uidValidity || 0;
+                        const flags = messages
+                            .filter((m) => typeof m.hasAttachments === 'boolean')
+                            .map((m) => [m.uid, m.hasAttachments]);
+                        if (flags.length) {
+                            try { imapCache.setAttachmentFlags(userHash, mboxPath, uidValidity, flags); }
+                            catch { /* cache is best-effort */ }
+                        }
+                    }
                 }
                 return { path: mboxPath, page, pageSize, total, messages };
             })

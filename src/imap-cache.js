@@ -44,6 +44,24 @@ function createImapCache(opts) {
             PRIMARY KEY (user_hash, path, uidvalidity)
         );
 
+        -- Per-message "does this have an attachment" flags.
+        --
+        -- has:attachment can't be answered by IMAP SEARCH, so it has to be
+        -- decided from each message's MIME structure — and fetching
+        -- bodyStructure costs ~23ms per message, which is over a minute for
+        -- a 3000-message folder. The list view already fetches
+        -- bodyStructure for every page it renders, so recording the answer
+        -- there makes the search free for anything the user has browsed and
+        -- leaves only the remainder to fetch.
+        CREATE TABLE IF NOT EXISTS msg_attachments (
+            user_hash TEXT NOT NULL,
+            path TEXT NOT NULL,
+            uidvalidity INTEGER NOT NULL,
+            uid INTEGER NOT NULL,
+            has_attachment INTEGER NOT NULL,
+            PRIMARY KEY (user_hash, path, uidvalidity, uid)
+        );
+
         CREATE TABLE IF NOT EXISTS folder_status (
             user_hash TEXT NOT NULL,
             path TEXT NOT NULL,
@@ -210,9 +228,43 @@ function createImapCache(opts) {
 
     // ---------- Combined invalidation ----------
 
+    const attGetStmt = db.prepare(
+        'SELECT uid, has_attachment FROM msg_attachments ' +
+        'WHERE user_hash = ? AND path = ? AND uidvalidity = ?'
+    );
+    const attSetStmt = db.prepare(
+        'INSERT INTO msg_attachments (user_hash, path, uidvalidity, uid, has_attachment) ' +
+        'VALUES (?, ?, ?, ?, ?) ' +
+        'ON CONFLICT(user_hash, path, uidvalidity, uid) DO UPDATE SET has_attachment = excluded.has_attachment'
+    );
+    const attDeleteFolderStmt = db.prepare(
+        'DELETE FROM msg_attachments WHERE user_hash = ? AND path = ?'
+    );
+
+    // Returns a Map<uid, boolean> of what we already know for this folder.
+    function getAttachmentFlags(userHash, path, uidvalidity) {
+        const out = new Map();
+        for (const row of attGetStmt.all(userHash, path, uidvalidity)) {
+            out.set(row.uid, row.has_attachment === 1);
+        }
+        return out;
+    }
+
+    // entries: iterable of [uid, hasAttachment]. UIDs are immutable for a
+    // given uidvalidity, so an entry never needs revisiting.
+    function setAttachmentFlags(userHash, path, uidvalidity, entries) {
+        const run = db.transaction((list) => {
+            for (const [uid, has] of list) {
+                attSetStmt.run(userHash, path, uidvalidity, uid, has ? 1 : 0);
+            }
+        });
+        run([...entries]);
+    }
+
     function invalidateFolder(userHash, path) {
         invalidateFolderUids(userHash, path);
         invalidateFolderStatus(userHash, path);
+        attDeleteFolderStmt.run(userHash, path);
     }
 
     function invalidateUser(userHash) {
@@ -256,6 +308,7 @@ function createImapCache(opts) {
         getUids, setUids, invalidateFolderUid: invalidateFolderUids,
         getStatus, setStatus, invalidateFolderStatus,
         invalidateFolder, invalidateUser,
+        getAttachmentFlags, setAttachmentFlags,
         prune, close
     };
 }
