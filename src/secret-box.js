@@ -103,7 +103,15 @@ function createSecretBox({ envValue, dataDir, logger } = {}) {
         return typeof stored === 'string' && stored.startsWith(`${PREFIX}:`);
     }
 
-    return { encrypt, decrypt, isEncrypted, enabled, source };
+    // A labelled sub-key for another subsystem, so nothing else has to
+    // handle the master key directly and two subsystems can never end up
+    // using the same bytes.
+    function deriveSubKey(label) {
+        if (!enabled) return null;
+        return crypto.createHmac('sha256', key).update(`subkey:${label}`).digest();
+    }
+
+    return { encrypt, decrypt, isEncrypted, deriveSubKey, enabled, source };
 }
 
 module.exports = { createSecretBox, deriveKey };

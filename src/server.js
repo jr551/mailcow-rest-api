@@ -305,7 +305,10 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         ? createAiCache({
             filePath: config.ai.cachePath,
             ttlMs: config.ai.cacheTtlMs,
-            maxEntries: config.ai.cacheMaxEntries
+            maxEntries: config.ai.cacheMaxEntries,
+            // Cache rows are sealed with a key derived from the server key
+            // and the user's own password, so the file is inert without them.
+            serverKey: secretBox.deriveSubKey('ai-cache')
         })
         : null;
     // Expiry is lazy on read; this just keeps the file from holding rows

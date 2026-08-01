@@ -102,3 +102,42 @@ test('ai-cache: stableStringify orders keys deterministically', () => {
     assert.equal(stableStringify({ b: 1, a: 2 }), stableStringify({ a: 2, b: 1 }));
     assert.equal(stableStringify([{ z: 1, a: 2 }]), '[{"a":2,"z":1}]');
 });
+
+test('cached content is encrypted with a key derived from the user password', () => {
+    const os = require('node:os');
+    const fs = require('node:fs');
+    const pathMod = require('node:path');
+    const dir = fs.mkdtempSync(pathMod.join(os.tmpdir(), 'aic-'));
+    const file = pathMod.join(dir, 'ai-cache.db');
+    try {
+        const c = createAiCache({ filePath: file, serverKey: Buffer.alloc(32, 7) });
+        const secretAnswer = 'Your bank balance is 12345';
+        try {
+            c.set('a@x.com', body('summarise'), reply(secretAnswer), Date.now(), 'pw1');
+            assert.equal(c.get('a@x.com', body('summarise'), Date.now(), 'pw1').body.choices[0].message.content, secretAnswer);
+        } finally { c.close(); }
+
+        // The point: the mail content is not sitting in the file. A stolen
+        // ai-cache.db without the passwords is inert.
+        const bytes = fs.readFileSync(file);
+        assert.equal(bytes.includes(Buffer.from(secretAnswer)), false, 'plaintext answer found on disk');
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a changed password reads as a miss rather than an error', () => {
+    const c = createAiCache({ filePath: ':memory:', serverKey: Buffer.alloc(32, 7) });
+    try {
+        c.set('a@x.com', body('q'), reply('a'), Date.now(), 'old-password');
+        assert.equal(c.get('a@x.com', body('q'), Date.now(), 'new-password'), null);
+        // And the old row can't be read by another account either.
+        assert.equal(c.get('b@x.com', body('q'), Date.now(), 'old-password'), null);
+    } finally { c.close(); }
+});
+
+test('without a server key the cache still works (unencrypted fallback)', () => {
+    const c = createAiCache({ filePath: ':memory:' });
+    try {
+        c.set('a@x.com', body('q'), reply('a'), Date.now(), 'pw');
+        assert.equal(c.get('a@x.com', body('q'), Date.now(), 'pw').body.choices[0].message.content, 'a');
+    } finally { c.close(); }
+});

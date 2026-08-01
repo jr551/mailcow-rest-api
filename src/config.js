@@ -175,6 +175,23 @@ module.exports = Object.freeze({
         reasoningEffort: process.env.LLM_REASONING_EFFORT === undefined
             ? 'none'
             : process.env.LLM_REASONING_EFFORT,
+        // Strip credentials from prompts before they leave this process.
+        // Deterministic pattern matching, not a model — see secret-scrub.js.
+        // On by default: the AI features work fine without the secret, and
+        // sending one to a third party is the kind of mistake that can't be
+        // taken back.
+        scrubSecrets: bool(process.env.LLM_SCRUB_SECRETS, true),
+        // Decoy requests per real request, to dilute what the provider can
+        // profile from stored prompts. OFF by default: this multiplies
+        // token spend by (1 + count) and does not hide that you use the
+        // service at all — see llm-decoys.js for what it does and doesn't buy.
+        decoyCount: (() => {
+            const raw = process.env.LLM_DECOY_COUNT;
+            if (raw === undefined || raw === '') return 0;
+            const n = Number(raw);
+            if (!Number.isInteger(n) || n < 0) return 0;
+            return Math.min(n, 5); // a sane ceiling; this is real money
+        })(),
         // Server-side completion cache. The webmail re-asks the same
         // questions (reopening a message re-summarizes it, refreshing the
         // inbox re-triages it), so identical requests are answered from

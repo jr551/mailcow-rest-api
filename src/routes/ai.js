@@ -3,6 +3,8 @@
 const llm = require('../llm');
 const config = require('../config');
 const { problem } = require('../errors');
+const { scrubMessages } = require('../secret-scrub');
+const { sendDecoys } = require('../llm-decoys');
 
 // `provider` block in the request body lets clients override the server's
 // default LLM (so the Settings panel can target a user's own key/endpoint).
@@ -338,6 +340,21 @@ module.exports = async function aiRoutes(app, opts = {}) {
         if (reasoningOn && typeof body.max_tokens === 'number' && body.max_tokens < REASONING_TOKEN_FLOOR) {
             body.max_tokens = REASONING_TOKEN_FLOOR;
         }
+        // Strip credentials before the request leaves this process. Mail is
+        // full of secrets nobody thought of as secrets — reset mails that
+        // quote the temporary password, a pasted API key, a one-time code —
+        // and none of the AI features need the secret itself to do their job.
+        if (config.ai.scrubSecrets) {
+            const scrubbed = scrubMessages(body.messages);
+            if (scrubbed.redacted > 0) {
+                body.messages = scrubbed.messages;
+                req.log.info(
+                    { redacted: scrubbed.redacted, kinds: Object.keys(scrubbed.counts) },
+                    'redacted credentials from outbound AI request'
+                );
+            }
+        }
+
         const wantStream = body.stream === true;
 
         // Serve a cached completion when we've answered this exact request
@@ -346,7 +363,7 @@ module.exports = async function aiRoutes(app, opts = {}) {
         // would be a different (and lying) shape.
         const cacheable = !!aiCache && !wantStream;
         if (cacheable) {
-            const hit = aiCache.get(req.creds.user, body);
+            const hit = aiCache.get(req.creds.user, body, Date.now(), req.creds.pass || '');
             if (hit) {
                 req.log.info({ ageMs: hit.ageMs, user: req.creds.user }, 'AI cache hit');
                 reply.header('cache-control', 'no-store');
@@ -415,12 +432,14 @@ module.exports = async function aiRoutes(app, opts = {}) {
         );
         if (worthCaching) {
             try {
-                aiCache.set(req.creds.user, body, parsed);
+                aiCache.set(req.creds.user, body, parsed, Date.now(), req.creds.pass || '');
             } catch (err) {
                 req.log.warn({ err: err.message }, 'AI cache write failed');
             }
         }
         reply.header('x-ai-cache', worthCaching ? 'miss' : 'bypass');
+        // Fire-and-forget: decoys must never delay or alter the answer.
+        sendDecoys({ config, resolved, body, logger: req.log });
         return reply.send(parsed);
     });
 
