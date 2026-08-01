@@ -11,6 +11,7 @@ const imageProxyRoutes = require('../../src/routes/image-proxy');
 function makeStubCache() {
     const store = new Map(); // url -> { data, contentType, size }
     const usage = new Map(); // user|day -> bytes
+    const negative = new Map(); // url -> { status, reason, cachedAt }
     return {
         get(url) { return store.get(url) || null; },
         set(url, data, contentType) {
@@ -21,6 +22,15 @@ function makeStubCache() {
         incrementUsage(user, day, bytes) {
             const k = `${user}|${day}`;
             usage.set(k, (usage.get(k) || 0) + bytes);
+        },
+        getNegative(url, ttlMs, now = Date.now()) {
+            const row = negative.get(url);
+            if (!row) return null;
+            if (now - row.cachedAt > ttlMs) { negative.delete(url); return null; }
+            return row;
+        },
+        setNegative(url, status, reason, now = Date.now()) {
+            negative.set(url, { status, reason: String(reason), cachedAt: now });
         }
     };
 }
@@ -220,7 +230,7 @@ test('image-proxy: success returns bytes through with content-type', async () =>
     } finally { await app.close(); }
 });
 
-test('image-proxy: upstream body exceeds 1 MB cap → 502 with size message', async () => {
+test('image-proxy: upstream body exceeds 1 MB cap → terminal 413', async () => {
     // Two 600 KB chunks → 1.2 MB total. Route streams via getReader and
     // bails when running total crosses MAX_IMAGE_BYTES (1 MB).
     const chunks = [Buffer.alloc(600 * 1024, 0xaa), Buffer.alloc(600 * 1024, 0xbb)];
@@ -231,9 +241,47 @@ test('image-proxy: upstream body exceeds 1 MB cap → 502 with size message', as
             method: 'GET',
             url: '/v1/proxy/image?url=' + encodeURIComponent('https://example.com/huge.png')
         });
-        // fetchImage returns { ok:false, reason } with no status, so the
-        // route maps it to 502 Bad Gateway.
-        assert.equal(res.statusCode, 502);
+        // 413, not 502: an oversized image is a permanent property of the
+        // resource, and 502 reads as transient so clients retry forever.
+        assert.equal(res.statusCode, 413);
         assert.match(JSON.parse(res.body).detail, /1 MB limit/);
+    } finally { await app.close(); }
+});
+
+test('image-proxy: a failed fetch is negatively cached, not re-fetched', async () => {
+    const chunks = [Buffer.alloc(600 * 1024, 0xaa), Buffer.alloc(600 * 1024, 0xbb)];
+    let upstreamCalls = 0;
+    global.fetch = async () => {
+        upstreamCalls++;
+        return makeChunkedResponse({ status: 200, contentType: 'image/png', chunks });
+    };
+    const app = await buildApp();
+    try {
+        const url = '/v1/proxy/image?url=' + encodeURIComponent('https://example.com/huge-repeat.png');
+        const first = await app.inject({ method: 'GET', url });
+        const second = await app.inject({ method: 'GET', url });
+
+        assert.equal(first.statusCode, 413);
+        assert.equal(second.statusCode, 413);
+        assert.match(JSON.parse(second.body).detail, /1 MB limit/);
+        // The whole point: the second render must not hit the origin again.
+        assert.equal(upstreamCalls, 1);
+    } finally { await app.close(); }
+});
+
+test('image-proxy: upstream 404 is negatively cached too', async () => {
+    let upstreamCalls = 0;
+    global.fetch = async () => {
+        upstreamCalls++;
+        return makeChunkedResponse({ status: 404, contentType: 'text/html', chunks: [] });
+    };
+    const app = await buildApp();
+    try {
+        const url = '/v1/proxy/image?url=' + encodeURIComponent('https://example.com/gone.png');
+        const first = await app.inject({ method: 'GET', url });
+        const second = await app.inject({ method: 'GET', url });
+        assert.equal(first.statusCode, 404);
+        assert.equal(second.statusCode, 404);
+        assert.equal(upstreamCalls, 1);
     } finally { await app.close(); }
 });

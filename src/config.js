@@ -97,8 +97,8 @@ module.exports = Object.freeze({
         // together, ollama, perplexity, openrouter). Backward compat:
         // MISTRAL_API_KEY still works (preset=mistral).
         kind: process.env.LLM_PROVIDER || 'openai',
-        preset: process.env.LLM_PRESET || (process.env.MISTRAL_API_KEY ? 'mistral' : ''),
-        apiKey: process.env.LLM_API_KEY || process.env.MISTRAL_API_KEY || '',
+        preset: process.env.LLM_PRESET || (process.env.MISTRAL_API_KEY ? 'mistral' : 'deepseek'),
+        apiKey: process.env.LLM_API_KEY || process.env.DEEPSEEK_API_KEY || process.env.MISTRAL_API_KEY || '',
         baseUrl: process.env.LLM_BASE_URL || '',
         model: process.env.LLM_MODEL || process.env.MISTRAL_CHAT_MODEL || '',
         timeoutMs: num(process.env.LLM_TIMEOUT_MS || process.env.MISTRAL_CHAT_TIMEOUT_MS, 30_000),
@@ -107,24 +107,6 @@ module.exports = Object.freeze({
         // the server into an SSRF foothold. Operators opt in deliberately
         // (e.g. a vetted local Ollama deployment).
         allowClientOverride: bool(process.env.LLM_ALLOW_CLIENT_OVERRIDE, false),
-        // Per-user key provisioning via the LiteLLM proxy admin API. When
-        // LITELLM_MASTER_KEY is set + baseUrl points at a litellm proxy,
-        // /v1/ai/config returns a scoped key for the authenticated user
-        // (provisioned on first call, persisted to litellmUserStorePath).
-        // The shared apiKey above is then the fallback for users that
-        // can't be provisioned (e.g. if the proxy is briefly unreachable).
-        litellmMasterKey: process.env.LITELLM_MASTER_KEY || '',
-        litellmUserStorePath: process.env.LITELLM_USER_STORE_PATH || '/data/litellm-users.json',
-        // Per-user spend cap. Defaults to $0.75 USD with a 1-day rolling
-        // reset — generous for everyday chat, hard ceiling against runaway
-        // tool loops or someone exfiltrating the scoped key.
-        litellmKeyMaxBudget: (() => {
-            const raw = process.env.LITELLM_KEY_MAX_BUDGET;
-            if (raw === undefined || raw === '') return 0.75;
-            const n = Number(raw);
-            return Number.isFinite(n) && n > 0 ? n : 0.75;
-        })(),
-        litellmKeyBudgetDuration: process.env.LITELLM_KEY_BUDGET_DURATION || '1d',
         // Brave Search API key for the AI assistant's web_search tool.
         // Free tier: 2000 queries/month at https://api.search.brave.com.
         // Without a key the tool returns 501 and the model is told the

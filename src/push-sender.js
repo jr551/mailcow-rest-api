@@ -105,6 +105,11 @@ function createPushSender({ config, pushStore, pool, cache, logger }) {
                     if (logger) logger.warn({ err, user }, 'push check user failed');
                 }
             }
+        } catch (err) {
+            // setInterval doesn't await us, so anything escaping here is an
+            // unhandled rejection — which takes the whole process down and
+            // 502s every in-flight request. A failed poll must not do that.
+            if (logger) logger.error({ err }, 'push poll failed');
         } finally {
             running = false;
         }

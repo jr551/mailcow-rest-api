@@ -167,6 +167,22 @@ function getPublicBaseUrl(req) {
     return `${proto}://${host}${prefix}`;
 }
 
+// Request logging includes the header bag, and our primary auth scheme is
+// Basic — so logging headers verbatim wrote base64(user:password) for a
+// live mailbox, plus session bearer tokens, into stdout and from there
+// into Docker's json-file logs. Replace the credential-bearing ones with
+// a marker; keep the key so it's still visible that auth was presented.
+const REDACTED_HEADERS = new Set(['authorization', 'proxy-authorization', 'cookie', 'set-cookie']);
+
+function redactHeaders(headers) {
+    if (!headers) return headers;
+    const out = {};
+    for (const [k, v] of Object.entries(headers)) {
+        out[k] = REDACTED_HEADERS.has(k.toLowerCase()) ? '[redacted]' : v;
+    }
+    return out;
+}
+
 function createLogger() {
     return {
         level: config.logLevel,
@@ -183,7 +199,7 @@ function createLogger() {
                     version: req.httpVersion,
                     remoteAddress: req.ip || req.socket?.remoteAddress,
                     remotePort: req.socket?.remotePort,
-                    headers: req.headers
+                    headers: redactHeaders(req.headers)
                 };
             }
         }
@@ -482,6 +498,19 @@ async function start() {
     };
     process.on('SIGTERM', () => shutdown('SIGTERM'));
     process.on('SIGINT', () => shutdown('SIGINT'));
+
+    // Node exits on an unhandled rejection. Several background timers do
+    // synchronous sqlite work (cache prune, pool sweep, push poll), so a
+    // transient SQLITE_BUSY was enough to kill the process and fail every
+    // in-flight request at once. Log and keep serving instead: a broken
+    // background sweep is not a reason to drop live connections.
+    process.on('unhandledRejection', (reason) => {
+        app.log.error({ err: reason instanceof Error ? reason : new Error(String(reason)) },
+            'unhandled promise rejection (continuing)');
+    });
+    process.on('uncaughtException', (err) => {
+        app.log.error({ err }, 'uncaught exception (continuing)');
+    });
 
     try {
         await app.listen({ port: config.port, host: config.host });

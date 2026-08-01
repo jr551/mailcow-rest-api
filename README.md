@@ -128,8 +128,7 @@ Authenticated routes accept either HTTP Basic auth using the mailbox credentials
 | `GET` | `/v1/telemetry/recent` | Read recent client errors |
 | `GET` | `/v1/ai/capabilities` | AI feature availability |
 | `GET` | `/v1/ai/config` | Browser AI provider config |
-| `GET` | `/v1/ai/key/usage` | LiteLLM scoped key usage |
-| `POST` | `/v1/ai/key/rotate` | Rotate LiteLLM scoped key |
+| `POST` | `/v1/ai/llm/chat/completions` | OpenAI-compatible chat proxy (server holds the provider key) |
 | `POST` | `/v1/ai/web-search` | AI web search helper |
 | `GET` | `/v1/ai/tts-config` | Text-to-speech config |
 | `POST` | `/v1/ai/summarize` | Summarise text/message |
@@ -199,7 +198,7 @@ Copy `.env.example` to `.env`. Common values:
 | `SOGO_URL` | empty | Set to `http://nginx-mailcow/SOGo` for CalDAV |
 | `LLM_PROVIDER` | `openai` | `openai` or `anthropic` |
 | `LLM_BASE_URL` | empty | OpenAI-compatible proxy/provider URL |
-| `LITELLM_MASTER_KEY` | empty | Enables per-user scoped LiteLLM keys |
+| `LLM_API_KEY` | empty | Provider key; stays server-side (chat is proxied via `/v1/ai/llm`) |
 | `S3_DRIVE_ENABLED` | `false` | Enables drive config/quota endpoints |
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | empty | Enables push delivery |
 | `RATE_LIMIT_MAX` / `RATE_LIMIT_WINDOW_MS` | `300` / `60000` | Per-IP request cap; `RATE_LIMIT_ENABLED=false` to disable |

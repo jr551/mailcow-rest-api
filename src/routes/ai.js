@@ -3,8 +3,6 @@
 const llm = require('../llm');
 const config = require('../config');
 const { problem } = require('../errors');
-const { LitellmClient } = require('../litellm-client');
-const { LitellmUserStore } = require('../litellm-user-store');
 
 // `provider` block in the request body lets clients override the server's
 // default LLM (so the Settings panel can target a user's own key/endpoint).
@@ -160,6 +158,38 @@ const capabilitiesSchema = {
     }
 };
 
+// Same-origin prefix the SPA treats as an OpenAI-compatible base URL.
+const AI_PROXY_PREFIX = '/v1/ai/llm';
+
+// Body knobs we let the client set on a proxied completion. Anything else
+// (notably `model`, and any provider-account-level field) is decided
+// server-side so a compromised session can't retarget our billing.
+const PROXY_PASSTHROUGH_KEYS = new Set([
+    'messages', 'temperature', 'top_p', 'max_tokens', 'stream',
+    'tools', 'tool_choice', 'response_format', 'stop',
+    'presence_penalty', 'frequency_penalty', 'seed', 'reasoning_effort'
+]);
+
+// Read a Brave Search response body, decompressing if a hop compressed it
+// despite our Accept-Encoding: identity. Separated out so the caller can
+// wrap the whole read — including the socket-level failures that reject
+// mid-stream — in one try/catch.
+async function readBraveBody(res, encoding, req) {
+    if (encoding === 'gzip' || encoding === 'br' || encoding === 'deflate') {
+        const buf = Buffer.from(await res.body.arrayBuffer());
+        try {
+            const zlib = require('zlib');
+            if (encoding === 'gzip') return zlib.gunzipSync(buf).toString('utf8');
+            if (encoding === 'br') return zlib.brotliDecompressSync(buf).toString('utf8');
+            return zlib.inflateSync(buf).toString('utf8');
+        } catch (err) {
+            req.log.warn({ err: err.message, encoding }, 'Brave Search decode failed');
+            throw problem(502, 'Bad Gateway', `Brave Search returned ${encoding} body that failed to decode`);
+        }
+    }
+    return res.body.text();
+}
+
 function resolveProvider(override) {
     if (!config.ai.allowClientOverride && override) {
         // Server admin opted out of client overrides. Fall back silently.
@@ -182,6 +212,7 @@ module.exports = async function aiRoutes(app) {
             kind: { type: 'string' },
             baseUrl: { type: 'string' },
             model: { type: 'string' },
+            proxied: { type: 'boolean' },
             apiKey: { type: 'string' }
         }
     };
@@ -202,121 +233,44 @@ module.exports = async function aiRoutes(app) {
         presets: Object.keys(llm.OPENAI_COMPAT_PRESETS).concat(['anthropic'])
     }));
 
-    // LiteLLM per-user key provisioner. Only initialised when the operator
-    // sets LITELLM_MASTER_KEY. If init fails (bad URL, etc.) we fall back
-    // to the shared apiKey path so the chat keeps working.
-    let litellmClient = null;
-    let litellmStore = null;
-    if (config.ai.litellmMasterKey && config.ai.baseUrl) {
-        try {
-            litellmClient = new LitellmClient({
-                baseUrl: config.ai.baseUrl,
-                masterKey: config.ai.litellmMasterKey,
-                logger: app.log
-            });
-            litellmStore = new LitellmUserStore(config.ai.litellmUserStorePath);
-            app.log.info('LiteLLM per-user key provisioning enabled');
-        } catch (err) {
-            app.log.warn({ err: err.message }, 'LiteLLM per-user key provisioning disabled');
-            litellmClient = null;
-            litellmStore = null;
-        }
-    }
-
-    async function getOrProvisionUserKey(email) {
-        if (!litellmClient || !litellmStore) return null;
-        const wantBudget = config.ai.litellmKeyMaxBudget;
-        const wantDuration = config.ai.litellmKeyBudgetDuration;
-
-        const existing = litellmStore.get(email);
-        const budgetMismatch = existing && existing.key && (
-            existing.maxBudget !== wantBudget || existing.budgetDuration !== wantDuration
-        );
-
-        // If we already have a working key and the envelope matches, use it.
-        if (existing && existing.key && !budgetMismatch) return existing;
-
-        // Either no record yet, OR the operator changed the budget envelope.
-        // Try to mint a fresh key; on failure (proxy unreachable etc) keep
-        // serving the old one so users don't get bumped to the master key
-        // every time the network blips.
-        try {
-            if (budgetMismatch && existing.token) {
-                try { await litellmClient.deleteKey(existing.token); } catch (err) {
-                    app.log.warn({ err: err.message, email }, 'budget-rotation revoke failed (continuing)');
-                }
-            }
-            const resolved = llm.resolveProvider(config.ai);
-            const models = resolved.model ? [resolved.model] : ['*'];
-            const created = await litellmClient.createKey({
-                userId: email,
-                models,
-                keyAlias: `imr-${email}`,
-                maxBudget: wantBudget,
-                budgetDuration: wantDuration
-            });
-            const record = {
-                key: created.key,
-                token: created.token,
-                keyName: created.keyName,
-                createdAt: new Date().toISOString(),
-                expiresAt: created.expires,
-                maxBudget: wantBudget,
-                budgetDuration: wantDuration
-            };
-            litellmStore.set(email, record);
-            return record;
-        } catch (err) {
-            app.log.warn({ err: err.message, email }, 'LiteLLM provisioning failed');
-            // Fall back to the previous record if we have one — it still
-            // works, just under the old budget envelope.
-            if (existing && existing.key) {
-                app.log.info({ email }, 'using stale per-user key while proxy is unreachable');
-                return existing;
-            }
-            return null;
-        }
-    }
-
-    // Expose the server's resolved AI provider config to authenticated clients
-    // so the webmail chat can use the admin-configured key/endpoint directly.
+    // Tell authenticated clients how to reach the model. The provider key
+    // never leaves this process: `baseUrl` points back at our own
+    // /v1/ai/llm proxy below, and the client authenticates to it with the
+    // session token it already holds. (Before, we minted per-user LiteLLM
+    // keys and shipped them to the browser — that whole layer is gone.)
     app.get('/v1/ai/config', {
         schema: {
             tags: ['ai'],
-            summary: 'Get server AI provider config for client-side use',
+            summary: 'Get AI endpoint config for client-side use (proxied; no provider key)',
             response: { 200: aiConfigSchema, 501: problemSchema }
         }
-    }, async (req) => {
-        if (!config.ai.apiKey && !litellmClient) {
+    }, async () => {
+        if (!config.ai.apiKey) {
             throw problem(501, 'Not Implemented', 'AI provider not configured server-side');
         }
         const resolved = llm.resolveProvider(config.ai);
-        let apiKey = resolved.apiKey;
-        if (litellmClient && req.creds?.user) {
-            try {
-                const userKey = await getOrProvisionUserKey(req.creds.user.toLowerCase());
-                if (userKey?.key) apiKey = userKey.key;
-            } catch (err) {
-                req.log.warn({ err: err.message, user: req.creds.user }, 'LiteLLM key provisioning failed; falling back to shared key');
-            }
-        }
         return {
             configured: true,
-            kind: resolved.kind,
-            baseUrl: resolved.baseUrl,
+            kind: 'openai',
+            // Relative, same-origin: the SPA appends /chat/completions.
+            baseUrl: AI_PROXY_PREFIX,
             model: resolved.model,
-            apiKey
+            proxied: true,
+            // Retained for schema/back-compat with older cached bundles that
+            // still read this field. Always empty now — they send it as a
+            // bearer token, and the proxy accepts a session token instead.
+            apiKey: ''
         };
     });
 
-    // Live spend + budget for the calling user, queried fresh from LiteLLM.
-    // Returns 200 with `enabled: false` (instead of an error) when per-user
-    // provisioning isn't configured, so the webmail can render gracefully
-    // on shared-key deployments.
+    // Per-user spend accounting went away with LiteLLM. Kept as a 200 so
+    // webmail builds that still poll it render "not enabled" rather than
+    // toasting a 404 at every user.
     app.get('/v1/ai/key/usage', {
         schema: {
             tags: ['ai'],
-            summary: 'Spend + budget for the calling user\'s scoped LiteLLM key',
+            summary: 'Deprecated — per-user key budgets are no longer used',
+            deprecated: true,
             response: {
                 200: {
                     type: 'object',
@@ -331,64 +285,83 @@ module.exports = async function aiRoutes(app) {
                 }
             }
         }
-    }, async (req) => {
-        if (!litellmClient || !litellmStore) {
-            return { enabled: false, spent: 0, maxBudget: null, budgetDuration: null, percent: 0, resetAt: null };
-        }
-        const email = req.creds.user.toLowerCase();
-        const record = litellmStore.get(email);
-        if (!record?.token) {
-            // Not provisioned yet — return zeros so the UI doesn't 404-toast.
-            return { enabled: true, spent: 0, maxBudget: config.ai.litellmKeyMaxBudget, budgetDuration: config.ai.litellmKeyBudgetDuration, percent: 0, resetAt: null };
-        }
-        try {
-            const info = await litellmClient.getKeyInfo(record.token);
-            const spent = Number(info.spend) || 0;
-            const max = info.max_budget === null || info.max_budget === undefined ? null : Number(info.max_budget);
-            const percent = max && max > 0 ? Math.min(100, (spent / max) * 100) : 0;
-            return {
-                enabled: true,
-                spent,
-                maxBudget: max,
-                budgetDuration: info.budget_duration || null,
-                percent,
-                resetAt: info.budget_reset_at || null
-            };
-        } catch (err) {
-            req.log.warn({ err: err.message, email }, 'LiteLLM /key/info failed');
-            return { enabled: true, spent: 0, maxBudget: record.maxBudget ?? null, budgetDuration: record.budgetDuration ?? null, percent: 0, resetAt: null };
-        }
-    });
+    }, async () => ({
+        enabled: false, spent: 0, maxBudget: null, budgetDuration: null, percent: 0, resetAt: null
+    }));
 
-    // Force-rotate the calling user's LiteLLM key. Useful if a key was
-    // leaked or if budget needs to reset early. Old key is revoked best-
-    // effort; new one is provisioned and persisted.
-    app.post('/v1/ai/key/rotate', {
+    // OpenAI-compatible chat-completions proxy. The browser talks to this
+    // with its session token; we attach the provider key and forward to
+    // DeepSeek. Streaming (SSE) is piped straight through so the chat UI
+    // keeps its token-by-token rendering.
+    app.post(`${AI_PROXY_PREFIX}/chat/completions`, {
+        // The upstream body is free-form OpenAI JSON; validating it here
+        // would just fight every new provider field. We filter by key
+        // allowlist below instead.
         schema: {
             tags: ['ai'],
-            summary: 'Rotate the calling user\'s scoped LiteLLM key',
-            response: {
-                200: {
-                    type: 'object',
-                    properties: { rotated: { type: 'boolean' } }
+            summary: 'Proxy a chat completion to the server-configured provider',
+            body: { type: 'object', additionalProperties: true },
+            response: { 501: problemSchema, 502: problemSchema }
+        },
+        bodyLimit: 4 * 1024 * 1024
+    }, async (req, reply) => {
+        if (!config.ai.apiKey) {
+            throw problem(501, 'Not Implemented', 'AI provider not configured server-side');
+        }
+        const resolved = llm.resolveProvider(config.ai);
+        const body = {};
+        for (const [k, v] of Object.entries(req.body || {})) {
+            if (PROXY_PASSTHROUGH_KEYS.has(k)) body[k] = v;
+        }
+        body.model = resolved.model;
+        if (!Array.isArray(body.messages) || body.messages.length === 0) {
+            throw problem(400, 'Bad Request', 'messages[] is required');
+        }
+        const wantStream = body.stream === true;
+
+        const url = resolved.baseUrl.replace(/\/+$/, '') + '/chat/completions';
+        const { request: undiciRequest } = require('undici');
+        let res;
+        try {
+            res = await undiciRequest(url, {
+                method: 'POST',
+                headers: {
+                    authorization: `Bearer ${resolved.apiKey}`,
+                    'content-type': 'application/json',
+                    accept: wantStream ? 'text/event-stream' : 'application/json'
                 },
-                501: problemSchema
-            }
+                body: JSON.stringify(body),
+                headersTimeout: 60_000,
+                // Streamed reasoning replies can idle between tokens; the
+                // undici default would cut a long answer off mid-stream.
+                bodyTimeout: 300_000
+            });
+        } catch (err) {
+            req.log.warn({ err: err.message, causes: err.errors?.map((e) => e.message) }, 'AI proxy upstream unreachable');
+            throw problem(502, 'Bad Gateway', `AI provider unreachable: ${err.message || 'connection failed'}`);
         }
-    }, async (req) => {
-        if (!litellmClient || !litellmStore) {
-            throw problem(501, 'Not Implemented', 'Per-user key provisioning is not enabled');
+
+        if (res.statusCode >= 400) {
+            let detail = `Provider returned ${res.statusCode}`;
+            try {
+                const errBody = await res.body.json();
+                detail = errBody?.error?.message || errBody?.message || detail;
+            } catch { try { await res.body.dump(); } catch { /* */ } }
+            req.log.warn({ status: res.statusCode, detail }, 'AI proxy upstream error');
+            // Pass rate limits through as-is so the client can back off;
+            // everything else is our gateway failing to get an answer.
+            throw problem(res.statusCode === 429 ? 429 : 502,
+                res.statusCode === 429 ? 'Too Many Requests' : 'Bad Gateway', detail);
         }
-        const email = req.creds.user.toLowerCase();
-        const old = litellmStore.get(email);
-        litellmStore.delete(email);
-        if (old?.token) {
-            try { await litellmClient.deleteKey(old.token); } catch (err) {
-                req.log.warn({ err: err.message }, 'old key revocation failed');
-            }
+
+        reply.header('cache-control', 'no-store');
+        if (wantStream) {
+            reply.header('content-type', 'text/event-stream; charset=utf-8');
+            reply.header('x-accel-buffering', 'no'); // don't let nginx buffer the SSE
+            return reply.send(res.body);
         }
-        await getOrProvisionUserKey(email);
-        return { rotated: true };
+        reply.header('content-type', 'application/json; charset=utf-8');
+        return reply.send(res.body);
     });
 
     // Brave Search proxy for the AI assistant's `web_search` tool. The
@@ -469,19 +442,16 @@ module.exports = async function aiRoutes(app) {
         // JSON.parse rather than reporting "non-JSON".
         const encoding = (res.headers['content-encoding'] || '').toString().toLowerCase();
         let text;
-        if (encoding === 'gzip' || encoding === 'br' || encoding === 'deflate') {
-            const buf = Buffer.from(await res.body.arrayBuffer());
-            try {
-                const zlib = require('zlib');
-                if (encoding === 'gzip') text = zlib.gunzipSync(buf).toString('utf8');
-                else if (encoding === 'br') text = zlib.brotliDecompressSync(buf).toString('utf8');
-                else text = zlib.inflateSync(buf).toString('utf8');
-            } catch (err) {
-                req.log.warn({ err: err.message, encoding }, 'Brave Search decode failed');
-                throw problem(502, 'Bad Gateway', `Brave Search returned ${encoding} body that failed to decode`);
-            }
-        } else {
-            text = await res.body.text();
+        try {
+            text = await readBraveBody(res, encoding, req);
+        } catch (err) {
+            // A decode failure already carries its own problem response.
+            if (err.statusCode) throw err;
+            // A mid-body socket reset rejects here. Uncaught it escaped the
+            // handler as a bare 500 with an unhelpful AggregateError title.
+            req.log.warn({ err: err.message, causes: err.errors?.map((e) => e.message) },
+                'Brave Search body read failed');
+            throw problem(502, 'Bad Gateway', `Brave Search response truncated: ${err.message || 'connection reset'}`);
         }
         if (res.statusCode < 200 || res.statusCode >= 300) {
             req.log.warn({ status: res.statusCode, body: text.slice(0, 200) }, 'Brave Search returned error');
@@ -668,10 +638,9 @@ module.exports = async function aiRoutes(app) {
         }
     }, async (req) => {
         const provider = resolveProvider(req.body.provider);
-        // Use the configured model alias (mail-ai on the LiteLLM proxy)
-        // instead of pinning a specific upstream — pinning stepfun broke
-        // when the proxy didn't have that backend wired and bypassed all
-        // the per-user budget enforcement we added later.
+        // Use the server-configured model rather than pinning one here —
+        // pinning a specific upstream broke every time the provider lineup
+        // changed.
         const scanProvider = { ...provider };
 
         // Pull the per-user feedback lists (if any) and bake them into

@@ -36,6 +36,7 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_INPUT_CHARS = 24_000;
 
 const OPENAI_COMPAT_PRESETS = {
+    deepseek: { baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-v4-flash' },
     mistral: { baseUrl: 'https://api.mistral.ai/v1', model: 'mistral-small-latest' },
     openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
     groq: { baseUrl: 'https://api.groq.com/openai/v1', model: 'llama-3.1-70b-versatile' },
@@ -47,6 +48,18 @@ const OPENAI_COMPAT_PRESETS = {
 
 const ANTHROPIC_DEFAULT = { baseUrl: 'https://api.anthropic.com/v1', model: 'claude-3-5-haiku-latest' };
 const ANTHROPIC_VERSION = '2023-06-01';
+
+// undici rejects a failed connect with an AggregateError whose own
+// `message` is empty — the useful part (ECONNREFUSED per address, DNS
+// failure, TLS error) lives in `.errors[]`. Without unwrapping, every
+// connection failure reported the same useless "fetch failed".
+function describeFetchError(err) {
+    if (err && Array.isArray(err.errors) && err.errors.length) {
+        const causes = [...new Set(err.errors.map((e) => e?.message).filter(Boolean))];
+        if (causes.length) return causes.join('; ');
+    }
+    return (err && err.message) || 'fetch failed';
+}
 
 function clip(text, max) {
     if (!text) return '';
@@ -138,7 +151,7 @@ async function callOpenAiCompat({ provider, messages, fetcher = request, signal,
             dispatcher: llmAgent
         });
     } catch (err) {
-        return { ok: false, status: 502, title: 'AI provider unreachable', detail: err.message || 'fetch failed' };
+        return { ok: false, status: 502, title: 'AI provider unreachable', detail: describeFetchError(err) };
     }
     let body = null;
     try { body = await res.body.json(); } catch { body = null; }
@@ -189,7 +202,7 @@ async function callAnthropic({ provider, system, userMessages, fetcher, signal }
             signal: ac
         });
     } catch (err) {
-        return { ok: false, status: 502, title: 'AI provider unreachable', detail: err.message || 'fetch failed' };
+        return { ok: false, status: 502, title: 'AI provider unreachable', detail: describeFetchError(err) };
     }
     let body = null;
     try { body = await res.body.json(); } catch { body = null; }

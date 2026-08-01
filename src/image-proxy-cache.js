@@ -29,6 +29,13 @@ function createImageProxyCache(opts) {
         );
         CREATE INDEX IF NOT EXISTS idx_ipc_cached_at ON image_proxy_cache(cached_at);
 
+        CREATE TABLE IF NOT EXISTS image_proxy_negative (
+            url TEXT PRIMARY KEY,
+            status INTEGER NOT NULL,
+            reason TEXT NOT NULL,
+            cached_at INTEGER NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS image_proxy_usage (
             user TEXT NOT NULL,
             day TEXT NOT NULL,
@@ -64,6 +71,16 @@ function createImageProxyCache(opts) {
         'ON CONFLICT(user, day) DO UPDATE SET bytes = bytes + excluded.bytes'
     );
     const usagePruneStmt = db.prepare('DELETE FROM image_proxy_usage WHERE day < ?');
+
+    const negGetStmt = db.prepare(
+        'SELECT status, reason, cached_at FROM image_proxy_negative WHERE url = ?'
+    );
+    const negSetStmt = db.prepare(
+        'INSERT INTO image_proxy_negative (url, status, reason, cached_at) VALUES (?, ?, ?, ?) ' +
+        'ON CONFLICT(url) DO UPDATE SET status = excluded.status, reason = excluded.reason, ' +
+        'cached_at = excluded.cached_at'
+    );
+    const negDeleteStmt = db.prepare('DELETE FROM image_proxy_negative WHERE url = ?');
 
     function totalSize() {
         return totalSizeStmt.get().total;
@@ -117,11 +134,32 @@ function createImageProxyCache(opts) {
         return usagePruneStmt.run(beforeDay).changes;
     }
 
+    // Failed fetches (oversized, upstream 4xx/5xx, timeouts) are remembered
+    // so an open webmail tab re-rendering the same message every ~30s
+    // doesn't make us re-download the image from origin each time.
+    function getNegative(url, ttlMs, now = Date.now()) {
+        const row = negGetStmt.get(url);
+        if (!row) return null;
+        if (now - row.cached_at > ttlMs) {
+            negDeleteStmt.run(url);
+            return null;
+        }
+        return { status: row.status, reason: row.reason, cachedAt: row.cached_at };
+    }
+
+    function setNegative(url, status, reason, now = Date.now()) {
+        negSetStmt.run(url, status, String(reason || 'Fetch failed'), now);
+    }
+
     function close() {
         db.close();
     }
 
-    return { get, set, remove, totalSize, count, getUsage, incrementUsage, pruneUsage, close };
+    return {
+        get, set, remove, totalSize, count,
+        getUsage, incrementUsage, pruneUsage,
+        getNegative, setNegative, close
+    };
 }
 
 module.exports = { createImageProxyCache };
