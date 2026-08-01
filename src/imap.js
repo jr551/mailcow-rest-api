@@ -126,4 +126,4 @@ function serializeListItem(msg) {
     return out;
 }
 
-module.exports = { withClient, withMailbox, serializeMailbox, serializeEnvelope, serializeListItem };
+module.exports = { withClient, withMailbox, serializeMailbox, serializeEnvelope, serializeListItem, countAttachments };

@@ -1,6 +1,6 @@
 'use strict';
 
-const { withClient, withMailbox, serializeListItem, serializeEnvelope } = require('../imap');
+const { withClient, withMailbox, serializeListItem, serializeEnvelope, countAttachments } = require('../imap');
 const {
     messageListItemSchema,
     messageDetailSchema,
@@ -86,9 +86,13 @@ function parseSearchTokens(input) {
     return { tokens, rest };
 }
 
-function buildSearchCriteria(input) {
+// Returns { criteria, requireAttachment }. The flag is separate because
+// "has an attachment" is not expressible as an IMAP SEARCH key — it has to
+// be decided from the message's MIME structure after fetching.
+function buildSearch(input) {
     const { tokens, rest } = parseSearchTokens(input);
     const criteria = {};
+    let requireAttachment = false;
     for (const { key, value } of tokens) {
         if (!value && key !== 'has' && key !== 'is') continue;
         switch (key) {
@@ -100,10 +104,17 @@ function buildSearchCriteria(input) {
             case 'body':    criteria.body = value; break;
             case 'has':
                 if (value.toLowerCase() === 'attachment' || value.toLowerCase() === 'attachments') {
-                    // Some servers index $HasAttachment; treat as a hint via
-                    // keyword. Fallback: callers without keyword support will
-                    // get more results — false-positives are acceptable here.
-                    criteria.keyword = '$HasAttachment';
+                    // Dovecot does not set $HasAttachment, so searching for
+                    // that keyword matched nothing at all — the advertised
+                    // `has:attachment` query always returned zero results.
+                    //
+                    // Every message with an attachment is multipart, so
+                    // narrow server-side on the Content-Type header (cheap,
+                    // high recall) and let the caller filter precisely by
+                    // bodyStructure afterwards. requireAttachment carries
+                    // that instruction out.
+                    criteria.header = ['content-type', 'multipart/'];
+                    requireAttachment = true;
                 }
                 break;
             case 'is': {
@@ -127,9 +138,14 @@ function buildSearchCriteria(input) {
     }
     // If no tokens and no rest matched, fall back to the legacy free-text OR.
     if (Object.keys(criteria).length === 0) {
-        return { or: [{ subject: input }, { from: input }, { body: input }] };
+        return { criteria: { or: [{ subject: input }, { from: input }, { body: input }] }, requireAttachment };
     }
-    return criteria;
+    return { criteria, requireAttachment };
+}
+
+// Back-compat shim for callers that only want the IMAP criteria.
+function buildSearchCriteria(input) {
+    return buildSearch(input).criteria;
 }
 
 // Walk bodyStructure nodes (recursive MIME tree) and collect text parts
@@ -296,9 +312,28 @@ module.exports = async function messageRoutes(app, { pool, ocrCache, imapCache }
                 };
                 let uids;
 
+                let requireAttachment = false;
                 if (search) {
-                    uids = await client.search(buildSearchCriteria(search), { uid: true });
+                    const parsed = buildSearch(search);
+                    requireAttachment = parsed.requireAttachment;
+                    uids = await client.search(parsed.criteria, { uid: true });
                     uids = (uids || []).sort((a, b) => b - a);
+
+                    // `has:attachment` can't be answered by IMAP SEARCH, so
+                    // the criteria above only narrowed to multipart mail.
+                    // Decide it from the MIME structure using the very same
+                    // counter that renders the paperclip in the UI, so the
+                    // query and the indicator can't disagree. bodyStructure
+                    // alone is a light fetch — no envelope, headers or body.
+                    if (requireAttachment && uids.length) {
+                        const withAttachments = [];
+                        for await (const msg of client.fetch(uids, { uid: true, bodyStructure: true }, { uid: true })) {
+                            if (msg.bodyStructure && countAttachments(msg.bodyStructure) > 0) {
+                                withAttachments.push(msg.uid);
+                            }
+                        }
+                        uids = withAttachments.sort((a, b) => b - a);
+                    }
                 } else {
                     const exists = client.mailbox?.exists || 0;
                     if (!exists) return { path: mboxPath, page, pageSize, total: 0, messages: [] };
