@@ -1,0 +1,269 @@
+'use strict';
+
+const crypto = require('node:crypto');
+const { ImapFlow } = require('imapflow');
+const { request } = require('undici');
+
+// Webhook conversion accounts.
+//
+// An operator lists mailboxes in WEBHOOK_ACCOUNTS (see config.js). Every
+// message that lands in one is POSTed to that account's webhook URL and
+// then deleted from the mailbox — turning a mailbox into a transport for
+// some downstream system (ticketing, parsing, automation).
+//
+// The ordering matters and is deliberate: we only delete after the webhook
+// has confirmed receipt with a 2xx. A failed delivery leaves the message
+// in place and schedules a retry with exponential backoff, so a webhook
+// that is down for an hour loses nothing. Attempt state is persisted
+// (webhook-store) so restarts don't reset the backoff or re-POST
+// immediately.
+
+// 1m, 5m, 15m, 1h, 3h, 6h, 12h, then daily. Chosen so a brief outage
+// recovers in minutes while a long one doesn't hammer a dead endpoint.
+const BACKOFF_MS = [
+    60_000,
+    5 * 60_000,
+    15 * 60_000,
+    60 * 60_000,
+    3 * 60 * 60_000,
+    6 * 60 * 60_000,
+    12 * 60 * 60_000
+];
+const DAILY_MS = 24 * 60 * 60_000;
+
+function backoffFor(attempts) {
+    return attempts <= BACKOFF_MS.length ? BACKOFF_MS[attempts - 1] : DAILY_MS;
+}
+
+function addressList(list) {
+    if (!Array.isArray(list)) return [];
+    return list
+        .map((a) => ({ name: a?.name || null, address: a?.address || null }))
+        .filter((a) => a.address || a.name);
+}
+
+// `connectOverride` exists so tests can drive the whole delivery/delete
+// path without a live IMAP server. Production never passes it.
+function createWebhookForwarder({ config, store, logger, connect: connectOverride }) {
+    const accounts = config.webhooks.accounts || [];
+    const pollIntervalMs = config.webhooks.pollIntervalMs;
+    const maxAttempts = config.webhooks.maxAttempts;
+    const maxBytes = config.webhooks.maxMessageBytes;
+    const timeoutMs = config.webhooks.timeoutMs;
+    const enabled = accounts.length > 0;
+
+    let timer = null;
+    let running = false;
+    let stopped = false;
+
+    async function connect(account) {
+        if (connectOverride) return connectOverride(account);
+        const client = new ImapFlow({
+            host: config.imap.host,
+            port: config.imap.port,
+            secure: config.imap.secure,
+            auth: { user: account.address, pass: account.password },
+            tls: {
+                rejectUnauthorized: config.imap.rejectUnauthorized,
+                ...(config.imap.tlsServername ? { servername: config.imap.tlsServername } : {})
+            },
+            logger: false,
+            emitLogs: false,
+            connectTimeout: config.imap.connectTimeoutMs
+        });
+        // Without a listener, imapflow's error events become uncaught
+        // exceptions on the process.
+        client.on('error', () => {});
+        await client.connect();
+        return client;
+    }
+
+    function sign(secret, body) {
+        return crypto.createHmac('sha256', secret).update(body).digest('hex');
+    }
+
+    async function deliver(account, payload) {
+        const body = JSON.stringify(payload);
+        const headers = {
+            'content-type': 'application/json',
+            'user-agent': 'mailcow-rest-api/webhook-forwarder'
+        };
+        if (account.secret) {
+            // Lets the receiver verify the POST really came from us. Signed
+            // over the exact bytes we send, so the receiver must verify
+            // against the raw body, not a re-serialized object.
+            headers['x-webhook-signature'] = `sha256=${sign(account.secret, body)}`;
+        }
+        const res = await request(account.url, {
+            method: 'POST',
+            headers,
+            body,
+            headersTimeout: timeoutMs,
+            bodyTimeout: timeoutMs
+        });
+        // Drain regardless of status so the socket can be reused.
+        let text = '';
+        try { text = (await res.body.text()).slice(0, 300); } catch { /* */ }
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+            const err = new Error(`Webhook returned ${res.statusCode}: ${text}`);
+            err.statusCode = res.statusCode;
+            throw err;
+        }
+    }
+
+    async function buildPayload(client, account, uid, uidvalidity) {
+        const msg = await client.fetchOne(String(uid), {
+            uid: true,
+            envelope: true,
+            internalDate: true,
+            size: true,
+            flags: true,
+            source: true
+        }, { uid: true });
+        if (!msg) return null;
+
+        const source = msg.source ? Buffer.from(msg.source) : Buffer.alloc(0);
+        const truncated = source.length > maxBytes;
+        const env = msg.envelope || {};
+
+        return {
+            account: account.address,
+            mailbox: account.mailbox,
+            uid,
+            uidvalidity,
+            internalDate: msg.internalDate ? new Date(msg.internalDate).toISOString() : null,
+            size: msg.size ?? source.length,
+            flags: msg.flags ? [...msg.flags] : [],
+            envelope: {
+                messageId: env.messageId || null,
+                inReplyTo: env.inReplyTo || null,
+                date: env.date ? new Date(env.date).toISOString() : null,
+                subject: env.subject || null,
+                from: addressList(env.from),
+                sender: addressList(env.sender),
+                replyTo: addressList(env.replyTo),
+                to: addressList(env.to),
+                cc: addressList(env.cc),
+                bcc: addressList(env.bcc)
+            },
+            // Full RFC822 source, base64'd. The receiver can run whatever
+            // MIME parser it likes rather than trusting ours.
+            raw: {
+                encoding: 'base64',
+                truncated,
+                bytes: source.length,
+                data: (truncated ? source.subarray(0, maxBytes) : source).toString('base64')
+            }
+        };
+    }
+
+    async function processAccount(account) {
+        let client;
+        try {
+            client = await connect(account);
+        } catch (err) {
+            logger?.warn({ err: err.message, account: account.address }, 'webhook account IMAP connect failed');
+            return;
+        }
+
+        try {
+            const lock = await client.getMailboxLock(account.mailbox);
+            try {
+                const uidvalidity = Number(client.mailbox?.uidValidity ?? 0);
+                if (!client.mailbox?.exists) return;
+
+                const uids = await client.search({ all: true }, { uid: true });
+                const now = Date.now();
+
+                for (const uid of uids || []) {
+                    if (stopped) return;
+                    const state = store.get(account.address, uidvalidity, uid);
+                    if (state?.giving_up) continue;
+                    if (state && state.next_attempt_at > now) continue;
+
+                    const attempts = (state?.attempts || 0) + 1;
+                    try {
+                        const payload = await buildPayload(client, account, uid, uidvalidity);
+                        if (!payload) {
+                            // Vanished between search and fetch (another
+                            // client moved or deleted it) — nothing to do.
+                            store.clear(account.address, uidvalidity, uid);
+                            continue;
+                        }
+                        await deliver(account, payload);
+
+                        // Delivered. Only now is it safe to destroy the
+                        // only copy of the message.
+                        await client.messageDelete(String(uid), { uid: true });
+                        store.clear(account.address, uidvalidity, uid);
+                        logger?.info(
+                            { account: account.address, uid, attempts },
+                            'webhook delivered; message deleted'
+                        );
+                    } catch (err) {
+                        const givingUp = attempts >= maxAttempts;
+                        store.recordFailure(account.address, uidvalidity, uid, {
+                            attempts,
+                            nextAttemptAt: now + backoffFor(attempts),
+                            error: err.message,
+                            givingUp
+                        });
+                        logger?.[givingUp ? 'error' : 'warn'](
+                            { err: err.message, account: account.address, uid, attempts, givingUp },
+                            givingUp
+                                ? 'webhook delivery failed permanently; message left in mailbox'
+                                : 'webhook delivery failed; will retry'
+                        );
+                    }
+                }
+            } finally {
+                lock.release();
+            }
+        } catch (err) {
+            logger?.warn({ err: err.message, account: account.address }, 'webhook account poll failed');
+        } finally {
+            try { await client.logout(); } catch { try { client.close(); } catch { /* */ } }
+        }
+    }
+
+    async function tick() {
+        if (!enabled || running || stopped) return;
+        running = true;
+        try {
+            for (const account of accounts) {
+                if (stopped) break;
+                await processAccount(account);
+            }
+        } catch (err) {
+            // setInterval doesn't await us: an escaping rejection would be
+            // an unhandled rejection, and a failed poll must not take the
+            // process down.
+            logger?.error({ err }, 'webhook forwarder poll failed');
+        } finally {
+            running = false;
+        }
+    }
+
+    function start() {
+        if (!enabled || timer) return;
+        logger?.info(
+            { accounts: accounts.map((a) => a.address), pollIntervalMs },
+            'webhook forwarder enabled'
+        );
+        void tick();
+        timer = setInterval(() => { void tick(); }, pollIntervalMs);
+        if (timer.unref) timer.unref();
+    }
+
+    function stop() {
+        stopped = true;
+        if (timer) {
+            clearInterval(timer);
+            timer = null;
+        }
+    }
+
+    return { start, stop, tick, enabled };
+}
+
+module.exports = { createWebhookForwarder, backoffFor };

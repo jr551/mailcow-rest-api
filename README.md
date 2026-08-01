@@ -202,6 +202,35 @@ Copy `.env.example` to `.env`. Common values:
 | `S3_DRIVE_ENABLED` | `false` | Enables drive config/quota endpoints |
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | empty | Enables push delivery |
 | `RATE_LIMIT_MAX` / `RATE_LIMIT_WINDOW_MS` | `300` / `60000` | Per-IP request cap; `RATE_LIMIT_ENABLED=false` to disable |
+| `WEBHOOK_ACCOUNTS` | empty | JSON array of mailboxes whose mail is POSTed to a webhook and then deleted |
+
+### Webhook conversion accounts
+
+Set `WEBHOOK_ACCOUNTS` to turn a mailbox into a feed for some other system.
+Every message that arrives is POSTed as JSON (envelope plus the full RFC822
+source, base64-encoded) and then deleted from the mailbox.
+
+```json
+[
+  {
+    "address": "forms@example.com",
+    "password": "the mailbox's IMAP password",
+    "url": "https://hooks.example.com/mail",
+    "secret": "optional-hmac-secret",
+    "mailbox": "INBOX"
+  }
+]
+```
+
+A message is deleted **only** after the webhook answers 2xx. Anything else
+leaves it in the mailbox and schedules a retry — 1m, 5m, 15m, 1h, 3h, 6h,
+12h, then daily, up to `WEBHOOK_MAX_ATTEMPTS` (default 14). Attempt state is
+kept in `WEBHOOK_DB_PATH` so restarts don't reset the backoff or re-deliver.
+After the final attempt the message is left in place rather than dropped.
+
+When `secret` is set, the body is signed with HMAC-SHA256 and sent as
+`X-Webhook-Signature: sha256=<hex>`; verify it against the raw request body,
+not a re-serialized copy.
 
 ## Development
 

@@ -17,6 +17,8 @@ const { createAuthHook } = require('./auth');
 const { createIpAllowHook } = require('./ip-allow');
 const { createPushStore } = require('./push-store');
 const { createPushSender } = require('./push-sender');
+const { createWebhookStore } = require('./webhook-store');
+const { createWebhookForwarder } = require('./webhook-forwarder');
 const { createTrackingStore } = require('./tracking-store');
 const { createImageProxyCache } = require('./image-proxy-cache');
 const { createCalendarSubStore } = require('./calendar-sub-store');
@@ -273,6 +275,15 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
 
     const pushSender = createPushSender({ config, pushStore, pool, cache, logger: app.log });
 
+    // Webhook conversion accounts (WEBHOOK_ACCOUNTS). Only touches disk
+    // when at least one account is configured.
+    let webhookStore = null;
+    let webhookForwarder = null;
+    if (config.webhooks.accounts.length) {
+        webhookStore = createWebhookStore({ filePath: config.webhooks.dbPath });
+        webhookForwarder = createWebhookForwarder({ config, store: webhookStore, logger: app.log });
+    }
+
     const mailcowDb = createMailcowDb(config.mailcowDb);
     if (mailcowDb) app.log.info('mailcow DB connected for sender policies');
 
@@ -438,6 +449,10 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
     } else {
         app.log.info('push notifications disabled — set VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY to enable');
     }
+
+    if (webhookForwarder) {
+        webhookForwarder.start();
+    }
     await app.register(senderPolicyRoutes, { db: mailcowDb });
     await app.register(mailboxInfoRoutes, { db: mailcowDb });
     await app.register(shortcutsRoutes);
@@ -471,6 +486,8 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
 
     app.addHook('onClose', async () => {
         if (pushSender) pushSender.stop();
+        if (webhookForwarder) webhookForwarder.stop();
+        if (webhookStore) webhookStore.close();
         await pool.closeAll();
         cache.close();
         if (ocrCache) ocrCache.close();

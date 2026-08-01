@@ -219,6 +219,55 @@ module.exports = Object.freeze({
         dbPath: process.env.CALENDAR_SUBS_DB_PATH || './data/calendar-subs.db'
     },
 
+    // Webhook conversion accounts. Mail arriving in one of these mailboxes
+    // is POSTed to the account's webhook URL and then deleted. Set
+    // WEBHOOK_ACCOUNTS to a JSON array:
+    //   [
+    //     {"address":"forms@example.com","password":"…","url":"https://hooks.example.com/mail","secret":"…"},
+    //     {"address":"tickets@example.com","password":"…","url":"https://desk.example.com/in","mailbox":"INBOX"}
+    //   ]
+    // `password` is the mailbox's own IMAP password — the forwarder runs in
+    // the background with no user session to borrow credentials from.
+    // `secret` (optional) signs the POST body with HMAC-SHA256, sent as
+    // X-Webhook-Signature: sha256=<hex>. `mailbox` defaults to INBOX.
+    webhooks: (() => {
+        const raw = process.env.WEBHOOK_ACCOUNTS || '';
+        let accounts = [];
+        if (raw.trim()) {
+            try {
+                const parsed = JSON.parse(raw);
+                if (Array.isArray(parsed)) {
+                    accounts = parsed
+                        .filter((a) => a && typeof a.address === 'string' &&
+                            typeof a.password === 'string' && typeof a.url === 'string')
+                        // Only http(s): a stray scheme here would be handed
+                        // straight to undici.
+                        .filter((a) => /^https?:\/\//i.test(a.url))
+                        .map((a) => ({
+                            address: a.address.trim(),
+                            password: a.password,
+                            url: a.url.trim(),
+                            mailbox: (typeof a.mailbox === 'string' && a.mailbox.trim()) || 'INBOX',
+                            secret: typeof a.secret === 'string' ? a.secret : ''
+                        }));
+                }
+            } catch (err) {
+                // eslint-disable-next-line no-console
+                console.warn('[config] Failed to parse WEBHOOK_ACCOUNTS:', err.message);
+            }
+        }
+        return {
+            accounts,
+            dbPath: process.env.WEBHOOK_DB_PATH || './data/webhooks.db',
+            pollIntervalMs: num(process.env.WEBHOOK_POLL_INTERVAL_MS, 60_000),
+            timeoutMs: num(process.env.WEBHOOK_TIMEOUT_MS, 15_000),
+            // ~7 attempts of backoff then daily retries for a week before
+            // we stop and leave the message in the mailbox for a human.
+            maxAttempts: num(process.env.WEBHOOK_MAX_ATTEMPTS, 14),
+            maxMessageBytes: num(process.env.WEBHOOK_MAX_MESSAGE_BYTES, 25 * 1024 * 1024)
+        };
+    })(),
+
     s3: (() => {
         const enabled = bool(process.env.S3_DRIVE_ENABLED, false);
         const provider = process.env.S3_DRIVE_PROVIDER || 'json'; // 'json' | 'b2'

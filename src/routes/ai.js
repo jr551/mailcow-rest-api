@@ -161,6 +161,9 @@ const capabilitiesSchema = {
 // Same-origin prefix the SPA treats as an OpenAI-compatible base URL.
 const AI_PROXY_PREFIX = '/v1/ai/llm';
 
+// Minimum completion budget for a reasoning model (see the proxy handler).
+const REASONING_TOKEN_FLOOR = 800;
+
 // Body knobs we let the client set on a proxied completion. Anything else
 // (notably `model`, and any provider-account-level field) is decided
 // server-side so a compromised session can't retarget our billing.
@@ -228,7 +231,9 @@ module.exports = async function aiRoutes(app) {
         configured: !!config.ai.apiKey,
         kind: config.ai.kind || 'openai',
         preset: config.ai.preset || '',
-        model: config.ai.model || '',
+        // Resolved, not raw: the model usually comes from the preset, so
+        // the env var is empty and this used to report "".
+        model: llm.resolveProvider(config.ai).model || '',
         allowClientOverride: !!config.ai.allowClientOverride,
         presets: Object.keys(llm.OPENAI_COMPAT_PRESETS).concat(['anthropic'])
     }));
@@ -317,6 +322,17 @@ module.exports = async function aiRoutes(app) {
         if (!Array.isArray(body.messages) || body.messages.length === 0) {
             throw problem(400, 'Bad Request', 'messages[] is required');
         }
+        // DeepSeek v4 is a reasoning model: hidden reasoning tokens are
+        // billed against max_tokens before any visible content is emitted.
+        // Several callers ask for 200-300, which the reasoning pass can
+        // consume entirely — the caller then gets a 200 with empty content
+        // and reports "the AI returned nothing". Raise the ceiling to leave
+        // room for both. max_tokens is a cap, not a target, so this only
+        // permits a complete answer; it doesn't make short replies longer.
+        if (typeof body.max_tokens === 'number' && body.max_tokens < REASONING_TOKEN_FLOOR) {
+            body.max_tokens = REASONING_TOKEN_FLOOR;
+        }
+        if (body.reasoning_effort === undefined) body.reasoning_effort = 'low';
         const wantStream = body.stream === true;
 
         const url = resolved.baseUrl.replace(/\/+$/, '') + '/chat/completions';
