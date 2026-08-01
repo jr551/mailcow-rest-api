@@ -42,3 +42,17 @@ test('fromImapError: null input → 502', () => {
     const e = errs.fromImapError(null);
     assert.equal(e.statusCode, 502);
 });
+
+test("fromImapError: Dovecot's \"doesn't exist\" phrasing maps to 404, not 502", () => {
+    // Dovecot returns "Mailbox doesn't exist: <name>". The apostrophe form
+    // used to fall through to badGateway, so a webmail asking for a folder
+    // it hadn't created yet got a 502 and showed a "Server error" dialog.
+    for (const text of [
+        "Mailbox doesn't exist: .storage_webmailsettings",
+        'Mailbox does not exist: Archive',
+        'NO such mailbox'
+    ]) {
+        const err = errs.fromImapError(new Error(text));
+        assert.equal(err.statusCode, 404, `expected 404 for: ${text}`);
+    }
+});

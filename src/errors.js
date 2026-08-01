@@ -29,7 +29,12 @@ function fromImapError(err) {
     if (code === 'AUTHENTICATIONFAILED' || /authentication\s*fail/i.test(text)) {
         return unauthorized('IMAP authentication failed');
     }
-    if (code === 'NONEXISTENT' || code === 'TRYCREATE' || /nonexistent|does not exist/i.test(text)) {
+    // Dovecot phrases this as "Mailbox doesn't exist: <name>", which the
+    // old "does not exist" pattern missed — so asking for a folder that
+    // hadn't been created yet came back as 502 Bad Gateway and the webmail
+    // popped a "Server error" dialog at the user on first sign-in.
+    if (code === 'NONEXISTENT' || code === 'TRYCREATE' ||
+        /nonexistent|does ?n[o']?t exist|no such (mailbox|folder)/i.test(text)) {
         return notFound('Mailbox or message not found');
     }
     if (code === 'ALREADYEXISTS' || /already exists/i.test(text)) {

@@ -171,7 +171,7 @@ module.exports = async function mailRulesRoutes(app, { sieveManager }) {
                 additionalProperties: false,
                 required: ['name', 'condition', 'action'],
                 properties: {
-                    name: { type: 'string' },
+                    name: { type: 'string', maxLength: 200 },
                     condition: {
                         type: 'object',
                         required: ['type', 'value'],
@@ -180,8 +180,8 @@ module.exports = async function mailRulesRoutes(app, { sieveManager }) {
                                 type: 'string',
                                 enum: ['envelope-to-is', 'header-contains', 'header-is', 'from-contains', 'to-contains', 'subject-contains']
                             },
-                            header: { type: 'string' },
-                            value: { type: 'string' }
+                            header: { type: 'string', maxLength: 200 },
+                            value: { type: 'string', maxLength: 1000 }
                         }
                     },
                     action: {

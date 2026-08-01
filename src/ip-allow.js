@@ -71,8 +71,20 @@ function parseAllowlist(raw) {
     return out;
 }
 
-function isAllowed(ip, rules, { allowAll = false } = {}) {
-    if (!ip || typeof ip !== 'string') return false;
+// Node reports a dual-stack socket's peer as "::ffff:127.0.0.1". isIP()
+// calls that IPv6, and the old parser ran the final group ("127.0.0.1")
+// through parseInt(g, 16) — which yields 0x127 without throwing, silently
+// turning the address into a different one. Loopback then failed to match
+// its own rule and the allowlist rejected legitimate clients with a bare
+// 403. Fold the mapped form back to the IPv4 address it actually is.
+function normalizeIp(ip) {
+    const m = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i.exec(ip);
+    return m ? m[1] : ip;
+}
+
+function isAllowed(rawIp, rules, { allowAll = false } = {}) {
+    if (!rawIp || typeof rawIp !== 'string') return false;
+    const ip = normalizeIp(rawIp);
     const family = isIP(ip);
     if (family === 0) return false;
     if (allowAll && rules.v4.length === 0 && rules.v6.length === 0) return true;
@@ -107,4 +119,4 @@ function createIpAllowHook({ allowlist }) {
     };
 }
 
-module.exports = { parseAllowlist, isAllowed, createIpAllowHook };
+module.exports = { parseAllowlist, isAllowed, createIpAllowHook, normalizeIp };

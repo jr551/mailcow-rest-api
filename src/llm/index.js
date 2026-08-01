@@ -137,12 +137,12 @@ async function callOpenAiCompat({ provider, messages, fetcher = request, signal,
                 messages,
                 temperature: 0.2,
                 max_tokens: 600,
-                // Default reasoning models to low effort. Without this,
-                // mail-ai (a reasoning model behind LiteLLM) was burning
-                // 500+ tokens on `reasoning_content` and truncating the
-                // actual `content` JSON mid-string. Callers that want
-                // deeper reasoning can pass extra.reasoning_effort.
-                reasoning_effort: 'low',
+                // Reasoning tokens are billed against max_tokens before any
+                // visible content, so leaving this on truncated the actual
+                // answer (and, for the JSON callers, produced unparseable
+                // half-objects). See config.ai.reasoningEffort — empty means
+                // "don't send the parameter at all".
+                ...(provider.reasoningEffort ? { reasoning_effort: provider.reasoningEffort } : {}),
                 ...extra
             }),
             signal: ac,

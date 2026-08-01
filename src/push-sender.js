@@ -127,6 +127,10 @@ function createPushSender({ config, pushStore, pool, cache, logger }) {
             clearInterval(timer);
             timer = null;
         }
+        // This module opens its own handle to push.db (a second writer
+        // alongside pushStore). Leaving it open leaked an fd per build()
+        // and left the WAL un-checkpointed across restarts.
+        try { db.close(); } catch { /* already closed */ }
     }
 
     return { start, stop, tick, enabled };

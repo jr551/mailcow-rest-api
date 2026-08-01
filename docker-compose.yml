@@ -20,6 +20,7 @@ services:
       CALENDAR_SUBS_DB_PATH: /data/calendar-subs.db
       S3_DRIVE_USERS_JSON: /data/drive-users.json
       WEBHOOK_DB_PATH: /data/webhooks.db
+      AI_CACHE_PATH: /data/ai-cache.db
     volumes:
       - mailcow-rest-api-data:/data
     networks:

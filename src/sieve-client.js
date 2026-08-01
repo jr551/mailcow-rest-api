@@ -76,7 +76,17 @@ function extractScriptContent(response) {
 }
 
 function escapeSieveString(s) {
-    return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    // Sieve quoted-strings cannot span lines: a raw CR/LF closes the string
+    // and everything after it is parsed as script. Rule names and match
+    // values are free-form user input, so without stripping line breaks a
+    // user could write arbitrary Sieve into their own active script —
+    // sidestepping the ownership checks that guard envelope-to/discard
+    // rules, or producing a script that fails PUTSCRIPT and wedges rule
+    // management entirely. Collapse them to spaces before escaping.
+    return String(s)
+        .replace(/[\r\n\u2028\u2029]+/g, ' ')
+        .replace(/\\/g, '\\\\')
+        .replace(/"/g, '\\"');
 }
 
 function compileCondition(condition) {
@@ -114,7 +124,9 @@ function compileAction(action) {
 function compileRule(rule) {
     const cond = compileCondition(rule.condition);
     const act = compileAction(rule.action);
-    return `# rule: ${rule.id}\n# name: ${escapeSieveString(rule.name)}\nif ${cond} {\n${act}\n}`;
+    // Both land in comment lines, which a newline would escape just as
+    // surely as it escapes a quoted string.
+    return `# rule: ${escapeSieveString(rule.id)}\n# name: ${escapeSieveString(rule.name)}\nif ${cond} {\n${act}\n}`;
 }
 
 function compileRulesScript(rules, preservedContent) {

@@ -57,7 +57,33 @@ module.exports = Object.freeze({
 
     security: {
         ipAllowlist: process.env.IP_ALLOWLIST || '',
-        trustProxy: bool(process.env.TRUST_PROXY, true)
+        // Which hops may set X-Forwarded-For.
+        //
+        // `true` means "trust whatever any client claims", which makes
+        // req.ip attacker-controlled: a forged `X-Forwarded-For: 127.0.0.1`
+        // would match both the rate limiter's allowList and the IP
+        // allowlist's loopback rules, disabling the only brake on
+        // credential stuffing against Dovecot. It isn't exploitable in the
+        // reference deployment (the front nginx overwrites the header), but
+        // that's the proxy's good behaviour protecting us, not ours.
+        //
+        // Default: trust only proxies on loopback/private networks, which
+        // is exactly the Docker topology, and resolve the real client from
+        // the forwarded chain. Set TRUST_PROXY to a comma-separated
+        // IP/CIDR list, a hop count, or `false` to override.
+        trustProxy: (() => {
+            const raw = process.env.TRUST_PROXY;
+            const PRIVATE_HOPS = 'loopback, linklocal, uniquelocal';
+            if (raw === undefined || raw === '') return PRIVATE_HOPS;
+            const s = String(raw).trim().toLowerCase();
+            if (s === 'false' || s === '0' || s === 'no' || s === 'n') return false;
+            // `true` is treated as the private-hop list rather than
+            // "trust everyone" — the literal is the footgun described above.
+            if (s === 'true' || s === '1' || s === 'yes' || s === 'y') return PRIVATE_HOPS;
+            const hops = Number(raw);
+            if (Number.isInteger(hops) && hops > 0) return hops;
+            return String(raw).trim();
+        })()
     },
 
     rateLimit: {
@@ -107,6 +133,33 @@ module.exports = Object.freeze({
         // the server into an SSRF foothold. Operators opt in deliberately
         // (e.g. a vetted local Ollama deployment).
         allowClientOverride: bool(process.env.LLM_ALLOW_CLIENT_OVERRIDE, false),
+        // Reasoning budget sent as `reasoning_effort` on every completion.
+        //
+        // Reasoning models bill hidden thinking tokens against max_tokens
+        // *before* emitting any visible content, so a modest budget can be
+        // consumed entirely by the reasoning pass — the caller then gets a
+        // 200 with finish_reason=length and an empty string. Measured on
+        // deepseek-v4-flash: at max_tokens=40 the default spends all 40 on
+        // reasoning and returns nothing, while 'none' answers correctly.
+        // Counter-intuitively 'low' produced *more* reasoning than sending
+        // nothing at all, so it was never the mitigation it looked like.
+        //
+        // 'none' suits this workload: summaries, classification, subject
+        // lines and JSON extraction want the answer, not the deliberation.
+        // Set LLM_REASONING_EFFORT to low/medium/high to re-enable it, or
+        // to an empty string to omit the parameter entirely for providers
+        // that reject unknown values.
+        reasoningEffort: process.env.LLM_REASONING_EFFORT === undefined
+            ? 'none'
+            : process.env.LLM_REASONING_EFFORT,
+        // Server-side completion cache. The webmail re-asks the same
+        // questions (reopening a message re-summarizes it, refreshing the
+        // inbox re-triages it), so identical requests are answered from
+        // sqlite instead of the provider. Scoped per user.
+        cachePath: process.env.AI_CACHE_PATH || './data/ai-cache.db',
+        cacheEnabled: bool(process.env.AI_CACHE_ENABLED, true),
+        cacheTtlMs: num(process.env.AI_CACHE_TTL_MS, 12 * 60 * 60 * 1000),
+        cacheMaxEntries: num(process.env.AI_CACHE_MAX_ENTRIES, 5000),
         // Brave Search API key for the AI assistant's web_search tool.
         // Free tier: 2000 queries/month at https://api.search.brave.com.
         // Without a key the tool returns 501 and the model is told the

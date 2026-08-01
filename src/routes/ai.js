@@ -206,7 +206,8 @@ function reject(result) {
     throw err;
 }
 
-module.exports = async function aiRoutes(app) {
+module.exports = async function aiRoutes(app, opts = {}) {
+    const aiCache = opts.aiCache || null;
     // Capability probe — UI uses this to decide whether to enable AI buttons.
     const aiConfigSchema = {
         type: 'object',
@@ -322,18 +323,38 @@ module.exports = async function aiRoutes(app) {
         if (!Array.isArray(body.messages) || body.messages.length === 0) {
             throw problem(400, 'Bad Request', 'messages[] is required');
         }
-        // DeepSeek v4 is a reasoning model: hidden reasoning tokens are
-        // billed against max_tokens before any visible content is emitted.
-        // Several callers ask for 200-300, which the reasoning pass can
-        // consume entirely — the caller then gets a 200 with empty content
-        // and reports "the AI returned nothing". Raise the ceiling to leave
-        // room for both. max_tokens is a cap, not a target, so this only
-        // permits a complete answer; it doesn't make short replies longer.
-        if (typeof body.max_tokens === 'number' && body.max_tokens < REASONING_TOKEN_FLOOR) {
+        // Reasoning models bill hidden thinking tokens against max_tokens
+        // before emitting any visible content, so a small budget can be
+        // spent entirely on deliberation and return an empty string with
+        // finish_reason=length. Apply the server's reasoning policy when
+        // the client hasn't asked for something specific.
+        if (body.reasoning_effort === undefined && resolved.reasoningEffort) {
+            body.reasoning_effort = resolved.reasoningEffort;
+        }
+        // If reasoning is still in play, make sure there's room for both the
+        // thinking and the answer. max_tokens is a cap, not a target, so
+        // raising it permits a complete reply without lengthening short ones.
+        const reasoningOn = body.reasoning_effort && body.reasoning_effort !== 'none';
+        if (reasoningOn && typeof body.max_tokens === 'number' && body.max_tokens < REASONING_TOKEN_FLOOR) {
             body.max_tokens = REASONING_TOKEN_FLOOR;
         }
-        if (body.reasoning_effort === undefined) body.reasoning_effort = 'low';
         const wantStream = body.stream === true;
+
+        // Serve a cached completion when we've answered this exact request
+        // for this user recently. Streaming is excluded: the cached value is
+        // a whole response body, not a token stream, and re-chunking it
+        // would be a different (and lying) shape.
+        const cacheable = !!aiCache && !wantStream;
+        if (cacheable) {
+            const hit = aiCache.get(req.creds.user, body);
+            if (hit) {
+                req.log.info({ ageMs: hit.ageMs, user: req.creds.user }, 'AI cache hit');
+                reply.header('cache-control', 'no-store');
+                reply.header('x-ai-cache', 'hit');
+                reply.header('content-type', 'application/json; charset=utf-8');
+                return reply.send(hit.body);
+            }
+        }
 
         const url = resolved.baseUrl.replace(/\/+$/, '') + '/chat/completions';
         const { request: undiciRequest } = require('undici');
@@ -376,8 +397,31 @@ module.exports = async function aiRoutes(app) {
             reply.header('x-accel-buffering', 'no'); // don't let nginx buffer the SSE
             return reply.send(res.body);
         }
+
         reply.header('content-type', 'application/json; charset=utf-8');
-        return reply.send(res.body);
+        if (!cacheable) return reply.send(res.body);
+
+        // Buffer so we can store it. Only bodies we can parse and that
+        // actually carry a choice are cached — never an error envelope or
+        // an empty completion, which would pin a bad answer for 12 hours.
+        let parsed = null;
+        try { parsed = await res.body.json(); } catch { parsed = null; }
+        if (!parsed) throw problem(502, 'Bad Gateway', 'AI provider returned an unreadable response');
+        const choice = parsed.choices && parsed.choices[0];
+        const msg = choice && choice.message;
+        const worthCaching = !!msg && (
+            (typeof msg.content === 'string' && msg.content.trim()) ||
+            (Array.isArray(msg.tool_calls) && msg.tool_calls.length)
+        );
+        if (worthCaching) {
+            try {
+                aiCache.set(req.creds.user, body, parsed);
+            } catch (err) {
+                req.log.warn({ err: err.message }, 'AI cache write failed');
+            }
+        }
+        reply.header('x-ai-cache', worthCaching ? 'miss' : 'bypass');
+        return reply.send(parsed);
     });
 
     // Brave Search proxy for the AI assistant's `web_search` tool. The
@@ -517,27 +561,23 @@ module.exports = async function aiRoutes(app) {
     const ttsConfigSchema = {
         type: 'object',
         properties: {
-            configured: { type: 'boolean' },
-            apiKey: { type: 'string' }
+            configured: { type: 'boolean' }
         }
     };
 
-    // Expose ElevenLabs key to authenticated clients for direct browser-side TTS.
+    // Reports *whether* server-side TTS is configured — never the key.
+    // This used to hand the raw ELEVENLABS_API_KEY to every authenticated
+    // mailbox so the browser could call ElevenLabs directly, which meant a
+    // single compromised mailbox password exfiltrated the operator's key.
+    // The webmail speaks through the browser's own SpeechSynthesis now and
+    // only reads this flag.
     app.get('/v1/ai/tts-config', {
         schema: {
             tags: ['ai'],
-            summary: 'Get server TTS (ElevenLabs) config for client-side use',
+            summary: 'Report whether server-side TTS is configured',
             response: { 200: ttsConfigSchema }
         }
-    }, async () => {
-        if (!config.tts.apiKey) {
-            return { configured: false, apiKey: '' };
-        }
-        return {
-            configured: true,
-            apiKey: config.tts.apiKey
-        };
-    });
+    }, async () => ({ configured: !!config.tts.apiKey }));
 
     app.post('/v1/ai/summarize', {
         schema: {

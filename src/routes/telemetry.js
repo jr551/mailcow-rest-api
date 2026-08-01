@@ -19,6 +19,40 @@ function clip(s, max = MAX_FIELD_CHARS) {
     return s.length > max ? s.slice(0, max) + `…(+${s.length - max})` : s;
 }
 
+// The POST endpoint is public and appends up to 64 KB a call, so the log
+// is attacker-growable. Two consequences to defend against:
+//
+//  * /recent used to readFile() the whole thing just to take the last N
+//    lines — a large file turned one GET into an OOM / event-loop stall.
+//    Read a bounded tail from the end instead.
+//  * Nothing ever truncated the file. Rotate once it passes a ceiling,
+//    keeping a single .1 generation, so disk use is bounded without
+//    depending on an operator remembering to configure logrotate.
+const TAIL_READ_BYTES = 512 * 1024;
+const ROTATE_AT_BYTES = 16 * 1024 * 1024;
+
+async function readTail(file, maxBytes) {
+    const handle = await fs.promises.open(file, 'r');
+    try {
+        const { size } = await handle.stat();
+        const start = Math.max(0, size - maxBytes);
+        const length = size - start;
+        if (length <= 0) return '';
+        const buf = Buffer.alloc(length);
+        await handle.read(buf, 0, length, start);
+        let text = buf.toString('utf8');
+        // A mid-line start would yield a partial JSON record; drop it.
+        if (start > 0) {
+            const nl = text.indexOf('\n');
+            text = nl === -1 ? '' : text.slice(nl + 1);
+        }
+        return text;
+    } finally {
+        await handle.close();
+    }
+}
+
+
 module.exports = async function telemetryRoutes(app, { logPath }) {
     const target = logPath || path.join('/data', 'error.log');
     try {
@@ -29,6 +63,25 @@ module.exports = async function telemetryRoutes(app, { logPath }) {
     } catch (err) {
         app.log.warn({ err: err.message, target }, 'telemetry sink not writable; route disabled');
         return;
+    }
+
+    let rotating = false;
+    async function rotateIfLarge(log) {
+        if (rotating) return;
+        try {
+            const { size } = await fs.promises.stat(target);
+            if (size < ROTATE_AT_BYTES) return;
+            rotating = true;
+            // Single generation: <file>.1 is replaced, not chained, so the
+            // ceiling is 2x ROTATE_AT_BYTES no matter how long we run.
+            await fs.promises.rename(target, `${target}.1`);
+            await fs.promises.writeFile(target, '', { mode: 0o640 });
+            log?.info({ target }, 'telemetry log rotated');
+        } catch (err) {
+            log?.warn({ err: err.message }, 'telemetry rotate failed');
+        } finally {
+            rotating = false;
+        }
     }
 
     const bodySchema = {
@@ -83,6 +136,7 @@ module.exports = async function telemetryRoutes(app, { logPath }) {
         };
         try {
             await fs.promises.appendFile(target, JSON.stringify(entry) + '\n');
+            await rotateIfLarge(req.log);
         } catch (err) {
             req.log.warn({ err: err.message }, 'telemetry append failed');
         }
@@ -114,7 +168,7 @@ module.exports = async function telemetryRoutes(app, { logPath }) {
     }, async (req) => {
         const limit = Math.min(1000, Math.max(1, Number(req.query?.limit) || 100));
         try {
-            const raw = await fs.promises.readFile(target, 'utf8');
+            const raw = await readTail(target, TAIL_READ_BYTES);
             const lines = raw.trim().split('\n').filter(Boolean);
             const tail = lines.slice(-limit);
             const entries = [];
@@ -129,3 +183,5 @@ module.exports = async function telemetryRoutes(app, { logPath }) {
         }
     });
 };
+
+module.exports.__testables = { readTail, TAIL_READ_BYTES, ROTATE_AT_BYTES };

@@ -21,6 +21,7 @@ const { createWebhookStore } = require('./webhook-store');
 const { createWebhookForwarder } = require('./webhook-forwarder');
 const { createTrackingStore } = require('./tracking-store');
 const { createImageProxyCache } = require('./image-proxy-cache');
+const { createAiCache } = require('./ai-cache');
 const { createCalendarSubStore } = require('./calendar-sub-store');
 const mailboxRoutes = require('./routes/mailboxes');
 const messageRoutes = require('./routes/messages');
@@ -273,6 +274,20 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         logger: app.log
     });
 
+    const aiCache = config.ai.cacheEnabled
+        ? createAiCache({
+            filePath: config.ai.cachePath,
+            ttlMs: config.ai.cacheTtlMs,
+            maxEntries: config.ai.cacheMaxEntries
+        })
+        : null;
+    // Expiry is lazy on read; this just keeps the file from holding rows
+    // nobody will ever ask for again.
+    const aiCachePruneTimer = aiCache ? setInterval(() => {
+        try { aiCache.pruneExpired(); } catch (err) { app.log.warn({ err: err.message }, 'AI cache prune failed'); }
+    }, 60 * 60 * 1000) : null;
+    if (aiCachePruneTimer && aiCachePruneTimer.unref) aiCachePruneTimer.unref();
+
     const pushSender = createPushSender({ config, pushStore, pool, cache, logger: app.log });
 
     // Webhook conversion accounts (WEBHOOK_ACCOUNTS). Only touches disk
@@ -439,7 +454,7 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
     await app.register(sessionRoutes, { cache, imap: imapCfg, sessionTtlMs: config.session.ttlMs });
     await app.register(mailboxRoutes, { pool, imapCache });
     await app.register(messageRoutes, { pool, ocrCache, imapCache });
-    await app.register(aiRoutes);
+    await app.register(aiRoutes, { aiCache });
     await app.register(sendRoutes, { db: mailcowDb, smtp: config.smtp, pool, trackingStore, getPublicBaseUrl, imapCache });
     await app.register(pushRoutes, { pushStore });
 
@@ -488,6 +503,8 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         if (pushSender) pushSender.stop();
         if (webhookForwarder) webhookForwarder.stop();
         if (webhookStore) webhookStore.close();
+        if (aiCachePruneTimer) clearInterval(aiCachePruneTimer);
+        if (aiCache) aiCache.close();
         await pool.closeAll();
         cache.close();
         if (ocrCache) ocrCache.close();
