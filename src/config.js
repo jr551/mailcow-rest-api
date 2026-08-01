@@ -357,7 +357,16 @@ module.exports = Object.freeze({
             // ~7 attempts of backoff then daily retries for a week before
             // we stop and leave the message in the mailbox for a human.
             maxAttempts: num(process.env.WEBHOOK_MAX_ATTEMPTS, 14),
-            maxMessageBytes: num(process.env.WEBHOOK_MAX_MESSAGE_BYTES, 25 * 1024 * 1024)
+            maxMessageBytes: num(process.env.WEBHOOK_MAX_MESSAGE_BYTES, 25 * 1024 * 1024),
+            // Attachment bytes are included in the payload so the receiver
+            // doesn't have to re-parse MIME out of the raw source. Bounded,
+            // because base64 adds a third and a mailbox may accept 25 MB
+            // of attachments — an unbounded payload would be ~33 MB of JSON
+            // per message. Over-cap parts are described and flagged rather
+            // than silently dropped.
+            includeAttachments: bool(process.env.WEBHOOK_INCLUDE_ATTACHMENTS, true),
+            maxAttachmentBytes: num(process.env.WEBHOOK_MAX_ATTACHMENT_BYTES, 10 * 1024 * 1024),
+            maxAttachmentsTotalBytes: num(process.env.WEBHOOK_MAX_ATTACHMENTS_TOTAL_BYTES, 20 * 1024 * 1024)
         };
     })(),
 

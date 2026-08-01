@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const { ImapFlow } = require('imapflow');
 const { request } = require('undici');
-const { walkStructure, downloadPartText } = require('./imap');
+const { walkStructure, downloadPartText, streamToBuffer } = require('./imap');
 
 // Webhook conversion accounts.
 //
@@ -50,6 +50,9 @@ function createWebhookForwarder({ config, store, logger, connect: connectOverrid
     const pollIntervalMs = config.webhooks.pollIntervalMs;
     const maxAttempts = config.webhooks.maxAttempts;
     const maxBytes = config.webhooks.maxMessageBytes;
+    const includeAttachments = config.webhooks.includeAttachments;
+    const maxAttachmentBytes = config.webhooks.maxAttachmentBytes;
+    const maxAttachmentsTotalBytes = config.webhooks.maxAttachmentsTotalBytes;
     const timeoutMs = config.webhooks.timeoutMs;
     const enabled = accounts.length > 0;
 
@@ -147,6 +150,60 @@ function createWebhookForwarder({ config, store, logger, connect: connectOverrid
             logger?.warn({ err: err.message, uid }, 'webhook body extraction failed; sending raw only');
         }
 
+        // Attachment bytes, not just a manifest.
+        //
+        // A receiver told an invoice exists but not given it can't do
+        // anything with it — and digging the part back out of the base64
+        // raw source means reimplementing a MIME parser at the other end,
+        // which is the work this payload exists to avoid.
+        //
+        // Bounded per attachment and in total: a mailbox is allowed 25 MB
+        // attachments, and base64 adds a third on top, so an unbounded
+        // payload could be ~33 MB of JSON per message. Anything over the
+        // cap is described and flagged rather than silently dropped, so
+        // the receiver knows something was there.
+        const attachments = [];
+        let attachmentBudget = maxAttachmentsTotalBytes;
+        for (const att of acc.attachments) {
+            const meta = { ...att, included: false, content: null, encoding: 'base64' };
+            if (!includeAttachments) {
+                meta.omittedReason = 'attachments disabled';
+                attachments.push(meta);
+                continue;
+            }
+            const declared = Number(att.size) || 0;
+            if (declared > maxAttachmentBytes) {
+                meta.omittedReason = `larger than the ${Math.round(maxAttachmentBytes / 1024 / 1024)} MB per-attachment limit`;
+                attachments.push(meta);
+                continue;
+            }
+            try {
+                const dl = await client.download(String(uid), att.id, { uid: true });
+                if (!dl || !dl.content) {
+                    meta.omittedReason = 'part could not be fetched';
+                    attachments.push(meta);
+                    continue;
+                }
+                const buf = await streamToBuffer(dl.content);
+                if (buf.length > maxAttachmentBytes || buf.length > attachmentBudget) {
+                    meta.omittedReason = buf.length > maxAttachmentBytes
+                        ? `larger than the ${Math.round(maxAttachmentBytes / 1024 / 1024)} MB per-attachment limit`
+                        : 'total attachment budget for this message exhausted';
+                    attachments.push(meta);
+                    continue;
+                }
+                attachmentBudget -= buf.length;
+                meta.included = true;
+                meta.bytes = buf.length;
+                meta.content = buf.toString('base64');
+                attachments.push(meta);
+            } catch (err) {
+                meta.omittedReason = `fetch failed: ${err.message}`;
+                attachments.push(meta);
+                logger?.warn({ err: err.message, uid, part: att.id }, 'webhook attachment fetch failed');
+            }
+        }
+
         return {
             account: account.address,
             mailbox: account.mailbox,
@@ -171,7 +228,7 @@ function createWebhookForwarder({ config, store, logger, connect: connectOverrid
             // reads. Null when the message has no part of that type.
             text,
             html,
-            attachments: acc.attachments,
+            attachments,
             // Full RFC822 source, base64'd, for receivers that would rather
             // parse MIME themselves than trust our extraction.
             raw: {

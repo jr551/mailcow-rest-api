@@ -134,19 +134,32 @@ function makeFakeImap({ uids, onDelete }) {
                 internalDate: new Date('2026-01-01T00:00:00Z'),
                 size: 10,
                 flags: new Set(['\\Seen']),
-                bodyStructure: { type: 'text/plain', part: '1' },
+                bodyStructure: {
+                    type: 'multipart/mixed',
+                    childNodes: [
+                        { type: 'text/plain', part: '1' },
+                        {
+                            type: 'application/pdf', part: '2',
+                            disposition: 'attachment',
+                            dispositionParameters: { filename: 'invoice.pdf' },
+                            size: 11
+                        }
+                    ]
+                },
                 source: Buffer.from(`Subject: msg-${uid}\r\n\r\nbody`)
             };
         },
-        async download() {
+        async download(uid, part) {
             const { Readable } = require('node:stream');
-            return { content: Readable.from([Buffer.from('the readable body text')]) };
+            const body = part === '2' ? Buffer.from('PDF-BYTES-1') : Buffer.from('the readable body text');
+            return { content: Readable.from([body]) };
         },
         async messageDelete(uid) { onDelete(Number(uid)); return true; }
     };
 }
 
-async function runForwarder({ status, uids, maxAttempts = 14 }) {
+async function runForwarder(opts) {
+    const { status, uids, maxAttempts = 14 } = opts;
     const http = require('node:http');
     const received = [];
     const deleted = [];
@@ -166,7 +179,10 @@ async function runForwarder({ status, uids, maxAttempts = 14 }) {
         imap: { host: 'x', port: 993, secure: true, rejectUnauthorized: false, tlsServername: '', connectTimeoutMs: 5000 },
         webhooks: {
             accounts: [{ address: 'f@x.com', password: 'p', url, mailbox: 'INBOX', secret: 'shh' }],
-            pollIntervalMs: 60_000, timeoutMs: 5000, maxAttempts, maxMessageBytes: 1024 * 1024
+            pollIntervalMs: 60_000, timeoutMs: 5000, maxAttempts, maxMessageBytes: 1024 * 1024,
+            includeAttachments: opts.includeAttachments !== false,
+            maxAttachmentBytes: opts.maxAttachmentBytes ?? 1024 * 1024,
+            maxAttachmentsTotalBytes: opts.maxAttachmentsTotalBytes ?? 1024 * 1024
         }
     };
 
@@ -229,5 +245,44 @@ test('payload carries a decoded body, not just base64', async () => {
         // Raw is still there for anything that wants to parse MIME itself.
         assert.equal(body.raw.encoding, 'base64');
         assert.ok(body.raw.data.length > 0);
+    } finally { store.close(); }
+});
+
+test('attachment bytes are included, not just a manifest', async () => {
+    // Telling a receiver an invoice exists without giving it the invoice
+    // means it has to re-parse MIME out of the raw source — the work this
+    // payload exists to avoid.
+    const { received, store } = await runForwarder({ status: 200, uids: [15] });
+    try {
+        const att = received[0].body.attachments;
+        assert.equal(att.length, 1);
+        assert.equal(att[0].filename, 'invoice.pdf');
+        assert.equal(att[0].contentType, 'application/pdf');
+        assert.equal(att[0].included, true);
+        assert.equal(att[0].encoding, 'base64');
+        assert.equal(Buffer.from(att[0].content, 'base64').toString(), 'PDF-BYTES-1');
+    } finally { store.close(); }
+});
+
+test('an oversized attachment is flagged, never silently dropped', async () => {
+    const { received, store } = await runForwarder({ status: 200, uids: [16], maxAttachmentBytes: 4 });
+    try {
+        const att = received[0].body.attachments[0];
+        // The receiver still learns something was attached and why it is
+        // missing, rather than seeing an empty list.
+        assert.equal(att.included, false);
+        assert.equal(att.content, null);
+        assert.equal(att.filename, 'invoice.pdf');
+        assert.match(att.omittedReason, /limit/);
+    } finally { store.close(); }
+});
+
+test('attachments can be turned off entirely', async () => {
+    const { received, store } = await runForwarder({ status: 200, uids: [17], includeAttachments: false });
+    try {
+        const att = received[0].body.attachments[0];
+        assert.equal(att.included, false);
+        assert.equal(att.content, null);
+        assert.match(att.omittedReason, /disabled/);
     } finally { store.close(); }
 });

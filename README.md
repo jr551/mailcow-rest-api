@@ -215,9 +215,15 @@ Copy `.env.example` to `.env`. Common values:
 
 Set `WEBHOOK_ACCOUNTS` to turn a mailbox into a feed for some other system.
 Every message that arrives is POSTed as JSON — envelope, the decoded `text`
-and `html` bodies, an attachment list, and the full RFC822 source
-(base64-encoded) for receivers that would rather parse MIME themselves —
-and is then deleted from the mailbox.
+and `html` bodies, attachments with their bytes (base64), and the full
+RFC822 source for receivers that would rather parse MIME themselves — and is
+then deleted from the mailbox.
+
+Each attachment carries `filename`, `contentType`, `size`, `included` and
+either `content` (base64) or an `omittedReason`. Attachments over
+`WEBHOOK_MAX_ATTACHMENT_BYTES` (10 MB) or past the per-message budget
+(`WEBHOOK_MAX_ATTACHMENTS_TOTAL_BYTES`, 20 MB) are still listed and
+explained rather than dropped silently.
 
 ```json
 [
