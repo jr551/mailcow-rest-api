@@ -11,6 +11,12 @@ const Database = require('better-sqlite3');
 
 function createTrackingStore(opts) {
     const { filePath, pruneIntervalMs } = opts;
+    // The sender's password is kept so an anonymous pixel hit can send the
+    // "your mail was opened" notification as them. Encrypted at rest for
+    // the same reason as sessions — see secret-box.js.
+    const secretBox = opts.secretBox || null;
+    const seal = (v) => (secretBox ? secretBox.encrypt(v) : v);
+    const open = (v) => (secretBox ? secretBox.decrypt(v) : v);
 
     if (filePath !== ':memory:') {
         fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -59,7 +65,7 @@ function createTrackingStore(opts) {
 
     function create({ sender, senderPass, recipient, subject, now = Date.now() }) {
         const ref = crypto.randomUUID();
-        createStmt.run(ref, sender, senderPass, recipient, subject, now);
+        createStmt.run(ref, sender, seal(senderPass), recipient, subject, now);
         return ref;
     }
 
@@ -70,7 +76,7 @@ function createTrackingStore(opts) {
         return {
             ref: row.ref,
             sender: row.sender,
-            senderPass: row.sender_pass,
+            senderPass: open(row.sender_pass),
             recipient: row.recipient,
             subject: row.subject,
             sentAt: row.sent_at,
@@ -87,7 +93,7 @@ function createTrackingStore(opts) {
         return {
             ref: row.ref,
             sender: row.sender,
-            senderPass: row.sender_pass,
+            senderPass: open(row.sender_pass),
             recipient: row.recipient,
             subject: row.subject,
             sentAt: row.sent_at,

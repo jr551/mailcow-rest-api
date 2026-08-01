@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const { problem } = require('./errors');
 const {
     ManageSieveClient,
     SCRIPT_NAME,
@@ -67,11 +68,40 @@ function createSieveManager({ db, imapHost, rejectUnauthorized = true, tlsServer
         return false;
     }
 
+    // mailcow gates ManageSieve per mailbox (attributes.sieve_access).
+    // Dovecot answers a disabled mailbox with a bare "Authentication
+    // failed", which we surfaced as a 502 "ManageSieve auth failed" — an
+    // operator staring at that has no way to know the password was fine
+    // and a checkbox in mailcow is the actual answer. Ask the database.
+    async function sieveAccessDisabled(email) {
+        try {
+            const [rows] = await db.pool.execute(
+                'SELECT JSON_UNQUOTE(JSON_EXTRACT(attributes, \'$.sieve_access\')) AS sieve ' +
+                'FROM mailbox WHERE username = ? LIMIT 1',
+                [email]
+            );
+            if (!rows.length) return false;
+            return String(rows[0].sieve) === '0';
+        } catch {
+            // Diagnostic only — never let it change the outcome.
+            return false;
+        }
+    }
+
     async function withSieve(email, pass, fn) {
         const client = new ManageSieveClient({ host: imapHost, rejectUnauthorized, tlsServername });
         try {
             await client.connect();
-            await client.authenticate(email, pass);
+            try {
+                await client.authenticate(email, pass);
+            } catch (err) {
+                if (await sieveAccessDisabled(email)) {
+                    throw problem(403, 'Forbidden',
+                        `Mail rules are turned off for ${email}. Enable "Sieve filters" ` +
+                        'for this mailbox in mailcow (Mailboxes → edit → Access), then try again.');
+                }
+                throw err;
+            }
             return await fn(client);
         } finally {
             await client.close();

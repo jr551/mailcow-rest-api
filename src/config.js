@@ -73,6 +73,13 @@ module.exports = Object.freeze({
 
     security: {
         ipAllowlist: process.env.IP_ALLOWLIST || '',
+        // Key for encrypting stored mailbox passwords (sessions, tracking
+        // pixels). Any string works — 32-byte hex/base64 is used directly,
+        // anything else is stretched with scrypt. When unset the server
+        // generates one next to the databases and warns, because a backup
+        // of the data volume would then contain the key alongside the
+        // ciphertext it protects.
+        credentialKey: process.env.CREDENTIAL_ENCRYPTION_KEY || '',
         // Which hops may set X-Forwarded-For.
         //
         // `true` means "trust whatever any client claims", which makes
@@ -387,6 +394,10 @@ module.exports = Object.freeze({
             filePath,
             users,
             defaultQuotaGb: num(process.env.S3_DRIVE_DEFAULT_QUOTA_GB, 5),
+            // Browser origins allowed to talk to a provisioned bucket.
+            // The webmail's Drive is a direct browser-to-S3 client, so a
+            // bucket without matching CORS rules can't be opened at all.
+            corsOrigins: process.env.DRIVE_CORS_ORIGINS || process.env.PUBLIC_BASE_URL || '',
             b2: {
                 keyId: process.env.B2_KEY_ID || '',
                 applicationKey: process.env.B2_APPLICATION_KEY || ''

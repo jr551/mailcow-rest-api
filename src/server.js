@@ -22,6 +22,7 @@ const { createWebhookForwarder } = require('./webhook-forwarder');
 const { createTrackingStore } = require('./tracking-store');
 const { createImageProxyCache } = require('./image-proxy-cache');
 const { createAiCache } = require('./ai-cache');
+const { createSecretBox } = require('./secret-box');
 const { createCalendarSubStore } = require('./calendar-sub-store');
 const mailboxRoutes = require('./routes/mailboxes');
 const messageRoutes = require('./routes/messages');
@@ -234,12 +235,22 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
 
     const imapCfg = imap ?? config.imap;
 
+    // Encrypts the mailbox passwords we have to retain (session renewal,
+    // tracking-pixel notifications) so a leaked database file isn't a
+    // leaked set of working credentials.
+    const secretBox = createSecretBox({
+        envValue: config.security.credentialKey,
+        dataDir: path.dirname(config.cache.path),
+        logger: app.log
+    });
+
     cache = cache ?? createCache({
         filePath: config.cache.path,
         ttlValidMs: config.cache.ttlValidMs,
         ttlInvalidMs: config.cache.ttlInvalidMs,
         pruneIntervalMs: config.cache.pruneIntervalMs,
-        maxLifetimeMs: config.session.maxLifetimeMs
+        maxLifetimeMs: config.session.maxLifetimeMs,
+        secretBox
     });
 
     if (ocrCache === undefined && config.ocr.cacheEnabled) {
@@ -253,7 +264,8 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
 
     const trackingStore = createTrackingStore({
         filePath: config.tracking.dbPath,
-        pruneIntervalMs: config.tracking.pruneIntervalMs
+        pruneIntervalMs: config.tracking.pruneIntervalMs,
+        secretBox
     });
 
     const imageProxyCache = createImageProxyCache({

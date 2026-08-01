@@ -3,6 +3,19 @@
 const { B2Client } = require('../b2-client');
 const { DriveUserStore } = require('../drive-user-store');
 const { problem, notFound } = require('../errors');
+const config = require('../config');
+
+// Origins the browser will load the webmail from. Without at least one,
+// a provisioned bucket is unreachable from the SPA. Operators set
+// DRIVE_CORS_ORIGINS (comma-separated); PUBLIC_BASE_URL is used as a
+// sensible fallback so a standard deployment works untouched.
+function driveCorsOrigins() {
+    const raw = config.s3.corsOrigins;
+    return raw
+        .split(',')
+        .map((o) => o.trim().replace(/\/+$/, ''))
+        .filter((o) => /^https?:\/\//i.test(o));
+}
 
 function sanitizeBucketName(email) {
     // B2 bucket names: 6-50 chars, alphanumeric and hyphens only, must start with letter/number
@@ -61,16 +74,29 @@ module.exports = async function driveRoutes(app, opts) {
             throw problem(500, 'Server Error', 'B2 drive not configured');
         }
 
-        // Ensure bucket exists
+        // Ensure bucket exists, with CORS rules. The browser talks to B2
+        // directly, so a bucket without them is one the user can never
+        // open — the preflight is refused and Drive shows only "Failed to
+        // fetch". Existing buckets get topped up, since anything created
+        // before this had no rules at all.
         const bucketName = sanitizeBucketName(email);
+        const corsOrigins = driveCorsOrigins();
         let bucketId;
         try {
             const list = await b2Client.listBuckets();
             const found = list.buckets?.find((b) => b.bucketName === bucketName);
             if (found) {
                 bucketId = found.bucketId;
+                if (corsOrigins.length && !(found.corsRules || []).length) {
+                    try {
+                        await b2Client.ensureCors(bucketId, corsOrigins);
+                        logger.info({ bucketName, corsOrigins }, 'B2 CORS rules added to existing bucket');
+                    } catch (err) {
+                        logger.warn({ err: err.message, bucketName }, 'B2 CORS update failed');
+                    }
+                }
             } else {
-                const created = await b2Client.createBucket(bucketName);
+                const created = await b2Client.createBucket(bucketName, { corsOrigins });
                 bucketId = created.bucketId;
             }
         } catch (err) {

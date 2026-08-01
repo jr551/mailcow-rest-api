@@ -80,19 +80,56 @@ class B2Client {
         });
     }
 
-    async createBucket(bucketName) {
+    // The webmail's Drive talks to B2 straight from the browser, so a
+    // bucket without CORS rules is a bucket the user can never open — the
+    // preflight is refused and every request surfaces as a bare "Failed to
+    // fetch". Buckets were being provisioned without them, so Drive worked
+    // only for whoever had once had the rules added by hand.
+    corsRulesFor(origins) {
+        return [{
+            corsRuleName: 'webmailBrowserAccess',
+            allowedOrigins: origins,
+            allowedOperations: ['s3_head', 's3_get', 's3_put', 's3_post', 's3_delete'],
+            allowedHeaders: ['*'],
+            exposeHeaders: ['etag', 'x-amz-request-id', 'content-length', 'content-type'],
+            maxAgeSeconds: 3600
+        }];
+    }
+
+    async createBucket(bucketName, { corsOrigins = [] } = {}) {
         const auth = await this.authorize();
+        const body = {
+            accountId: auth.accountId,
+            bucketName,
+            bucketType: 'allPrivate'
+        };
+        if (corsOrigins.length) body.corsRules = this.corsRulesFor(corsOrigins);
         const res = await this._request(`${auth.apiUrl}/b2api/v3/b2_create_bucket`, {
+            method: 'POST',
+            headers: { authorization: auth.authorizationToken },
+            body
+        });
+        this.logger.info(
+            { bucketName, bucketId: res.bucketId, cors: corsOrigins.length ? corsOrigins : 'none' },
+            'B2 bucket created'
+        );
+        return res;
+    }
+
+    // Bring an existing bucket up to date — for buckets provisioned before
+    // CORS was set at creation time.
+    async ensureCors(bucketId, origins) {
+        if (!origins.length) return null;
+        const auth = await this.authorize();
+        return this._request(`${auth.apiUrl}/b2api/v3/b2_update_bucket`, {
             method: 'POST',
             headers: { authorization: auth.authorizationToken },
             body: {
                 accountId: auth.accountId,
-                bucketName,
-                bucketType: 'allPrivate'
+                bucketId,
+                corsRules: this.corsRulesFor(origins)
             }
         });
-        this.logger.info({ bucketName, bucketId: res.bucketId }, 'B2 bucket created');
-        return res;
     }
 
     async createKey({ keyName, capabilities, bucketId }) {

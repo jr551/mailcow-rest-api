@@ -18,6 +18,12 @@ function createCache(opts) {
     const maxLifetimeMs = opts.maxLifetimeMs || 24 * 3600 * 1000;
     const maxMemAuth = opts.maxMemAuth || 2000;
     const maxMemSessions = opts.maxMemSessions || 2000;
+    // Passwords are encrypted at rest. Without a box (tests, or a
+    // deployment where no key could be established) values pass through
+    // unchanged, so behaviour is unaffected.
+    const secretBox = opts.secretBox || null;
+    const seal = (v) => (secretBox ? secretBox.encrypt(v) : v);
+    const open = (v) => (secretBox ? secretBox.decrypt(v) : v);
 
     if (filePath !== ':memory:') {
         fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -141,7 +147,7 @@ function createCache(opts) {
     function createSession(user, pass, hash, now = Date.now()) {
         const token = crypto.randomBytes(32).toString('hex');
         const expiresAt = now + ttlValidMs;
-        sessionSetStmt.run(token, user, pass, hash, expiresAt, now);
+        sessionSetStmt.run(token, user, seal(pass), hash, expiresAt, now);
         memSet(sessionMem, token, { user, pass, hash, expiresAt, createdAt: now }, maxMemSessions);
         return { token, expiresAt };
     }
@@ -173,7 +179,15 @@ function createCache(opts) {
         }
         const newExpiresAt = now + ttlValidMs;
         sessionExtendStmt.run(newExpiresAt, token);
-        const result = { user: row.user, pass: row.pass, hash: row.hash, expiresAt: newExpiresAt };
+        const pass = open(row.pass);
+        if (pass === null) {
+            // Undecryptable — the key changed or the row was tampered
+            // with. Treat as no session rather than handing IMAP a
+            // password we can't vouch for.
+            sessionDeleteStmt.run(token);
+            return null;
+        }
+        const result = { user: row.user, pass, hash: row.hash, expiresAt: newExpiresAt };
         memSet(sessionMem, token, { ...result, createdAt }, maxMemSessions);
         return result;
     }
@@ -194,7 +208,10 @@ function createCache(opts) {
     }
 
     function listActiveSessions(now = Date.now()) {
-        return db.prepare('SELECT user, pass, hash, expires_at FROM sessions WHERE expires_at > ?').all(now);
+        return db.prepare('SELECT user, pass, hash, expires_at FROM sessions WHERE expires_at > ?')
+            .all(now)
+            .map((row) => ({ ...row, pass: open(row.pass) }))
+            .filter((row) => row.pass !== null);
     }
 
     function close() {
