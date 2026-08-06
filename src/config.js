@@ -16,7 +16,10 @@ const bool = (v, d) => {
 
 module.exports = Object.freeze({
     port: num(process.env.PORT, 3001),
-    host: process.env.HOST || '0.0.0.0',
+    // '::' binds dual-stack (IPv4 + IPv6). The app must answer connections
+    // on every address Docker DNS advertises for it — nginx resolves the
+    // service to both A and AAAA and spreads requests across them.
+    host: process.env.HOST || '::',
 
     imap: {
         host: process.env.IMAP_HOST || 'dovecot-mailcow',
