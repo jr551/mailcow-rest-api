@@ -262,9 +262,24 @@ function createWebhookForwarder({ config, store, logger, connect: connectOverrid
                     if (stopped) return;
                     const state = store.get(account.address, uidvalidity, uid);
                     if (state?.giving_up) continue;
+
+                    // Already delivered on a previous poll but the delete
+                    // failed — retry ONLY the delete, never the POST.
+                    if (state?.delivered) {
+                        try {
+                            await client.messageDelete(String(uid), { uid: true });
+                            store.clear(account.address, uidvalidity, uid);
+                            logger?.info({ account: account.address, uid }, 'webhook delete retry succeeded');
+                        } catch (delErr) {
+                            logger?.warn({ err: delErr.message, account: account.address, uid }, 'webhook delete retry failed');
+                        }
+                        continue;
+                    }
+
                     if (state && state.next_attempt_at > now) continue;
 
                     const attempts = (state?.attempts || 0) + 1;
+                    let delivered = false;
                     try {
                         const payload = await buildPayload(client, account, uid, uidvalidity);
                         if (!payload) {
@@ -274,15 +289,7 @@ function createWebhookForwarder({ config, store, logger, connect: connectOverrid
                             continue;
                         }
                         await deliver(account, payload);
-
-                        // Delivered. Only now is it safe to destroy the
-                        // only copy of the message.
-                        await client.messageDelete(String(uid), { uid: true });
-                        store.clear(account.address, uidvalidity, uid);
-                        logger?.info(
-                            { account: account.address, uid, attempts },
-                            'webhook delivered; message deleted'
-                        );
+                        delivered = true;
                     } catch (err) {
                         const givingUp = attempts >= maxAttempts;
                         store.recordFailure(account.address, uidvalidity, uid, {
@@ -296,6 +303,28 @@ function createWebhookForwarder({ config, store, logger, connect: connectOverrid
                             givingUp
                                 ? 'webhook delivery failed permanently; message left in mailbox'
                                 : 'webhook delivery failed; will retry'
+                        );
+                    }
+
+                    // Only delete after a confirmed delivery. The delete is a
+                    // SEPARATE try: if the connection drops between a
+                    // confirmed POST and the delete, we must NOT reschedule —
+                    // that would re-POST an already-delivered message (a
+                    // duplicate ticket on the receiver). Instead record it as
+                    // delivered so the next poll retries the delete alone.
+                    if (!delivered) continue;
+                    try {
+                        await client.messageDelete(String(uid), { uid: true });
+                        store.clear(account.address, uidvalidity, uid);
+                        logger?.info(
+                            { account: account.address, uid, attempts },
+                            'webhook delivered; message deleted'
+                        );
+                    } catch (delErr) {
+                        store.recordDelivered(account.address, uidvalidity, uid);
+                        logger?.warn(
+                            { err: delErr.message, account: account.address, uid },
+                            'webhook delivered but delete failed; will retry delete only'
                         );
                     }
                 }

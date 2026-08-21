@@ -183,6 +183,16 @@ module.exports = Object.freeze({
         // On by default: the AI features work fine without the secret, and
         // sending one to a third party is the kind of mistake that can't be
         // taken back.
+        // Hard ceiling on client-supplied max_tokens for the proxied
+        // completion. Without it any authenticated user could submit
+        // max_tokens: 200000 with a maximal prompt on every request against
+        // the shared provider key — the operator pays. A generous cap that
+        // still bounds a single request's spend.
+        maxOutputTokens: num(process.env.LLM_MAX_OUTPUT_TOKENS, 8192),
+        // Cap the serialized size of the messages array we forward, so a
+        // client can't push arbitrarily large input past the provider on the
+        // operator's dime. 0 disables the check.
+        maxRequestBytes: num(process.env.LLM_MAX_REQUEST_BYTES, 1024 * 1024),
         scrubSecrets: bool(process.env.LLM_SCRUB_SECRETS, true),
         // Decoy requests per real request, to dilute what the provider can
         // profile from stored prompts. OFF by default: this multiplies

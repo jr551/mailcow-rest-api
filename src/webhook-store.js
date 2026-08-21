@@ -35,15 +35,29 @@ function createWebhookStore({ filePath }) {
             next_attempt_at INTEGER NOT NULL DEFAULT 0,
             last_error TEXT,
             giving_up INTEGER NOT NULL DEFAULT 0,
+            delivered INTEGER NOT NULL DEFAULT 0,
             first_seen_at INTEGER NOT NULL,
             PRIMARY KEY (address, uidvalidity, uid)
         );
         CREATE INDEX IF NOT EXISTS idx_wq_next ON webhook_queue(next_attempt_at);
     `);
 
+    // Older databases predate the delivered column; add it in place.
+    try {
+        const cols = db.prepare('PRAGMA table_info(webhook_queue)').all();
+        if (!cols.some((c) => c.name === 'delivered')) {
+            db.exec('ALTER TABLE webhook_queue ADD COLUMN delivered INTEGER NOT NULL DEFAULT 0');
+        }
+    } catch { /* fresh db already has it */ }
+
     const getStmt = db.prepare(
-        'SELECT attempts, next_attempt_at, last_error, giving_up FROM webhook_queue ' +
+        'SELECT attempts, next_attempt_at, last_error, giving_up, delivered FROM webhook_queue ' +
         'WHERE address = ? AND uidvalidity = ? AND uid = ?'
+    );
+    const markDeliveredStmt = db.prepare(
+        'INSERT INTO webhook_queue (address, uidvalidity, uid, attempts, next_attempt_at, last_error, giving_up, delivered, first_seen_at) ' +
+        'VALUES (?, ?, ?, 0, 0, NULL, 0, 1, ?) ' +
+        'ON CONFLICT(address, uidvalidity, uid) DO UPDATE SET delivered = 1'
     );
     const upsertStmt = db.prepare(
         'INSERT INTO webhook_queue (address, uidvalidity, uid, attempts, next_attempt_at, last_error, giving_up, first_seen_at) ' +
@@ -79,6 +93,13 @@ function createWebhookStore({ filePath }) {
         return deleteStmt.run(address, uidvalidity, uid).changes;
     }
 
+    // Delivered but not yet deleted from IMAP: record it so the next poll
+    // retries only the delete and never re-POSTs an already-delivered
+    // message.
+    function recordDelivered(address, uidvalidity, uid) {
+        markDeliveredStmt.run(address, uidvalidity, uid, Date.now());
+    }
+
     function listForAddress(address) {
         return pendingStmt.all(address);
     }
@@ -91,7 +112,7 @@ function createWebhookStore({ filePath }) {
         db.close();
     }
 
-    return { get, recordFailure, clear, listForAddress, pendingCount, close };
+    return { get, recordFailure, recordDelivered, clear, listForAddress, pendingCount, close };
 }
 
 module.exports = { createWebhookStore };

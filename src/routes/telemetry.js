@@ -31,6 +31,28 @@ function clip(s, max = MAX_FIELD_CHARS) {
 const TAIL_READ_BYTES = 512 * 1024;
 const ROTATE_AT_BYTES = 16 * 1024 * 1024;
 
+// Entries carry the reporter's IP, mailbox, page URLs and stack traces. The
+// only gate used to be "authenticated", so every mailbox user could read
+// every other user's error reports. Operators who want the full view name
+// themselves here.
+const ADMIN_USERS = new Set(
+    String(process.env.TELEMETRY_ADMIN_USERS || '')
+        .split(',')
+        .map((v) => v.trim().toLowerCase())
+        .filter(Boolean)
+);
+
+// Non-admins see their own reports, plus anonymous ones (the login surface
+// reports before there is a user) with the IP removed.
+function visibleTo(entry, caller) {
+    if (!entry) return null;
+    const owner = typeof entry.user === 'string' ? entry.user.toLowerCase() : null;
+    if (owner && owner !== caller) return null;
+    if (owner === caller) return entry;
+    const { ip, ...rest } = entry;
+    return rest;
+}
+
 async function readTail(file, maxBytes) {
     const handle = await fs.promises.open(file, 'r');
     try {
@@ -167,16 +189,22 @@ module.exports = async function telemetryRoutes(app, { logPath }) {
         }
     }, async (req) => {
         const limit = Math.min(1000, Math.max(1, Number(req.query?.limit) || 100));
+        const caller = String(req.creds?.user || '').toLowerCase();
+        const isAdmin = ADMIN_USERS.has(caller);
         try {
             const raw = await readTail(target, TAIL_READ_BYTES);
             const lines = raw.trim().split('\n').filter(Boolean);
-            const tail = lines.slice(-limit);
             const entries = [];
-            for (const line of tail) {
-                try { entries.push(JSON.parse(line)); }
-                catch { /* skip malformed */ }
+            // Filter before slicing, so a non-admin still gets `limit` of
+            // their own entries rather than whatever survives the window.
+            for (const line of lines) {
+                let parsed;
+                try { parsed = JSON.parse(line); }
+                catch { continue; }
+                const visible = isAdmin ? parsed : visibleTo(parsed, caller);
+                if (visible) entries.push(visible);
             }
-            return { entries };
+            return { entries: entries.slice(-limit) };
         } catch (err) {
             req.log.warn({ err: err.message }, 'telemetry read failed');
             return { entries: [] };
@@ -184,4 +212,4 @@ module.exports = async function telemetryRoutes(app, { logPath }) {
     });
 };
 
-module.exports.__testables = { readTail, TAIL_READ_BYTES, ROTATE_AT_BYTES };
+module.exports.__testables = { readTail, visibleTo, TAIL_READ_BYTES, ROTATE_AT_BYTES };

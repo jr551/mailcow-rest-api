@@ -461,7 +461,18 @@ module.exports = async function messageRoutes(app, { pool, ocrCache, imapCache }
                 const dl = await client.download(String(uid), attachmentId, { uid: true });
                 if (!dl || !dl.content) throw notFound('Attachment not found');
                 const meta = dl.meta || {};
-                const buffer = await streamToBuffer(dl.content);
+                let buffer;
+                try {
+                    // Cap at the OCR size limit — anything larger is rejected
+                    // by the OCR call anyway, so there's no reason to buffer it.
+                    buffer = await streamToBuffer(dl.content, config.ocr.maxBytes);
+                } catch (err) {
+                    if (err.code === 'ESTREAMLIMIT') {
+                        throw problem(413, 'Payload Too Large',
+                            `Attachment exceeds the ${config.ocr.maxBytes}-byte OCR limit`);
+                    }
+                    throw err;
+                }
                 return { buffer, mimeType: meta.contentType, filename: meta.filename };
             })
         );

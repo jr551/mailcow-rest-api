@@ -167,9 +167,22 @@ function walkStructure(node, path, acc) {
     else if (type === 'text/html' && !acc.htmlPart) acc.htmlPart = part || '1';
 }
 
-async function streamToBuffer(stream) {
+async function streamToBuffer(stream, maxBytes = 0) {
     const chunks = [];
-    for await (const chunk of stream) chunks.push(chunk);
+    let total = 0;
+    for await (const chunk of stream) {
+        total += chunk.length;
+        // Mail arriving over SMTP has no body-size limit of ours, so an
+        // unbounded concat meant one 100 MB attachment became a 100 MB Buffer
+        // per concurrent request. Stop and signal rather than OOM.
+        if (maxBytes > 0 && total > maxBytes) {
+            const err = new Error(`Stream exceeds ${maxBytes} bytes`);
+            err.code = 'ESTREAMLIMIT';
+            if (typeof stream.destroy === 'function') stream.destroy();
+            throw err;
+        }
+        chunks.push(chunk);
+    }
     return Buffer.concat(chunks);
 }
 

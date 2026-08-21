@@ -74,6 +74,7 @@ module.exports = async function senderPolicyRoutes(app, { db }) {
         const user = req.creds.user;
         if (!db) throw notFound('Blocked sender not found');
         const prefid = Number(req.params.prefid);
+        if (!Number.isInteger(prefid) || prefid < 0) throw badRequest('Invalid preference id');
         const ok = await db.removePolicy(user, 'blacklist_from', prefid);
         if (!ok) throw notFound('Blocked sender not found');
         reply.code(204).send();
@@ -148,6 +149,7 @@ module.exports = async function senderPolicyRoutes(app, { db }) {
         const user = req.creds.user;
         if (!db) throw notFound('Allowed sender not found');
         const prefid = Number(req.params.prefid);
+        if (!Number.isInteger(prefid) || prefid < 0) throw badRequest('Invalid preference id');
         const ok = await db.removePolicy(user, 'whitelist_from', prefid);
         if (!ok) throw notFound('Allowed sender not found');
         reply.code(204).send();

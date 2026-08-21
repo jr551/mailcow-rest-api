@@ -41,9 +41,12 @@ function fromImapError(err) {
         return conflict(text);
     }
     if (/timeout|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND/i.test(text)) {
-        return badGateway(`IMAP backend unavailable: ${text}`);
+        return badGateway('IMAP backend unavailable');
     }
-    return badGateway(text);
+    // Everything above is a recognised condition phrased by us. What's left
+    // is raw Dovecot response text, which can name internal hosts, paths and
+    // config; it belongs in the log, not in a client response.
+    return badGateway('IMAP backend error');
 }
 
 module.exports = {

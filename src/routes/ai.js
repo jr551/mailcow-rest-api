@@ -340,6 +340,24 @@ module.exports = async function aiRoutes(app, opts = {}) {
         if (reasoningOn && typeof body.max_tokens === 'number' && body.max_tokens < REASONING_TOKEN_FLOOR) {
             body.max_tokens = REASONING_TOKEN_FLOOR;
         }
+        // Clamp max_tokens to the operator ceiling. The passthrough used to
+        // forward whatever the client sent, so max_tokens: 200000 with a
+        // maximal prompt was billable to the shared key on every request.
+        const outputCeiling = config.ai.maxOutputTokens || 0;
+        if (outputCeiling > 0) {
+            if (typeof body.max_tokens !== 'number' || body.max_tokens > outputCeiling) {
+                body.max_tokens = outputCeiling;
+            }
+        }
+        // Reject an oversized input rather than paying to forward it.
+        const maxReq = config.ai.maxRequestBytes || 0;
+        if (maxReq > 0) {
+            const size = Buffer.byteLength(JSON.stringify(body.messages || []), 'utf8');
+            if (size > maxReq) {
+                throw problem(413, 'Payload Too Large',
+                    `Request messages exceed the ${maxReq}-byte limit`);
+            }
+        }
         // Strip credentials before the request leaves this process. Mail is
         // full of secrets nobody thought of as secrets — reset mails that
         // quote the temporary password, a pasted API key, a one-time code —

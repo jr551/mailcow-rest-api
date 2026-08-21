@@ -140,14 +140,16 @@ const createMailboxSchema = {
     type: 'object',
     additionalProperties: false,
     required: ['path'],
-    properties: { path: { type: 'string', minLength: 1 } }
+    // Bounded so an unbounded string can't be assembled into a multi-MB
+    // IMAP command line.
+    properties: { path: { type: 'string', minLength: 1, maxLength: 1024 } }
 };
 
 const renameMailboxSchema = {
     type: 'object',
     additionalProperties: false,
     required: ['newPath'],
-    properties: { newPath: { type: 'string', minLength: 1 } }
+    properties: { newPath: { type: 'string', minLength: 1, maxLength: 1024 } }
 };
 
 const listMessagesQuerySchema = {

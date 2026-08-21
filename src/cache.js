@@ -72,6 +72,7 @@ function createCache(opts) {
     const sessionGetStmt = db.prepare('SELECT user, pass, hash, expires_at, created_at FROM sessions WHERE token = ?');
     const sessionSetStmt = db.prepare('INSERT INTO sessions (token, user, pass, hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)');
     const sessionDeleteStmt = db.prepare('DELETE FROM sessions WHERE token = ?');
+    const sessionDeleteByUserStmt = db.prepare('DELETE FROM sessions WHERE user = ?');
     const sessionExtendStmt = db.prepare('UPDATE sessions SET expires_at = ? WHERE token = ?');
     const sessionPruneStmt = db.prepare('DELETE FROM sessions WHERE expires_at < ?');
     const sessionSizeStmt = db.prepare('SELECT COUNT(*) AS c FROM sessions');
@@ -219,6 +220,17 @@ function createCache(opts) {
         sessionMem.delete(token);
     }
 
+    // Revoke every token for a mailbox — for password changes or incident
+    // response, where a single leaked bearer needs the whole account cut off
+    // rather than one token.
+    function deleteSessionsByUser(user) {
+        const changes = sessionDeleteByUserStmt.run(user).changes;
+        for (const [token, session] of sessionMem) {
+            if (session.user === user) sessionMem.delete(token);
+        }
+        return changes;
+    }
+
     function pruneSessions(now = Date.now()) {
         const changes = sessionPruneStmt.run(now).changes;
         sessionMem.clear();
@@ -241,7 +253,7 @@ function createCache(opts) {
         db.close();
     }
 
-    return { get, set, invalidate, prune, size, close, hashCreds, createSession, getSession, deleteSession, pruneSessions, sessionSize, listActiveSessions, migratePlaintextSessions };
+    return { get, set, invalidate, prune, size, close, hashCreds, createSession, getSession, deleteSession, deleteSessionsByUser, pruneSessions, sessionSize, listActiveSessions, migratePlaintextSessions };
 }
 
 module.exports = { createCache, hashCreds };

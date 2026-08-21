@@ -118,7 +118,7 @@ test('webhook config: only well-formed http(s) accounts are accepted', () => {
 
 // End-to-end over a real HTTP listener with a stubbed IMAP client, so the
 // ordering guarantee (never delete before a 2xx) is actually exercised.
-function makeFakeImap({ uids, onDelete }) {
+function makeFakeImap({ uids, onDelete, opts }) {
     return {
         mailbox: { exists: uids.length, uidValidity: 7 },
         on() {},
@@ -154,7 +154,11 @@ function makeFakeImap({ uids, onDelete }) {
             const body = part === '2' ? Buffer.from('PDF-BYTES-1') : Buffer.from('the readable body text');
             return { content: Readable.from([body]) };
         },
-        async messageDelete(uid) { onDelete(Number(uid)); return true; }
+        async messageDelete(uid) {
+            onDelete(Number(uid));
+            if (opts && opts.deleteFails) throw new Error('connection reset during delete');
+            return true;
+        }
     };
 }
 
@@ -187,12 +191,13 @@ async function runForwarder(opts) {
     };
 
     const { createWebhookForwarder } = require('../../src/webhook-forwarder');
-    const fake = makeFakeImap({ uids, onDelete: (u) => deleted.push(u) });
+    const fake = makeFakeImap({ uids, onDelete: (u) => deleted.push(u), opts });
     const forwarder = createWebhookForwarder({
         config: cfg, store, logger: null, connect: () => fake
     });
 
     await forwarder.tick();
+    if (opts.secondTick) await forwarder.tick();
     await new Promise((r) => server.close(r));
     return { received, deleted, store };
 }
@@ -221,6 +226,25 @@ test('webhook: a failing endpoint never deletes the message and schedules a retr
         assert.equal(row.attempts, 1);
         assert.equal(row.giving_up, 0);
         assert.ok(row.next_attempt_at > Date.now());
+    } finally { store.close(); }
+});
+
+test('webhook: a delete failure after a successful POST does not re-POST', async () => {
+    // The POST succeeded but the IMAP delete threw. The message is still in
+    // the mailbox, so the next poll finds it again — and must NOT deliver it
+    // a second time (which would be a duplicate ticket on the receiver). It
+    // retries only the delete.
+    const { received, deleted, store } = await runForwarder({
+        status: 200, uids: [21], deleteFails: true, secondTick: true
+    });
+    try {
+        // Delivered exactly once across both polls, delete attempted twice.
+        assert.equal(received.length, 1, 'POSTed once, not re-POSTed');
+        assert.deepEqual(deleted, [21, 21], 'delete retried on the second poll');
+        // Still tracked as delivered-but-undeleted, not cleared.
+        const row = store.get('f@x.com', 7, 21);
+        assert.ok(row, 'still tracked');
+        assert.equal(row.delivered, 1);
     } finally { store.close(); }
 });
 

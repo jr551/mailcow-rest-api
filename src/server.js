@@ -436,11 +436,15 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
     // Error handler must be registered BEFORE routes so they inherit it.
     app.setErrorHandler((err, req, reply) => {
         const status = err.statusCode || 500;
+        // Routes that build a `problem` have chosen what the client may see.
+        // Anything else reaching here is unplanned, and err.message for an
+        // unplanned 5xx is whatever fs/sqlite/undici said — filesystem paths,
+        // internal hostnames, SQL. Log it in full; tell the client nothing.
         const problem = err.problem || {
             type: 'about:blank',
             title: err.name || 'Error',
             status,
-            detail: err.message || 'Unexpected error'
+            detail: status >= 500 ? 'Internal server error' : (err.message || 'Unexpected error')
         };
         if (status >= 500) req.log.error({ err }, 'request failed');
         else req.log.warn({ err: { message: err.message, code: err.code } }, 'request rejected');

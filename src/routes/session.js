@@ -83,4 +83,28 @@ module.exports = async function sessionRoutes(app, { cache, imap, sessionTtlMs }
             expiresAt: new Date(req.session.expiresAt).toISOString()
         };
     });
+
+    // Without this a leaked bearer token was usable until its TTL with no
+    // recourse. Bearer auth revokes just the presented token; Basic auth
+    // revokes every token for the mailbox (password change / incident
+    // response).
+    app.delete('/v1/auth/session', {
+        config: { public: false },
+        schema: {
+            tags: ['auth'],
+            summary: 'Revoke session tokens',
+            description: 'Bearer authentication revokes the current token. Basic authentication revokes every token for that mailbox, intended for password changes or incident response.',
+            response: {
+                204: { type: 'null' },
+                401: problemSchema
+            }
+        }
+    }, async (req, reply) => {
+        if (req.session?.token) {
+            cache.deleteSession(req.session.token);
+        } else {
+            cache.deleteSessionsByUser(req.creds.user);
+        }
+        reply.code(204).send();
+    });
 };

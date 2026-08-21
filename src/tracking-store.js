@@ -43,9 +43,25 @@ function createTrackingStore(opts) {
         CREATE INDEX IF NOT EXISTS idx_tracking_sent_at ON tracking_pixels(sent_at);
     `);
 
+    // `sender` is the From address, which may be any alias the user is
+    // allowed to send as. It's also the address the open-notification is
+    // sent from, so it must stay the alias. But listing and deleting scoped
+    // on `sender`, so a pixel created under an alias was invisible and
+    // undeletable to the account that made it. `owner` records the
+    // authenticating account for scoping; it defaults to sender for rows
+    // written before this column existed.
+    try {
+        const cols = db.prepare('PRAGMA table_info(tracking_pixels)').all();
+        if (!cols.some((c) => c.name === 'owner')) {
+            db.exec('ALTER TABLE tracking_pixels ADD COLUMN owner TEXT');
+            db.exec('UPDATE tracking_pixels SET owner = sender WHERE owner IS NULL');
+            db.exec('CREATE INDEX IF NOT EXISTS idx_tracking_owner ON tracking_pixels(owner)');
+        }
+    } catch { /* fresh db already has it */ }
+
     const createStmt = db.prepare(
-        'INSERT INTO tracking_pixels (ref, sender, sender_pass, recipient, subject, sent_at) ' +
-        'VALUES (?, ?, ?, ?, ?, ?)'
+        'INSERT INTO tracking_pixels (ref, sender, owner, sender_pass, recipient, subject, sent_at) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, ?)'
     );
     const recordOpenStmt = db.prepare(
         'UPDATE tracking_pixels SET opened_at = ?, opener_ip = ?, opener_ua = ? ' +
@@ -57,9 +73,9 @@ function createTrackingStore(opts) {
     );
     const listStmt = db.prepare(
         'SELECT ref, sender, recipient, subject, sent_at, opened_at, opener_ip, opener_ua ' +
-        'FROM tracking_pixels WHERE sender = ? ORDER BY sent_at DESC'
+        'FROM tracking_pixels WHERE COALESCE(owner, sender) = ? ORDER BY sent_at DESC'
     );
-    const deleteStmt = db.prepare('DELETE FROM tracking_pixels WHERE ref = ? AND sender = ?');
+    const deleteStmt = db.prepare('DELETE FROM tracking_pixels WHERE ref = ? AND COALESCE(owner, sender) = ?');
     const pruneStmt = db.prepare('DELETE FROM tracking_pixels WHERE sent_at < ?');
     const countStmt = db.prepare('SELECT COUNT(*) AS c FROM tracking_pixels');
 
@@ -82,9 +98,9 @@ function createTrackingStore(opts) {
         return migrated;
     }
 
-    function create({ sender, senderPass, recipient, subject, now = Date.now() }) {
+    function create({ sender, owner, senderPass, recipient, subject, now = Date.now() }) {
         const ref = crypto.randomUUID();
-        createStmt.run(ref, sender, seal(senderPass), recipient, subject, now);
+        createStmt.run(ref, sender, owner || sender, seal(senderPass), recipient, subject, now);
         return ref;
     }
 
@@ -122,8 +138,9 @@ function createTrackingStore(opts) {
         };
     }
 
-    function listBySender(sender) {
-        return listStmt.all(sender).map((row) => ({
+    // Argument is the authenticating account (owner), not the From alias.
+    function listBySender(owner) {
+        return listStmt.all(owner).map((row) => ({
             ref: row.ref,
             sender: row.sender,
             recipient: row.recipient,
@@ -135,8 +152,8 @@ function createTrackingStore(opts) {
         }));
     }
 
-    function remove({ ref, sender }) {
-        return deleteStmt.run(ref, sender).changes;
+    function remove({ ref, sender, owner }) {
+        return deleteStmt.run(ref, owner || sender).changes;
     }
 
     function prune(beforeTimestamp) {
