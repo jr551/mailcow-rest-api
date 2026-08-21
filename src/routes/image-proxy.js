@@ -1,8 +1,17 @@
 'use strict';
 
 const { URL } = require('node:url');
+const dns = require('node:dns').promises;
+const { Agent } = require('undici');
 const { problem } = require('../errors');
 const { streamWithLimit } = require('../utils/stream');
+const {
+    isPrivateIp,
+    isPrivateHostname,
+    normalizeHost,
+    validateTargetUrl,
+    createPinnedDispatcher
+} = require('../utils/ssrf-guard');
 
 const MAX_IMAGE_BYTES = 1 * 1024 * 1024; // 1 MB per image
 const FETCH_TIMEOUT_MS = 10_000;
@@ -50,75 +59,20 @@ function isAllowedImageType(contentType) {
     return ALLOWED_IMAGE_TYPES.has(normalized);
 }
 
-// Block private / loopback / link-local ranges to prevent SSRF.
-function isPrivateIp(ip) {
-    if (/^127\./.test(ip)) return true;
-    if (/^10\./.test(ip)) return true;
-    if (/^172\.(1[6-9]|2[0-9]|3[01])\./.test(ip)) return true;
-    if (/^192\.168\./.test(ip)) return true;
-    if (/^169\.254\./.test(ip)) return true;
-    if (/^0\./.test(ip)) return true;
-    if (/^255\./.test(ip)) return true;
-    if (ip === '0.0.0.0') return true;
-    if (ip === '::1') return true;
-    if (/^fc00:/i.test(ip)) return true;
-    if (/^fe80:/i.test(ip)) return true;
-    return false;
-}
-
-// Fold the forms that reach the resolver as an IP but don't look like a
-// dotted quad: bracketed IPv6, IPv4-mapped IPv6, and bare-integer IPv4.
-function normalizeHost(hostname) {
-    let h = String(hostname).toLowerCase();
-    if (h.startsWith('[') && h.endsWith(']')) h = h.slice(1, -1);
-    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(h);
-    if (mapped) return mapped[1];
-    if (/^\d+$/.test(h)) {
-        const n = Number(h);
-        if (Number.isInteger(n) && n >= 0 && n <= 0xFFFFFFFF) {
-            return [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join('.');
-        }
-    }
-    return h;
-}
-
-function isPrivateHostname(hostname) {
-    const lower = hostname.toLowerCase();
-    if (lower === 'localhost') return true;
-    if (lower.endsWith('.local')) return true;
-    if (lower.endsWith('.localhost')) return true;
-    return false;
-}
-
-function validateTargetUrl(raw) {
-    let parsed;
-    try {
-        parsed = new URL(raw);
-    } catch {
-        return { ok: false, reason: 'Invalid URL' };
-    }
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-        return { ok: false, reason: 'Only HTTP and HTTPS URLs are allowed' };
-    }
-    if (isPrivateHostname(parsed.hostname)) {
-        return { ok: false, reason: 'Private / localhost URLs are blocked' };
-    }
-    // URL.hostname keeps IPv6 in brackets ("[::1]") and preserves integer
-    // form ("2130706433" — which the resolver happily reads as 127.0.0.1).
-    // Normalize both before testing, or the checks below never fire.
-    const host = normalizeHost(parsed.hostname);
-    if (/^[\d.:]+$/.test(host) && isPrivateIp(host)) {
-        return { ok: false, reason: 'Private IP addresses are blocked' };
-    }
-    return { ok: true, url: parsed };
-}
+// The host/IP/scheme rules and the DNS-pinned dispatcher now live in
+// utils/ssrf-guard so the image proxy, calendar subscriptions and web-push
+// endpoints all enforce the same thing. The copy that used to live here
+// matched only literal IPs in the URL string — no post-resolution check at
+// all — so a hostname the attacker controlled could resolve to 10.x, 127.x
+// or 169.254.169.254 and pass. It also missed bracketed IPv6, hex-form
+// IPv4-mapped addresses (::ffff:a00:1), CGNAT and most of fc00::/7.
 
 function todayIso() {
     const d = new Date();
     return d.toISOString().slice(0, 10);
 }
 
-async function fetchImage(url) {
+async function fetchImage(url, { fetchImpl = global.fetch, lookup = dns.lookup, AgentCtor = Agent } = {}) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     // Manual redirect handling: tracking-pixel and CDN URLs almost always
@@ -132,9 +86,14 @@ async function fetchImage(url) {
     let current = url;
     try {
         for (let hop = 0; hop <= MAX_HOPS; hop++) {
-            const res = await fetch(current, {
+            // Resolve first, reject private answers, then pin the connection
+            // to the address we checked — otherwise the name is free to
+            // resolve somewhere else on the second lookup (DNS rebinding).
+            const dispatcher = await createPinnedDispatcher(current, { lookup, AgentCtor });
+            const res = await fetchImpl(current, {
                 signal: controller.signal,
                 redirect: 'manual',
+                dispatcher,
                 headers: {
                     'user-agent': 'mailcow-rest-api/1.0 (image proxy)',
                     accept: 'image/*,*/*;q=0.8'
@@ -183,7 +142,7 @@ async function fetchImage(url) {
     }
 }
 
-module.exports = async function imageProxyRoutes(app, { cache, maxBytesPerDay = 1024 * 1024 * 1024 }) {
+const imageProxyRoutes = async function imageProxyRoutes(app, { cache, maxBytesPerDay = 1024 * 1024 * 1024 }) {
     app.get('/v1/proxy/image', {
         schema: {
             tags: ['proxy'],
@@ -276,3 +235,11 @@ module.exports = async function imageProxyRoutes(app, { cache, maxBytesPerDay = 
         return reply.type(result.contentType).send(result.data);
     });
 };
+
+module.exports = imageProxyRoutes;
+module.exports.fetchImage = fetchImage;
+module.exports.validateTargetUrl = validateTargetUrl;
+module.exports.isPrivateIp = isPrivateIp;
+module.exports.isPrivateHostname = isPrivateHostname;
+module.exports.normalizeHost = normalizeHost;
+module.exports.createPinnedDispatcher = createPinnedDispatcher;

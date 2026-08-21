@@ -4,6 +4,16 @@ const { request } = require('undici');
 const { parseIcal } = require('../caldav-client');
 const { badRequest, problem } = require('../errors');
 const { problemSchema } = require('../schemas');
+const { validateTargetUrl, createPinnedDispatcher } = require('../utils/ssrf-guard');
+
+// A calendar feed is a public HTTPS URL. Nothing else was enforced: the
+// stored URL was fetched verbatim from inside the Docker network, so
+// http://10.0.0.5:6379/ or http://169.254.169.254/latest/meta-data/ were
+// both reachable — and undici's connect errors, which name host, port and
+// errno, were reflected straight back in the 502 detail. That combination is
+// a port scanner with a readback channel. Validate on create, validate and
+// pin on fetch, and keep upstream error text in the log only.
+const FEED_SCHEMES = ['https:', 'http:'];
 
 module.exports = async function calendarSubscriptionRoutes(app, { store }) {
     if (!store) {
@@ -79,6 +89,8 @@ module.exports = async function calendarSubscriptionRoutes(app, { store }) {
         const user = requireUser(req);
         const { name, url, color } = req.body;
         if (!name.trim() || !url.trim()) throw badRequest('name and url are required');
+        const check = validateTargetUrl(url.trim(), { schemes: FEED_SCHEMES });
+        if (!check.ok) throw badRequest(`Invalid calendar URL: ${check.reason}`);
         const sub = store.create({ user, name: name.trim(), url: url.trim(), color });
         reply.code(201);
         return sub;
@@ -139,10 +151,21 @@ module.exports = async function calendarSubscriptionRoutes(app, { store }) {
             throw badRequest('Invalid start or end date');
         }
 
+        // Re-check on every fetch, not just at create time: the rules may
+        // have tightened since, and DNS for a stored hostname can change.
+        const check = validateTargetUrl(sub.url, { schemes: FEED_SCHEMES });
+        if (!check.ok) {
+            req.log.warn({ subId: sub.id, reason: check.reason }, 'calendar subscription URL rejected');
+            throw problem(502, 'Bad Gateway', 'Calendar feed URL is not allowed');
+        }
+
         let icalText;
         try {
+            // Resolve, reject private answers, pin to the checked address.
+            const dispatcher = await createPinnedDispatcher(sub.url);
             const { body, statusCode } = await request(sub.url, {
                 method: 'GET',
+                dispatcher,
                 headers: { accept: 'text/calendar, application/octet-stream, */*' },
                 signal: AbortSignal.timeout(30000)
             });
@@ -152,7 +175,11 @@ module.exports = async function calendarSubscriptionRoutes(app, { store }) {
             }
             icalText = await body.text();
         } catch (err) {
-            throw problem(502, 'Bad Gateway', `Failed to fetch calendar: ${err.message}`);
+            // The upstream message names hosts, ports and errno — exactly
+            // what makes this a scanning oracle. Log it; return a generic
+            // failure to the caller.
+            req.log.warn({ subId: sub.id, err: err.message }, 'calendar feed fetch failed');
+            throw problem(502, 'Bad Gateway', 'Could not fetch the calendar feed');
         }
 
         const parsed = parseIcal(icalText);

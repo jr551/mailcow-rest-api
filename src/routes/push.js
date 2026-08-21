@@ -3,6 +3,18 @@
 const webpush = require('web-push');
 const config = require('../config');
 const { problem, badRequest, notFound } = require('../errors');
+const { validateTargetUrl } = require('../utils/ssrf-guard');
+
+// web-push POSTs to whatever endpoint the client registered, from the
+// server. Accepting any URL made this an outbound request-forgery and
+// amplification primitive: register N subscriptions pointing at a victim,
+// then /v1/push/test fans out to all of them. Push services are public
+// HTTPS endpoints, so hold subscriptions to that.
+function validatePushEndpoint(endpoint) {
+    const check = validateTargetUrl(String(endpoint || ''), { schemes: ['https:'] });
+    if (!check.ok) return `Invalid push endpoint: ${check.reason}`;
+    return null;
+}
 const { problemSchema } = require('../schemas');
 
 const subscriptionSchema = {
@@ -75,6 +87,8 @@ module.exports = async function pushRoutes(app, { pushStore }) {
         }
     }, async (req, reply) => {
         if (!req.creds) throw problem(401, 'Unauthorized', 'Authentication required');
+        const endpointError = validatePushEndpoint(req.body?.subscription?.endpoint);
+        if (endpointError) throw badRequest(endpointError);
         try {
             pushStore.upsert({ user: req.creds.user, subscription: req.body.subscription });
         } catch (err) {
