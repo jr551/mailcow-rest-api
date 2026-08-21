@@ -43,6 +43,22 @@ class IcalTokenStore {
             this._data = {};
         }
         this._migrateClearExpiry();
+        this._migrateEditGrants();
+    }
+
+    // Per-event edit links used to carry the feed token itself, so every
+    // attendee of a single event received a read+write credential for the
+    // whole calendar. Give each record a public id and a separate signing
+    // key: edit links now name the id and carry an HMAC over the one uid
+    // they are for, and the feed token never leaves the .ics URL.
+    _migrateEditGrants() {
+        let changed = false;
+        for (const v of Object.values(this._data)) {
+            if (!v) continue;
+            if (!v.id) { v.id = crypto.randomBytes(9).toString('base64url'); changed = true; }
+            if (!v.editKey) { v.editKey = crypto.randomBytes(32).toString('hex'); changed = true; }
+        }
+        if (changed) this._save();
     }
 
     // One-shot upgrade: clears expiresAt on every existing record so
@@ -105,6 +121,11 @@ class IcalTokenStore {
             user: u,
             pass,
             calendar,
+            // Public handle for per-event edit links, and the key those
+            // links are signed with. Separate from the token so an edit
+            // link never carries whole-calendar access.
+            id: crypto.randomBytes(9).toString('base64url'),
+            editKey: crypto.randomBytes(32).toString('hex'),
             createdAt: now,
             expiresAt: ttlMs > 0 ? now + ttlMs : null
         };
@@ -123,6 +144,24 @@ class IcalTokenStore {
             return null;
         }
         return rec;
+    }
+
+    /** Look up a record by its public edit id. Returns null if missing or
+     *  expired. Used by the per-event edit links, which never see the
+     *  feed token. */
+    getById(id) {
+        if (!id) return null;
+        for (const [token, rec] of Object.entries(this._data)) {
+            if (rec && rec.id === id) {
+                if (rec.expiresAt && rec.expiresAt < Date.now()) {
+                    delete this._data[token];
+                    this._save();
+                    return null;
+                }
+                return rec;
+            }
+        }
+        return null;
     }
 
     /** Revoke a user's token for a calendar. No-op if none exists. */

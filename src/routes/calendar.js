@@ -7,6 +7,51 @@ const { IcalTokenStore } = require('../ical-token-store');
 const icsEdit = require('../ics-edit');
 const { sendMessage } = require('../smtp-client');
 const path = require('node:path');
+const crypto = require('node:crypto');
+
+// A per-event edit grant. The link used to be
+// /v1/public/event/<feed-token>/<uid>/edit, which had two problems: it put
+// the whole-calendar read+write token into every event's DESCRIPTION and
+// LOCATION (so any attendee of one event could read and rewrite the entire
+// calendar), and the uid was an unauthenticated path parameter, so even
+// without the feed access the holder could target any event they could name.
+//
+// A grant names the token record by its public id and carries an HMAC over
+// exactly one uid. The uid the server acts on is the one inside the signed
+// grant, never a free parameter.
+function makeEventGrant(rec, uid) {
+    const uidPart = Buffer.from(String(uid), 'utf8').toString('base64url');
+    const sig = crypto.createHmac('sha256', rec.editKey)
+        .update(`${rec.id}:${uid}`)
+        .digest('base64url')
+        .slice(0, 27);
+    return `${rec.id}.${uidPart}.${sig}`;
+}
+
+// Returns { rec, uid } or null. Never throws on malformed input.
+function readEventGrant(store, grant) {
+    if (typeof grant !== 'string') return null;
+    const parts = grant.split('.');
+    if (parts.length !== 3) return null;
+    const [id, uidPart, sig] = parts;
+    const rec = store.getById(id);
+    if (!rec || !rec.editKey) return null;
+    let uid;
+    try {
+        uid = Buffer.from(uidPart, 'base64url').toString('utf8');
+    } catch {
+        return null;
+    }
+    if (!uid) return null;
+    const expected = crypto.createHmac('sha256', rec.editKey)
+        .update(`${id}:${uid}`)
+        .digest('base64url')
+        .slice(0, 27);
+    const a = Buffer.from(sig);
+    const b = Buffer.from(expected);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+    return { rec, uid };
+}
 
 module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorized = true, dataDir = './data', smtp = null }) {
     if (!sogoUrl) {
@@ -343,7 +388,10 @@ module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorize
             // Conservative cache so feed apps don't hammer SOGo every minute.
             reply.header('cache-control', 'public, max-age=600');
             const base = publicBaseUrl(req);
-            const editUrlFor = (uid) => `${base}/v1/public/event/${req.params.token}/${encodeURIComponent(uid)}/edit`;
+            // Signed per-event grant: the feed token stays in the .ics URL
+            // and never reaches the event bodies that get re-published to
+            // every attendee.
+            const editUrlFor = (uid) => `${base}/v1/public/event/${makeEventGrant(rec, uid)}/edit`;
             return buildIcsBody(events, editUrlFor);
         } catch (err) {
             req.log.warn({ err: err.message }, 'public ical fetch failed');
@@ -414,14 +462,14 @@ module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorize
         return `${m[1]}T${m[2]}:${m[3]}:${m[4] || '00'}Z`;
     }
 
-    function renderEditPage({ token, uid, fields, error, calendar }) {
+    function renderEditPage({ grant, fields, error, calendar }) {
         const safeSummary = escHtml(fields.summary || '');
         const safeLocation = escHtml(fields.location || '');
         const safeDescription = escHtml(fields.description || '');
         const safeStart = escHtml(isoToInput(fields.start));
         const safeEnd = escHtml(isoToInput(fields.end));
         const safeCal = escHtml(calendar || '');
-        const action = `/v1/public/event/${encodeURIComponent(token)}/${encodeURIComponent(uid)}/edit`;
+        const action = `/v1/public/event/${encodeURIComponent(grant)}/edit`;
         const errorBlock = error ? `<div class="err">${escHtml(error)}</div>` : '';
         return `<!doctype html>
 <html lang="en">
@@ -525,16 +573,16 @@ module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorize
 </head><body><div class="wrap"><div class="card"><h1>${escHtml(title)}</h1><div class="sub">${escHtml(detail)}</div></div></div></body></html>`;
     }
 
-    app.get('/v1/public/event/:token/:uid/edit', {
+    app.get('/v1/public/event/:grant/edit', {
         config: { public: true },
-        schema: { tags: ['calendar'], summary: 'Public anonymous event-edit form (token-based)' }
+        schema: { tags: ['calendar'], summary: 'Public anonymous event-edit form (per-event signed grant)' }
     }, async (req, reply) => {
-        const rec = icalTokens.get(req.params.token);
-        if (!rec) {
+        const claim = readEventGrant(icalTokens, req.params.grant);
+        if (!claim) {
             reply.code(404).type('text/html');
-            return renderErrorPage({ status: 404, title: 'Not found', detail: 'This calendar share link is unknown or has expired.' });
+            return renderErrorPage({ status: 404, title: 'Not found', detail: 'This event link is unknown, expired, or not valid for this event.' });
         }
-        const uid = decodeURIComponent(req.params.uid);
+        const { rec, uid } = claim;
         const raw = await client.getEventRaw(rec.user, rec.pass, rec.calendar, uid).catch(() => null);
         if (!raw) {
             reply.code(404).type('text/html');
@@ -548,19 +596,19 @@ module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorize
         }
         const fields = icsEdit.readEventFields(split.vevent);
         reply.type('text/html').header('cache-control', 'no-store').header('x-robots-tag', 'noindex,nofollow');
-        return renderEditPage({ token: req.params.token, uid, fields, calendar: rec.calendar });
+        return renderEditPage({ grant: req.params.grant, fields, calendar: rec.calendar });
     });
 
-    app.post('/v1/public/event/:token/:uid/edit', {
+    app.post('/v1/public/event/:grant/edit', {
         config: { public: true },
         schema: { tags: ['calendar'], summary: 'Apply an anonymous event edit and notify attendees' }
     }, async (req, reply) => {
-        const rec = icalTokens.get(req.params.token);
-        if (!rec) {
+        const claim = readEventGrant(icalTokens, req.params.grant);
+        if (!claim) {
             reply.code(404).type('text/html');
-            return renderErrorPage({ status: 404, title: 'Not found', detail: 'This calendar share link is unknown or has expired.' });
+            return renderErrorPage({ status: 404, title: 'Not found', detail: 'This event link is unknown, expired, or not valid for this event.' });
         }
-        const uid = decodeURIComponent(req.params.uid);
+        const { rec, uid } = claim;
         const body = req.body && typeof req.body === 'object' ? req.body : {};
         const summary = (body.summary || '').toString().trim();
         const startLocal = (body.start || '').toString().trim();
@@ -578,7 +626,7 @@ module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorize
             const fields = split ? icsEdit.readEventFields(split.vevent) : { summary, start: startIso, end: endIso, location, description };
             // Echo back the user's submitted values so they don't lose typing.
             return renderEditPage({
-                token: req.params.token, uid,
+                grant: req.params.grant,
                 fields: { summary, start: startIso || fields.start, end: endIso || fields.end, location, description },
                 error: msg, calendar: rec.calendar
             });
@@ -609,6 +657,23 @@ module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorize
         }
 
         const before = icsEdit.readEventFields(split.vevent);
+
+        // applyEdits writes DTSTART/DTEND back as single UTC instants and
+        // drops the TZID. On a recurring master that silently reshapes the
+        // whole series — RRULE is preserved untouched and now evaluates
+        // against a different start, in a timezone that is no longer
+        // recorded. An anonymous link-holder should not be able to do that
+        // to a series, so refuse the time change and let the rest through.
+        if (icsEdit.hasRecurrence(split.vevent)) {
+            const timeChanged = startIso !== before.start || endIso !== before.end;
+            if (timeChanged) {
+                return renderWithError(
+                    'This is a repeating event. Its start and end times can only be changed ' +
+                    'by the calendar owner — other details can still be edited here.'
+                );
+            }
+        }
+
         const attendees = icsEdit.readAttendeeEmails(split.vevent);
         const updatedVevent = icsEdit.applyEdits(split.vevent, {
             summary, start: startIso, end: endIso, location, description

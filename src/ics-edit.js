@@ -171,6 +171,15 @@ function refreshDtstamp(veventText) {
 
 // Apply form-supplied changes to a parsed VEVENT block. Only fields
 // the user can edit; nothing else is touched.
+// True when the VEVENT is a recurring master. applyEdits rewrites DTSTART
+// and DTEND as single UTC instants and drops the TZID, which for a
+// recurring master silently reshapes the whole series (and loses the
+// timezone the rule was written against) while RRULE stays untouched.
+// Callers that can't safely do that check this first.
+function hasRecurrence(veventText) {
+    return /^(RRULE|RDATE|EXDATE|RECURRENCE-ID)[;:]/im.test(String(veventText || ''));
+}
+
 function applyEdits(veventText, edits) {
     let v = veventText;
     if (Object.prototype.hasOwnProperty.call(edits, 'summary')) {
@@ -182,6 +191,10 @@ function applyEdits(veventText, edits) {
     if (Object.prototype.hasOwnProperty.call(edits, 'end')) {
         v = setProperty(v, 'DTEND', `DTEND:${formatIcalDate(edits.end)}`);
     }
+    // DTSTART/DTEND are now UTC instants with no TZID, so a leftover
+    // VALUE=DATE (all-day) parameter elsewhere would contradict them.
+    // Nothing to do for the single-instant case; recurring masters are
+    // refused by the caller via hasRecurrence().
     if (Object.prototype.hasOwnProperty.call(edits, 'location')) {
         const loc = edits.location || '';
         v = setProperty(v, 'LOCATION', loc ? `LOCATION:${escapeIcalText(loc)}` : null);
@@ -247,6 +260,7 @@ function refoldVcalendar(unfoldedText) {
 }
 
 module.exports = {
+    hasRecurrence,
     unfold,
     refoldVcalendar,
     splitEventByUid,
