@@ -19,6 +19,19 @@ function generateId() {
     return 'rule-' + crypto.randomBytes(8).toString('hex');
 }
 
+// Rule ids are interpolated into the generated Sieve script's comment lines
+// and are the key removeRule matches on. Accepting them verbatim from the
+// request body let a caller pick an id containing quotes, backslashes or
+// newlines — which either corrupted the id on the next parse (making the
+// rule undeletable) or broke out of the comment line entirely. Keep only
+// ids that survive a script round-trip unchanged; mint a fresh one
+// otherwise.
+const SAFE_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+function safeRuleId(candidate) {
+    return typeof candidate === 'string' && SAFE_ID.test(candidate) ? candidate : generateId();
+}
+
 function createSieveManager({ db, imapHost, rejectUnauthorized = true, tlsServername = '' }) {
     // Validate that the user can actually receive mail at the given recipient address
     async function canReceiveAt(email, recipient) {
@@ -213,7 +226,7 @@ function createSieveManager({ db, imapHost, rejectUnauthorized = true, tlsServer
             }
 
             const rule = {
-                id: ruleInput.id || generateId(),
+                id: safeRuleId(ruleInput.id),
                 name: ruleInput.name || 'Unnamed rule',
                 condition: ruleInput.condition,
                 action: ruleInput.action

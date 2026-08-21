@@ -163,8 +163,13 @@ function parseRules(content) {
     const ruleRe = /# rule: ([^\r\n]+)\r?\n# name: ([^\r\n]+)\r?\nif ([^\{]+)\{\s*([\s\S]*?)\s*\}/g;
     let m;
     while ((m = ruleRe.exec(ourPart)) !== null) {
-        const id = m[1].trim();
-        const name = m[2].trim().replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+        // compileRule escapes both fields, so both must be unescaped here.
+        // Leaving the id raw meant a rule whose id contained a quote or a
+        // backslash parsed back with a *different* id than the client sent,
+        // so removeRule's `r.id === id` never matched and the rule could not
+        // be deleted through the API.
+        const id = unescapeSieveString(m[1].trim());
+        const name = unescapeSieveString(m[2].trim());
         const condStr = m[3].trim();
         const actionStr = m[4].trim();
 
@@ -212,7 +217,10 @@ function parseAction(actionStr) {
 }
 
 function unescapeSieveString(s) {
-    return s.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+    // Single left-to-right pass. Two chained replaces decode in the wrong
+    // order: the second one can re-interpret a backslash the first one just
+    // produced, so text that was never escaped as a pair still collapses.
+    return String(s).replace(/\\([\s\S])/g, '$1');
 }
 
 // Backward compat helpers
