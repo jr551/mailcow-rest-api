@@ -151,17 +151,41 @@ function isBasicAuth(req) {
     return auth.startsWith('Basic ');
 }
 
+// The approval email is a trusted-looking template that quotes values the
+// caller supplied. Interpolating them raw let a crafted subject inject
+// markup into it — a second, convincing "Approve" button pointing somewhere
+// else, or enough padding to push the real recipient out of view. Escape,
+// and cap the length so the preview stays a preview.
+function escapeEmailHtml(value, max = 200) {
+    const raw = String(value ?? '');
+    const clipped = raw.length > max ? `${raw.slice(0, max)}…` : raw;
+    return clipped
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function clipText(value, max = 200) {
+    const raw = String(value ?? '');
+    return raw.length > max ? `${raw.slice(0, max)}…` : raw;
+}
+
 function buildApprovalEmail({ from, to, subject, approveUrl, denyUrl }) {
     const toList = Array.isArray(to) ? to.join(', ') : to;
+    const fromSafe = escapeEmailHtml(from);
+    const toSafe = escapeEmailHtml(toList, 400);
+    const subjectSafe = escapeEmailHtml(subject);
     const html = `
 <!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><title>Approve Email</title></head>
 <body style="font-family:sans-serif;max-width:600px;margin:24px auto;padding:0 16px;">
   <h2>Approve sending this email?</h2>
-  <p><strong>From:</strong> ${from}</p>
-  <p><strong>To:</strong> ${toList}</p>
-  <p><strong>Subject:</strong> ${subject}</p>
+  <p><strong>From:</strong> ${fromSafe}</p>
+  <p><strong>To:</strong> ${toSafe}</p>
+  <p><strong>Subject:</strong> ${subjectSafe}</p>
   <div style="margin:24px 0;">
     <a href="${approveUrl}" style="display:inline-block;padding:12px 24px;background:#10b981;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;">✅ Approve & Send</a>
     <a href="${denyUrl}" style="display:inline-block;padding:12px 24px;background:#ef4444;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;margin-left:12px;">❌ Deny</a>
@@ -171,9 +195,9 @@ function buildApprovalEmail({ from, to, subject, approveUrl, denyUrl }) {
 </html>`;
     const text = `Approve sending this email?
 
-From: ${from}
-To: ${toList}
-Subject: ${subject}
+From: ${clipText(from)}
+To: ${clipText(toList, 400)}
+Subject: ${clipText(subject)}
 
 Approve: ${approveUrl}
 Deny: ${denyUrl}
@@ -313,6 +337,7 @@ module.exports = async function sendRoutes(app, { db, smtp, pool, trackingStore,
             }
             const ref = trackingStore.create({
                 sender: from,
+                owner: user,
                 senderPass: pass,
                 recipient: body.to[0] || '',
                 subject: body.subject
@@ -375,7 +400,10 @@ module.exports = async function sendRoutes(app, { db, smtp, pool, trackingStore,
     }
 
     async function resolvePendingAndSend(token, req) {
-        const entry = pendingStore.get(token);
+        // Claim atomically. The old get() → await sendMessage() → remove()
+        // sequence let two concurrent clicks both observe the entry and send
+        // the mail twice.
+        const entry = pendingStore.claim(token);
         if (!entry) {
             throw problem(404, 'Not Found', 'Approval request not found or expired.');
         }
@@ -386,6 +414,7 @@ module.exports = async function sendRoutes(app, { db, smtp, pool, trackingStore,
             if (baseUrl) {
                 const ref = trackingStore.create({
                     sender: entry.from,
+                    owner: entry.user,
                     senderPass: entry.pass,
                     recipient: entry.to[0] || '',
                     subject: entry.subject
@@ -395,7 +424,9 @@ module.exports = async function sendRoutes(app, { db, smtp, pool, trackingStore,
             }
         }
 
-        const result = await sendMessage({
+        let result;
+        try {
+            result = await sendMessage({
             smtpConfig: smtp,
             user: entry.user,
             pass: entry.pass,
@@ -408,14 +439,73 @@ module.exports = async function sendRoutes(app, { db, smtp, pool, trackingStore,
             html,
             inReplyTo: entry.inReplyTo,
             attachments: entry.attachments
-        });
+            });
+        } catch (err) {
+            // We claimed the entry before sending, so put it back — the user
+            // can retry the same link instead of losing the draft.
+            pendingStore.restore(token, entry);
+            throw err;
+        }
 
         await appendToSent({ user: entry.user, pass: entry.pass }, result.raw);
-        pendingStore.remove(token);
         return { sent: result.sent, messageId: result.messageId };
     }
 
+    // Mail scanners (SafeLinks, Proofpoint, Mimecast) fetch the URLs in
+    // inbound mail, and the approval email lands in the user's own INBOX —
+    // i.e. it is inbound mail. A GET that sent the message therefore let a
+    // scanner approve it before the user ever saw it. GET now only renders a
+    // confirmation page; the send happens on POST from that form.
     app.get('/v1/messages/approve/:token', {
+        config: { public: true },
+        schema: {
+            tags: ['messages'],
+            summary: 'Show the confirmation page for a pending email',
+            response: { 200: { type: 'string' }, 404: problemSchema }
+        }
+    }, async (req, reply) => {
+        const entry = pendingStore.get(req.params.token);
+        if (!entry) {
+            return reply.code(404).type('text/html').send(`<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Expired</title>
+<style>body{font-family:sans-serif;max-width:600px;margin:40px auto;padding:0 16px;text-align:center}
+.error{color:#ef4444;font-size:48px;margin-bottom:16px}
+h1{margin:0 0 8px}
+p{color:#666}</style></head>
+<body>
+<div class="error">❌</div>
+<h1>Approval expired</h1>
+<p>This approval link is no longer valid.</p>
+</body></html>`);
+        }
+        const toList = Array.isArray(entry.to) ? entry.to.join(', ') : String(entry.to || '');
+        return reply.type('text/html').send(`<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Confirm send</title>
+<style>body{font-family:sans-serif;max-width:600px;margin:40px auto;padding:0 16px}
+h1{margin:0 0 16px}
+dl{background:#f6f6f6;padding:16px;border-radius:8px}
+dt{font-weight:600;color:#444}
+dd{margin:0 0 12px}
+button{padding:12px 24px;background:#10b981;color:#fff;border:0;border-radius:6px;font-weight:600;font-size:15px;cursor:pointer}
+p.note{color:#666;font-size:13px}</style></head>
+<body>
+<h1>Confirm sending this email</h1>
+<dl>
+  <dt>From</dt><dd>${escapeEmailHtml(entry.from)}</dd>
+  <dt>To</dt><dd>${escapeEmailHtml(toList, 400)}</dd>
+  <dt>Subject</dt><dd>${escapeEmailHtml(entry.subject)}</dd>
+</dl>
+<form method="POST" action="">
+  <button type="submit">Send now</button>
+</form>
+<p class="note">Nothing has been sent yet. This step exists because mail scanners follow links automatically.</p>
+</body></html>`);
+    });
+
+    app.post('/v1/messages/approve/:token', {
         config: { public: true },
         schema: {
             tags: ['messages'],
