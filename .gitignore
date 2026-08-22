@@ -6,6 +6,13 @@ data/
 *.db-shm
 .env
 .env.local
+# Operators keep timestamped .env backups next to the compose file (a real
+# deployment had .env.bak-20260801 sitting there). Those hold the mailcow DB
+# password, provider API keys and CREDENTIAL_ENCRYPTION_KEY, and the two
+# rules above did not match them — so a single `git add -A` in a deployment
+# directory would commit live secrets.
+.env.*
+!.env.example
 .DS_Store
 *.log
 coverage/
