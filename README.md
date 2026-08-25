@@ -243,9 +243,19 @@ leaves it in the mailbox and schedules a retry — 1m, 5m, 15m, 1h, 3h, 6h,
 kept in `WEBHOOK_DB_PATH` so restarts don't reset the backoff or re-deliver.
 After the final attempt the message is left in place rather than dropped.
 
-When `secret` is set, the body is signed with HMAC-SHA256 and sent as
-`X-Webhook-Signature: sha256=<hex>`; verify it against the raw request body,
-not a re-serialized copy.
+When `secret` is set, each POST carries
+
+```
+X-Webhook-Timestamp: <unix seconds>
+X-Webhook-Signature-V2: <hex HMAC-SHA256 of "<timestamp>.<raw body>">
+```
+
+Verify the signature against the raw request body, not a re-serialized copy,
+and reject any request whose timestamp is outside your tolerance window (300s
+is a reasonable default) — that check is what makes a captured request
+unreplayable. No body-only `X-Webhook-Signature` is sent: emitting one
+alongside the timestamped signature would let an attacker strip the two
+headers above and replay the request anyway.
 
 ## Development
 

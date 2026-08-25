@@ -171,7 +171,13 @@ async function runForwarder(opts) {
         let body = '';
         req.on('data', (c) => { body += c; });
         req.on('end', () => {
-            received.push({ body: JSON.parse(body), signature: req.headers['x-webhook-signature'] });
+            received.push({
+                body: JSON.parse(body),
+                rawBody: body,
+                timestamp: req.headers['x-webhook-timestamp'],
+                signature: req.headers['x-webhook-signature-v2'],
+                legacySignature: req.headers['x-webhook-signature']
+            });
             res.writeHead(status).end('{}');
         });
     });
@@ -209,7 +215,17 @@ test('webhook: message is POSTed with a signature and deleted only after 2xx', a
         assert.equal(received[0].body.uid, 11);
         assert.equal(received[0].body.envelope.subject, 'msg-11');
         assert.equal(Buffer.from(received[0].body.raw.data, 'base64').toString().includes('msg-11'), true);
-        assert.match(received[0].signature, /^sha256=[0-9a-f]{64}$/);
+        // V2: hex HMAC over "<timestamp>.<raw body>", so the signature is
+        // bound to a moment in time and a replay can be rejected on age.
+        assert.match(received[0].timestamp, /^\d{10}$/);
+        const expected = require('node:crypto')
+            .createHmac('sha256', 'shh')
+            .update(`${received[0].timestamp}.${received[0].rawBody}`)
+            .digest('hex');
+        assert.equal(received[0].signature, expected);
+        // The legacy body-only header must be gone: leaving it in place
+        // would let an attacker drop the V2 headers and replay freely.
+        assert.equal(received[0].legacySignature, undefined);
         assert.deepEqual(deleted, [11]);
         // Delivered rows are cleared, not left pending.
         assert.equal(store.get('f@x.com', 7, 11), null);

@@ -347,8 +347,9 @@ module.exports = Object.freeze({
     //   ]
     // `password` is the mailbox's own IMAP password — the forwarder runs in
     // the background with no user session to borrow credentials from.
-    // `secret` (optional) signs the POST body with HMAC-SHA256, sent as
-    // X-Webhook-Signature: sha256=<hex>. `mailbox` defaults to INBOX.
+    // `secret` (optional) signs "<timestamp>.<body>" with HMAC-SHA256, sent
+    // as X-Webhook-Signature-V2: <hex> alongside X-Webhook-Timestamp: <unix
+    // seconds>. `mailbox` defaults to INBOX.
     webhooks: (() => {
         const raw = process.env.WEBHOOK_ACCOUNTS || '';
         let accounts = [];

@@ -82,8 +82,8 @@ function createWebhookForwarder({ config, store, logger, connect: connectOverrid
         return client;
     }
 
-    function sign(secret, body) {
-        return crypto.createHmac('sha256', secret).update(body).digest('hex');
+    function sign(secret, signedContent) {
+        return crypto.createHmac('sha256', secret).update(signedContent).digest('hex');
     }
 
     async function deliver(account, payload) {
@@ -96,7 +96,19 @@ function createWebhookForwarder({ config, store, logger, connect: connectOverrid
             // Lets the receiver verify the POST really came from us. Signed
             // over the exact bytes we send, so the receiver must verify
             // against the raw body, not a re-serialized object.
-            headers['x-webhook-signature'] = `sha256=${sign(account.secret, body)}`;
+            //
+            // The timestamp is inside the signed content, which is the whole
+            // point of this scheme over a body-only signature: a captured
+            // request replays forever if the signature only covers the body,
+            // whereas here the receiver can reject anything whose timestamp
+            // has fallen outside its tolerance window. We deliberately send
+            // *only* this header — emitting a legacy body-only signature
+            // alongside it would hand an attacker the replay back, since
+            // stripping the two V2 headers leaves a request that still
+            // validates.
+            const timestamp = String(Math.floor(Date.now() / 1000));
+            headers['x-webhook-timestamp'] = timestamp;
+            headers['x-webhook-signature-v2'] = sign(account.secret, `${timestamp}.${body}`);
         }
         const res = await request(account.url, {
             method: 'POST',
