@@ -74,6 +74,19 @@ module.exports = Object.freeze({
         cacheMaxEntries: num(process.env.OCR_CACHE_MAX_ENTRIES, 1000)
     },
 
+    // Origins allowed to call the API cross-origin. The webmail SPA is served
+    // from webmail.delivering.email but talks to the API on
+    // userapi.delivering.email, so those calls are cross-origin and need both
+    // a preflight answer and Allow-Origin on the real response.
+    apiCors: {
+        origins: (process.env.API_CORS_ORIGINS || process.env.DRIVE_CORS_ORIGINS || 'https://webmail.delivering.email,https://delivering.email,https://userapi.delivering.email')
+            .split(',').map(s => s.trim()).filter(Boolean),
+        // Allow any https subdomain of these apex domains without listing
+        // each one. Comma-separated, no leading dot.
+        wildcardApex: (process.env.API_CORS_WILDCARD_APEX || 'delivering.email')
+            .split(',').map(s => s.trim()).filter(Boolean)
+    },
+
     security: {
         ipAllowlist: process.env.IP_ALLOWLIST || '',
         // Key for encrypting stored mailbox passwords (sessions, tracking

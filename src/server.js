@@ -210,6 +210,24 @@ function createLogger() {
     };
 }
 
+// CORS is handled by hand rather than with @fastify/cors: the only
+// cross-origin caller is the webmail SPA (webmail.delivering.email talking to
+// userapi.delivering.email), the policy is two lines, and a preflight has to
+// be answered before the auth hook runs — which is easier to guarantee with an
+// explicit hook than with a plugin's registration order.
+const CORS_ALLOW_METHODS = 'GET,POST,PUT,DELETE,PATCH,OPTIONS';
+const CORS_ALLOW_HEADERS = 'Content-Type, Authorization, X-Requested-With';
+const CORS_MAX_AGE = '86400';
+
+function isCorsOriginAllowed(origin) {
+    if (!origin) return false;
+    const { origins, wildcardApex } = config.apiCors;
+    if (origins.includes('*') || origins.includes(origin)) return true;
+    // Subdomain wildcard, https only — an http:// origin on the same apex is a
+    // downgrade path we don't want to hand credentialed CORS to.
+    return wildcardApex.some(apex => origin.startsWith('https://') && origin.endsWith(`.${apex}`));
+}
+
 async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap } = {}) {
     const app = Fastify({
         serverFactory: createServer,
@@ -221,6 +239,32 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
     });
 
     await app.register(sensible);
+
+    // Answer the preflight before any other onRequest hook can reject it.
+    app.addHook('onRequest', async (req, reply) => {
+        if (req.method !== 'OPTIONS') return;
+        const origin = req.headers.origin;
+        if (!isCorsOriginAllowed(origin)) return;
+        reply.header('Access-Control-Allow-Origin', origin);
+        reply.header('Access-Control-Allow-Credentials', 'true');
+        reply.header('Access-Control-Allow-Methods', CORS_ALLOW_METHODS);
+        reply.header('Access-Control-Allow-Headers', CORS_ALLOW_HEADERS);
+        reply.header('Access-Control-Max-Age', CORS_MAX_AGE);
+        reply.header('Vary', 'Origin');
+        reply.code(204).send();
+        return reply;
+    });
+
+    // A passed preflight only buys the right to send the real request — the
+    // browser also checks Allow-Origin on the response itself, so this must be
+    // onSend (onResponse fires after the headers are already on the wire).
+    app.addHook('onSend', async (req, reply) => {
+        const origin = req.headers.origin;
+        if (!isCorsOriginAllowed(origin)) return;
+        reply.header('Access-Control-Allow-Origin', origin);
+        reply.header('Access-Control-Allow-Credentials', 'true');
+        reply.header('Vary', 'Origin');
+    });
 
     if (config.rateLimit.enabled) {
         await app.register(require('@fastify/rate-limit'), {

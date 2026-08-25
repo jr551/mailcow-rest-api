@@ -95,6 +95,10 @@ function isWebmailPath(url) {
 // Supports both Bearer (session token) and Basic auth — auto-detected from header.
 function createAuthHook({ cache, imap, verifier = verifyWithDovecot, now = () => Date.now() }) {
     return async function authHook(req, reply) {
+        // Preflight requests never carry credentials — the browser strips
+        // Authorization from them — so authenticating one can only ever 401
+        // and kill the real request that follows.
+        if (req.method === 'OPTIONS') return;
         if (req.routeOptions?.config?.public) return;
         if (isSwaggerPath(req.url)) return;
         if (isWebmailPath(req.url)) return;
