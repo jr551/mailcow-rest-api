@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const { ImapFlow } = require('imapflow');
 const { request } = require('undici');
-const { walkStructure, downloadPartText, streamToBuffer } = require('./imap');
+const { walkStructure, downloadPartText, streamToBuffer, parseAuthResultsHeader } = require('./imap');
 
 // Webhook conversion accounts.
 //
@@ -34,6 +34,45 @@ const DAILY_MS = 24 * 60 * 60_000;
 
 function backoffFor(attempts) {
     return attempts <= BACKOFF_MS.length ? BACKOFF_MS[attempts - 1] : DAILY_MS;
+}
+
+function headersFromSource(sourceBuf) {
+    // Unfold and parse RFC822 headers from the raw source. Lower-cased keys; duplicates -> array.
+    const str = sourceBuf.toString('utf8');
+    const end = str.search(/\r?\n\r?\n/);
+    const head = end === -1 ? str : str.slice(0, end);
+    const lines = head.split(/\r?\n/);
+    const out = {};
+    let curKey = null;
+    let curVal = '';
+    const push = () => {
+        if (!curKey) return;
+        const k = curKey.toLowerCase();
+        const v = curVal.trim();
+        if (out[k] === undefined) out[k] = v;
+        else if (Array.isArray(out[k])) out[k].push(v);
+        else out[k] = [out[k], v];
+    };
+    for (const line of lines) {
+        if (/^\s/.test(line) && curKey) curVal += ' ' + line.trim();
+        else {
+            push();
+            const m = line.match(/^([^:]+):\s*(.*)$/);
+            if (m) { curKey = m[1]; curVal = m[2]; } else { curKey = null; curVal = ''; }
+        }
+    }
+    push();
+    return out;
+}
+
+function htmlToText(html) {
+    if (!html) return null;
+    // Minimal HTML -> text for LLM extraction: strip tags, decode entities, collapse space.
+    let t = html.replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<script[\s\S]*?<\/script>/gi, ' ');
+    t = t.replace(/<[^>]+>/g, ' ');
+    t = t.replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/&quot;/gi, '"').replace(/&#39;/gi, "'");
+    t = t.replace(/\s+/g, ' ').trim();
+    return t.length ? t : null;
 }
 
 function addressList(list) {
@@ -161,6 +200,15 @@ function createWebhookForwarder({ config, store, logger, connect: connectOverrid
         } catch (err) {
             logger?.warn({ err: err.message, uid }, 'webhook body extraction failed; sending raw only');
         }
+        // HTML-only mails (Tesco receipts) would otherwise leave text=null and force the LLM to parse raw HTML.
+        // Provide a stripped text fallback so the agent can extract line items without decoding base64 raw.
+        if (!text && html) {
+            const stripped = htmlToText(html);
+            if (stripped) text = stripped;
+        }
+        const headers = headersFromSource(source);
+        const authHeaderRaw = headers['authentication-results'] ? (Array.isArray(headers['authentication-results']) ? headers['authentication-results'][0] : headers['authentication-results']) : null;
+        const auth = parseAuthResultsHeader(authHeaderRaw);
 
         // Attachment bytes, not just a manifest.
         //
@@ -240,6 +288,9 @@ function createWebhookForwarder({ config, store, logger, connect: connectOverrid
             // reads. Null when the message has no part of that type.
             text,
             html,
+            headers,
+            authenticationResults: authHeaderRaw,
+            auth,
             attachments,
             // Full RFC822 source, base64'd, for receivers that would rather
             // parse MIME themselves than trust our extraction.

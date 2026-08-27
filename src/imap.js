@@ -196,5 +196,5 @@ async function downloadPartText(client, uid, part) {
 
 module.exports = {
     withClient, withMailbox, serializeMailbox, serializeEnvelope, serializeListItem,
-    countAttachments, walkStructure, streamToBuffer, downloadPartText
+    countAttachments, walkStructure, streamToBuffer, downloadPartText, parseAuthResultsHeader
 };
