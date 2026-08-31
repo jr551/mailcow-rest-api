@@ -1,0 +1,35 @@
+webmail.example.com {
+    root * /var/www/mailcow-rest-api-webmail
+    encode zstd gzip
+
+    handle /health {
+        rewrite * /mailcow-rest-api/health
+        reverse_proxy https://mail.example.com {
+            header_up Host mail.example.com
+        }
+    }
+
+    handle /openapi.json {
+        rewrite * /mailcow-rest-api/openapi.json
+        reverse_proxy https://mail.example.com {
+            header_up Host mail.example.com
+        }
+    }
+
+    handle /v1/* {
+        rewrite * /mailcow-rest-api{uri}
+        reverse_proxy https://mail.example.com {
+            header_up Host mail.example.com
+        }
+    }
+
+    redir /webmail /webmail/ 308
+    handle /webmail/mobile/* {
+        try_files {path} /webmail/mobile/index.html
+        file_server
+    }
+    handle /webmail/* {
+        try_files {path} /webmail/index.html
+        file_server
+    }
+}

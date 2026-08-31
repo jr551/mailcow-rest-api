@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+    <head>
+        <meta charset="UTF-8" />
+        <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+        <link rel="manifest" href="/manifest.webmanifest" />
+        <link rel="apple-touch-icon" href="/icon.svg" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+        <meta name="apple-mobile-web-app-title" content="Webmail" />
+        <meta name="application-name" content="Webmail" />
+        <meta name="description" content="Fast, polished webmail for mailcow — AI assistant, calendar, dark mode, end-to-end auth, no third party identity." />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+        <meta name="color-scheme" content="light dark" />
+        <meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)" />
+        <meta name="theme-color" content="#f4f5f7" media="(prefers-color-scheme: light)" />
+        <meta property="og:type" content="website" />
+        <meta property="og:title" content="Webmail" />
+        <meta property="og:description" content="Fast, polished webmail for mailcow — AI assistant, calendar, dark mode." />
+        <meta property="og:site_name" content="Webmail" />
+        <meta name="twitter:card" content="summary" />
+        <title>Webmail</title>
+        <script>
+            // Apply persisted theme before paint to avoid a light-mode flash.
+            (function () {
+                try {
+                    const saved = localStorage.getItem('webmail.theme');
+                    const t = saved || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+                    document.documentElement.setAttribute('data-theme', t);
+                } catch (e) {}
+            })();
+        </script>
+        <script>window.__IMAP_API_BASE__=location.hostname==="webmail.delivering.email"?"https://userapi.delivering.email":""</script>
+    </head>
+    <body>
+        <div id="app"></div>
+        <script type="module" src="/src/main.ts"></script>
+    </body>
+</html>

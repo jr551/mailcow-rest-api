@@ -1,0 +1,12 @@
+services:
+  webmail:
+    image: ghcr.io/jr551/mailcow-rest-api-webmail:master
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+
+  # Put this behind your TLS proxy and forward:
+  #   /webmail/*     -> webmail:80
+  #   /v1/*          -> mailcow-rest-api
+  #   /health        -> mailcow-rest-api
+  #   /openapi.json  -> mailcow-rest-api

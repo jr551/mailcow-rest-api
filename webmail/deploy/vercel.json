@@ -1,0 +1,26 @@
+{
+  "rewrites": [
+    { "source": "/v1/:path*", "destination": "https://mail.example.com/mailcow-rest-api/v1/:path*" },
+    { "source": "/health", "destination": "https://mail.example.com/mailcow-rest-api/health" },
+    { "source": "/openapi.json", "destination": "https://mail.example.com/mailcow-rest-api/openapi.json" },
+    { "source": "/webmail/assets/:path*", "destination": "/assets/:path*" },
+    { "source": "/webmail/tesseract/:path*", "destination": "/tesseract/:path*" },
+    { "source": "/webmail/sw.js", "destination": "/sw.js" },
+    { "source": "/webmail/manifest.webmanifest", "destination": "/manifest.webmanifest" },
+    { "source": "/webmail/manifest-mobile.webmanifest", "destination": "/manifest-mobile.webmanifest" },
+    { "source": "/webmail/icon.svg", "destination": "/icon.svg" },
+    { "source": "/webmail/icon-maskable.svg", "destination": "/icon-maskable.svg" },
+    { "source": "/webmail/favicon.svg", "destination": "/favicon.svg" },
+    { "source": "/webmail/mobile/:path*", "destination": "/mobile/index.html" },
+    { "source": "/webmail/:path*", "destination": "/index.html" }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "Referrer-Policy", "value": "same-origin" }
+      ]
+    }
+  ]
+}
