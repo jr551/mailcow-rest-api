@@ -24,6 +24,7 @@ const { createImageProxyCache } = require('./image-proxy-cache');
 const { createAiCache } = require('./ai-cache');
 const { createSecretBox } = require('./secret-box');
 const { createCalendarSubStore } = require('./calendar-sub-store');
+const { createAdminSettings } = require('./admin-settings');
 const mailboxRoutes = require('./routes/mailboxes');
 const messageRoutes = require('./routes/messages');
 const sessionRoutes = require('./routes/session');
@@ -41,6 +42,7 @@ const calendarRoutes = require('./routes/calendar');
 const calendarSubRoutes = require('./routes/calendar-subscriptions');
 const driveRoutes = require('./routes/drive');
 const appRoutes = require('./routes/app');
+const adminRoutes = require('./routes/admin');
 const iconProxyRoutes = require('./routes/icon-proxy');
 const trackingRoutes = require('./routes/tracking');
 const imageProxyRoutes = require('./routes/image-proxy');
@@ -379,6 +381,12 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
     const calendarSubStore = createCalendarSubStore({ filePath: config.calendarSubs.dbPath });
     app.log.info('calendar subscription store ready (%s)', config.calendarSubs.dbPath);
 
+    const adminSettings = createAdminSettings({
+        filePath: config.admin.settingsPath,
+        envWebmailEnabled: config.webmail.enabled
+    });
+
+    app.decorate('adminSettings', adminSettings);
     app.decorate('cache', cache);
     app.decorate('pool', pool);
     if (ocrCache) app.decorate('ocrCache', ocrCache);
@@ -397,7 +405,12 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
             },
             components: {
                 securitySchemes: {
-                    basicAuth: { type: 'http', scheme: 'basic' }
+                    basicAuth: { type: 'http', scheme: 'basic' },
+                    adminToken: {
+                        type: 'http',
+                        scheme: 'bearer',
+                        description: 'Operator token from ADMIN_TOKEN. Only for /v1/admin/*.'
+                    }
                 }
             },
             security: [{ basicAuth: [] }],
@@ -415,7 +428,8 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
                 { name: 'calendar', description: 'CalDAV calendar operations via SOGo' },
                 { name: 'tracking', description: 'Email open tracking pixels' },
                 { name: 'proxy', description: 'Privacy image proxy' },
-                { name: 'system', description: 'Health and meta endpoints' }
+                { name: 'system', description: 'Health and meta endpoints' },
+                { name: 'admin', description: 'Operator-only runtime settings (ADMIN_TOKEN)' }
             ]
         }
     });
@@ -424,49 +438,83 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         uiConfig: { docExpansion: 'list', deepLinking: false, persistAuthorization: true }
     });
 
-    if (config.webmail.enabled) {
-        const distAbsolute = path.isAbsolute(config.webmail.distPath)
-            ? config.webmail.distPath
-            : path.resolve(process.cwd(), config.webmail.distPath);
-        if (fs.existsSync(distAbsolute)) {
-            await app.register(fastifyStatic, {
-                root: distAbsolute,
-                prefix: '/webmail/',
-                index: ['index.html'],
-                decorateReply: false
+    // Webmail SPA. Registration depends only on the build being present —
+    // whether it is *served* is a runtime decision (admin toggle), so the
+    // routes exist either way and the hook below turns them on and off.
+    const distAbsolute = path.isAbsolute(config.webmail.distPath)
+        ? config.webmail.distPath
+        : path.resolve(process.cwd(), config.webmail.distPath);
+    const webmailPresent = fs.existsSync(distAbsolute);
+    let indexHtml = null;
+    let mobileHtml = null;
+
+    if (webmailPresent) {
+        // Gate every /webmail* request, including static assets, before the
+        // static plugin's handler runs.
+        app.addHook('onRequest', async (req, reply) => {
+            const p = req.url.split('?')[0];
+            if (p !== '/webmail' && !p.startsWith('/webmail/')) return;
+            if (adminSettings.getWebmailEnabled()) return;
+            if (String(req.headers.accept || '').includes('text/html')) {
+                return reply.code(404).type('text/html').send(
+                    '<!doctype html><meta charset="utf-8"><title>Webmail disabled</title>' +
+                    '<p>Webmail is disabled by the administrator.</p>'
+                );
+            }
+            return reply.code(404).type('application/problem+json').send({
+                type: 'about:blank',
+                title: 'Not Found',
+                status: 404,
+                detail: 'Webmail is disabled by the administrator'
             });
-            // Bare /webmail → /webmail/
-            app.get('/webmail', { config: { public: true }, schema: { hide: true } }, async (_req, reply) => {
-                reply.code(308).header('location', '/webmail/').send();
-            });
-            // Bare /webmail/mobile → /webmail/mobile/
-            app.get('/webmail/mobile', { config: { public: true }, schema: { hide: true } }, async (_req, reply) => {
-                reply.code(308).header('location', '/webmail/mobile/').send();
-            });
-            // SPA fallback for deep-link routes inside /webmail/*. Custom 404
-            // handler returns index.html for HTML clients and JSON problem
-            // for everything else.
-            const indexHtml = fs.readFileSync(path.join(distAbsolute, 'index.html'));
-            const mobileHtmlPath = path.join(distAbsolute, 'mobile', 'index.html');
-            const mobileHtml = fs.existsSync(mobileHtmlPath) ? fs.readFileSync(mobileHtmlPath) : indexHtml;
-            app.setNotFoundHandler(async (req, reply) => {
-                if (req.method === 'GET' && req.url.startsWith('/webmail/mobile/')) {
-                    return reply.type('text/html').send(mobileHtml);
-                }
-                if (req.method === 'GET' && req.url.startsWith('/webmail/')) {
-                    return reply.type('text/html').send(indexHtml);
-                }
-                reply.code(404).type('application/problem+json').send({
-                    type: 'about:blank',
-                    title: 'Not Found',
-                    status: 404,
-                    detail: `Route ${req.method} ${req.url} not found`
-                });
-            });
-        } else {
-            app.log.warn({ distAbsolute }, 'webmail dist not found — SPA disabled (run `npm run build:webmail`)');
-        }
+        });
+
+        await app.register(fastifyStatic, {
+            root: distAbsolute,
+            prefix: '/webmail/',
+            index: ['index.html'],
+            decorateReply: false
+        });
+        // Bare /webmail → /webmail/
+        app.get('/webmail', { config: { public: true }, schema: { hide: true } }, async (_req, reply) => {
+            reply.code(308).header('location', '/webmail/').send();
+        });
+        // Bare /webmail/mobile → /webmail/mobile/
+        app.get('/webmail/mobile', { config: { public: true }, schema: { hide: true } }, async (_req, reply) => {
+            reply.code(308).header('location', '/webmail/mobile/').send();
+        });
+        indexHtml = fs.readFileSync(path.join(distAbsolute, 'index.html'));
+        const mobileHtmlPath = path.join(distAbsolute, 'mobile', 'index.html');
+        mobileHtml = fs.existsSync(mobileHtmlPath) ? fs.readFileSync(mobileHtmlPath) : indexHtml;
+    } else {
+        app.log.warn({ distAbsolute }, 'webmail dist not found — SPA disabled (run `npm run build` in webmail/)');
     }
+
+    // Registered unconditionally: without it a build with no webmail dist
+    // falls back to Fastify's stock 404 body instead of the API's problem+json.
+    app.setNotFoundHandler(async (req, reply) => {
+        const problem404 = (detail) => reply.code(404).type('application/problem+json').send({
+            type: 'about:blank',
+            title: 'Not Found',
+            status: 404,
+            detail
+        });
+
+        if (webmailPresent && req.method === 'GET' && req.url.startsWith('/webmail/')) {
+            // A request that names a file must 404 as a file. Falling back to
+            // index.html here is what let the service worker cache HTML under
+            // an .js URL and then fail to parse it on every later load, which
+            // bricks the installed PWA until its storage is cleared by hand.
+            if (/\.[a-z0-9]+$/i.test(req.url.split('?')[0])) {
+                return problem404(`Asset ${req.url.split('?')[0]} not found`);
+            }
+            if (req.url.startsWith('/webmail/mobile/')) {
+                return reply.type('text/html').send(mobileHtml);
+            }
+            return reply.type('text/html').send(indexHtml);
+        }
+        return problem404(`Route ${req.method} ${req.url} not found`);
+    });
 
     // Expose the OpenAPI document at the canonical /openapi.json path.
     app.get('/openapi.json', { config: { public: true }, schema: { hide: true } }, async (req) => {
@@ -572,6 +620,7 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
     await app.register(calendarSubRoutes, { store: calendarSubStore });
     await app.register(driveRoutes, { s3: config.s3, logger: app.log });
     await app.register(appRoutes, { distDir: process.env.ANDROID_DIST_DIR || '/app/dist/android' });
+    await app.register(adminRoutes, { adminSettings });
     await app.register(iconProxyRoutes);
     await app.register(trackingRoutes, { store: trackingStore, smtp: config.smtp });
     await app.register(imageProxyRoutes, { cache: imageProxyCache, maxBytesPerDay: config.imageProxy.maxBytesPerDay });
@@ -590,6 +639,7 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         if (trackingStore) trackingStore.close();
         if (imageProxyCache) imageProxyCache.close();
         if (calendarSubStore) calendarSubStore.close();
+        if (adminSettings) adminSettings.close();
         if (mailcowDb) await mailcowDb.close();
     });
 
