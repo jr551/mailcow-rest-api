@@ -1799,7 +1799,9 @@
     {/if}
 
     <div class="body">
+        {#if !settings.hideSidebar}
         <AppSwitcher />
+        {/if}
         {#if ui.app === 'calendar'}
             <CalendarApp />
         {:else if ui.app === 'ai'}
@@ -1807,7 +1809,6 @@
         {:else if ui.app === 'drive'}
             <DriveApp />
         {:else}
-        {#if !settings.hideSidebar}
         <div class="sidebar-wrap" style={`width: ${sidebarWidth}px`}>
             <Sidebar
                 onSelect={selectMailbox}
@@ -1844,7 +1845,6 @@
             ondblclick={() => (sidebarWidth = SIDEBAR_DEFAULT)}
             onkeydown={(e) => splitterKeys(e, () => sidebarWidth, (n) => (sidebarWidth = n), SIDEBAR_MIN, SIDEBAR_MAX, SIDEBAR_DEFAULT)}
         ></div>
-        {/if}
         <main
             class="content"
             class:no-selection={!ui.detail}

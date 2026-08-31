@@ -129,9 +129,10 @@ export interface Settings {
      *  there is on screen during a share or to anyone glancing over. The
      *  ticker still shows timing, which is the useful part. */
     calendarTickerTitles: boolean;
-    /** Collapse the desktop folder sidebar (the Mail one — the app rail
-     *  stays). Toggled from the topbar panel button, remembered here so
-     *  a hidden sidebar survives reloads. */
+    /** Collapse the left sidebar — the narrow app rail (Mail / Calendar /
+     *  AI / Drive), not the folder box list next to it. Toggled from the
+     *  topbar panel button, remembered here so a hidden rail survives
+     *  reloads. */
     hideSidebar: boolean;
     /** Client-side rules. Run when the inbox list loads — match on
      *  envelope fields and either move the message somewhere, archive
