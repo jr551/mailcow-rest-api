@@ -518,6 +518,33 @@ export async function getAliases(): Promise<{ user: string; aliases: AliasEntry[
     return request('GET', '/v1/me/aliases');
 }
 
+export interface AppPassword {
+    id: string;
+    label: string;
+    ipRanges: string[];
+    createdAt: number | null;
+    expiresAt: number | null;
+    lastUsedAt: number | null;
+    lastUsedIp: string | null;
+}
+
+export async function listAppPasswords(): Promise<{ appPasswords: AppPassword[]; limit: number; yourIp: string | null }> {
+    return request('GET', '/v1/me/app-passwords');
+}
+
+/** The `token` is returned only here — it cannot be fetched again. */
+export async function createAppPassword(opts: {
+    label: string;
+    ipRanges: string[];
+    expiresInDays?: number;
+}): Promise<AppPassword & { token: string }> {
+    return request('POST', '/v1/me/app-passwords', { body: opts });
+}
+
+export async function revokeAppPassword(id: string): Promise<void> {
+    return request('DELETE', `/v1/me/app-passwords/${encodeURIComponent(id)}`);
+}
+
 export async function getTempAliases(): Promise<{ user: string; aliases: TempAliasEntry[] }> {
     return request('GET', '/v1/me/temp-aliases');
 }

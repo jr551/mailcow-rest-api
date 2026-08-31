@@ -154,7 +154,11 @@ test('existing records are migrated with an id and signing key on load', () => {
 test('getById refuses an expired record', () => {
     const { store, dir } = tmpStore();
     try {
-        const { token } = store.issue({ user: 'u@x.com', pass: 'p', calendar: 'personal', ttlMs: 1 });
+        // Issue with a real TTL and expire the record by hand. A 1ms ttlMs
+        // raced the very next line — on a loaded runner the record was already
+        // expired, get() returned null, and the test died on rec.id instead of
+        // testing getById at all.
+        const { token } = store.issue({ user: 'u@x.com', pass: 'p', calendar: 'personal', ttlMs: 60_000 });
         const rec = store.get(token);
         const id = rec.id;
         rec.expiresAt = Date.now() - 1000;

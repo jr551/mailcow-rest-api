@@ -238,6 +238,15 @@ module.exports = Object.freeze({
         distPath: process.env.WEBMAIL_DIST || './webmail/dist'
     },
 
+    appPasswords: {
+        // Per-client credentials that stand in for the mailbox password and
+        // are pinned to the IP ranges their owner names. Needs credential
+        // encryption, since the mailbox password is kept to reach IMAP.
+        enabled: bool(process.env.APP_PASSWORDS_ENABLED, true),
+        dbPath: dataFile(process.env.APP_PASSWORDS_DB_PATH, 'app-passwords.db'),
+        maxPerUser: num(process.env.APP_PASSWORDS_MAX_PER_USER, 25)
+    },
+
     admin: {
         // Bearer token for /v1/admin/*. Unset leaves the whole admin surface
         // unrouted (404), so a deployment that never configures one is not

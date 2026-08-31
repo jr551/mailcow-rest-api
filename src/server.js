@@ -25,6 +25,7 @@ const { createAiCache } = require('./ai-cache');
 const { createSecretBox } = require('./secret-box');
 const { createCalendarSubStore } = require('./calendar-sub-store');
 const { createAdminSettings } = require('./admin-settings');
+const { createAppPasswordStore } = require('./app-password-store');
 const mailboxRoutes = require('./routes/mailboxes');
 const messageRoutes = require('./routes/messages');
 const sessionRoutes = require('./routes/session');
@@ -43,6 +44,7 @@ const calendarSubRoutes = require('./routes/calendar-subscriptions');
 const driveRoutes = require('./routes/drive');
 const appRoutes = require('./routes/app');
 const adminRoutes = require('./routes/admin');
+const appPasswordRoutes = require('./routes/app-passwords');
 const iconProxyRoutes = require('./routes/icon-proxy');
 const trackingRoutes = require('./routes/tracking');
 const imageProxyRoutes = require('./routes/image-proxy');
@@ -386,7 +388,22 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         envWebmailEnabled: config.webmail.enabled
     });
 
+    // An app password stands in for a mailbox password, so the real one has to
+    // be retrievable to talk to IMAP. Without the secret box that would mean
+    // storing it in the clear, so the feature stays off instead.
+    const appPasswordStore = config.appPasswords.enabled && secretBox.enabled
+        ? createAppPasswordStore({
+            filePath: config.appPasswords.dbPath,
+            secretBox,
+            maxPerUser: config.appPasswords.maxPerUser
+        })
+        : null;
+    if (config.appPasswords.enabled && !secretBox.enabled) {
+        app.log.warn('app passwords disabled — no credential encryption key available');
+    }
+
     app.decorate('adminSettings', adminSettings);
+    if (appPasswordStore) app.decorate('appPasswordStore', appPasswordStore);
     app.decorate('cache', cache);
     app.decorate('pool', pool);
     if (ocrCache) app.decorate('ocrCache', ocrCache);
@@ -552,7 +569,7 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
     });
 
     // Public routes declared BEFORE the auth hook runs.
-    app.addHook('onRequest', createAuthHook({ cache, imap: imapCfg }));
+    app.addHook('onRequest', createAuthHook({ cache, imap: imapCfg, appPasswords: appPasswordStore }));
 
     app.get('/health', {
         config: { public: true },
@@ -577,7 +594,7 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         }
     }));
 
-    await app.register(sessionRoutes, { cache, imap: imapCfg, sessionTtlMs: config.session.ttlMs });
+    await app.register(sessionRoutes, { cache, imap: imapCfg, sessionTtlMs: config.session.ttlMs, appPasswords: appPasswordStore });
     await app.register(mailboxRoutes, { pool, imapCache });
     await app.register(messageRoutes, { pool, ocrCache, imapCache });
     await app.register(aiRoutes, { aiCache });
@@ -620,7 +637,8 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
     await app.register(calendarSubRoutes, { store: calendarSubStore });
     await app.register(driveRoutes, { s3: config.s3, logger: app.log });
     await app.register(appRoutes, { distDir: process.env.ANDROID_DIST_DIR || '/app/dist/android' });
-    await app.register(adminRoutes, { adminSettings });
+    await app.register(adminRoutes, { adminSettings, appPasswordStore });
+    await app.register(appPasswordRoutes, { store: appPasswordStore });
     await app.register(iconProxyRoutes);
     await app.register(trackingRoutes, { store: trackingStore, smtp: config.smtp });
     await app.register(imageProxyRoutes, { cache: imageProxyCache, maxBytesPerDay: config.imageProxy.maxBytesPerDay });
@@ -640,6 +658,7 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         if (imageProxyCache) imageProxyCache.close();
         if (calendarSubStore) calendarSubStore.close();
         if (adminSettings) adminSettings.close();
+        if (appPasswordStore) appPasswordStore.close();
         if (mailcowDb) await mailcowDb.close();
     });
 

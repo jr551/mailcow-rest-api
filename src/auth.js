@@ -3,6 +3,7 @@
 const { ImapFlow } = require('imapflow');
 const { hashCreds } = require('./cache');
 const { unauthorized } = require('./errors');
+const { looksLikeAppPassword } = require('./app-password-store');
 
 // Parse `Authorization: Basic <base64>` into { user, pass } or null.
 function parseBasicAuth(headerValue) {
@@ -92,8 +93,35 @@ function isWebmailPath(url) {
 }
 
 // Fastify onRequest hook factory. Populates `req.creds = { user, pass, hash }`.
-// Supports both Bearer (session token) and Basic auth — auto-detected from header.
-function createAuthHook({ cache, imap, verifier = verifyWithDovecot, now = () => Date.now() }) {
+// Supports Bearer (session token or app password), Basic auth, and Basic auth
+// whose password is an app password — auto-detected from the header.
+function createAuthHook({ cache, imap, appPasswords = null, verifier = verifyWithDovecot, now = () => Date.now() }) {
+    // An app password stands in for the mailbox password. The store hands back
+    // the real one (decrypted) so IMAP still gets a credential it recognises;
+    // req.appPassword marks the request as delegated, which the app-password
+    // routes use to refuse self-management.
+    function acceptAppPassword(req, reply, token, expectedUser) {
+        const result = appPasswords.verify({ token, ip: req.ip }, now());
+        if (!result.ok) {
+            // The reason separates "wrong token" from "right token, wrong
+            // network"; the client is told neither.
+            req.log.warn({ reason: result.reason, ip: req.ip }, 'app password rejected');
+            reply.header('WWW-Authenticate', 'Bearer realm="imap-rest"');
+            throw unauthorized('Invalid credentials');
+        }
+        if (expectedUser && expectedUser.toLowerCase() !== result.user.toLowerCase()) {
+            req.log.warn({ ip: req.ip }, 'app password presented with a mismatched username');
+            reply.header('WWW-Authenticate', 'Bearer realm="imap-rest"');
+            throw unauthorized('Invalid credentials');
+        }
+        req.creds = {
+            user: result.user,
+            pass: result.password,
+            hash: hashCreds(result.user, result.password)
+        };
+        req.appPassword = { id: result.id, label: result.label };
+    }
+
     return async function authHook(req, reply) {
         // Preflight requests never carry credentials — the browser strips
         // Authorization from them — so authenticating one can only ever 401
@@ -106,6 +134,11 @@ function createAuthHook({ cache, imap, verifier = verifyWithDovecot, now = () =>
         // Try Bearer session token first
         const bearerToken = parseBearerAuth(req.headers.authorization);
         if (bearerToken) {
+            // An app password carries its own id, so it authenticates as a
+            // bearer token with no username alongside it.
+            if (appPasswords && looksLikeAppPassword(bearerToken)) {
+                return acceptAppPassword(req, reply, bearerToken, null);
+            }
             const session = cache.getSession(bearerToken, now());
             if (!session) {
                 reply.header('WWW-Authenticate', 'Bearer realm="imap-rest"');
@@ -121,6 +154,13 @@ function createAuthHook({ cache, imap, verifier = verifyWithDovecot, now = () =>
         if (!creds) {
             reply.header('WWW-Authenticate', 'Bearer realm="imap-rest"');
             throw unauthorized('Missing credentials');
+        }
+
+        // MCP clients and curl send Basic auth, so an app password has to work
+        // in the password field too. Checked before the IMAP path so a token
+        // is never sent to Dovecot as if it were a password.
+        if (appPasswords && looksLikeAppPassword(creds.pass)) {
+            return acceptAppPassword(req, reply, creds.pass, creds.user);
         }
 
         const hash = hashCreds(creds.user, creds.pass);
