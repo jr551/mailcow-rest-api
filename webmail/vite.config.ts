@@ -40,8 +40,8 @@ function swBuildVersion(): Plugin {
     };
 }
 
-// Built assets are served as static files under /webmail/ (nginx in the Docker image).
-// `base` makes Vite emit asset URLs prefixed with /webmail/.
+// Built assets are served as static files under /webmail/ by the API's Fastify
+// server (@fastify/static). `base` makes Vite emit asset URLs prefixed with /webmail/.
 export default defineConfig({
     plugins: [svelte(), swBuildVersion()],
     base: '/webmail/',

@@ -2,9 +2,9 @@
 <html lang="en" data-theme="auto">
     <head>
         <meta charset="UTF-8" />
-        <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-        <link rel="manifest" href="/manifest.webmanifest" />
-        <link rel="apple-touch-icon" href="/icon.svg" />
+        <link rel="icon" type="image/svg+xml" href="/webmail/favicon.svg" />
+        <link rel="manifest" href="/webmail/manifest.webmanifest" />
+        <link rel="apple-touch-icon" href="/webmail/icon.svg" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -31,7 +31,10 @@
                 } catch (e) {}
             })();
         </script>
-        <script>window.__IMAP_API_BASE__=location.hostname==="webmail.delivering.email"?"https://userapi.delivering.email":""</script>
+        <!-- Same-origin by default: the SPA is served by the API itself under
+             /webmail/, so /v1/* resolves against the current host. A CDN-hosted
+             build can set this to an absolute API origin before this script. -->
+        <script>window.__IMAP_API_BASE__ = window.__IMAP_API_BASE__ || ""</script>
     </head>
     <body>
         <div id="app"></div>
