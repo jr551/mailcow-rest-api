@@ -1,138 +1,19 @@
-# mailcow-rest-api-webmail
+# Webmail (embedded SPA)
 
-[![test](https://github.com/jr551/mailcow-rest-api-webmail/actions/workflows/test.yml/badge.svg)](https://github.com/jr551/mailcow-rest-api-webmail/actions/workflows/test.yml)
-[![publish-image](https://github.com/jr551/mailcow-rest-api-webmail/actions/workflows/publish-image.yml/badge.svg)](https://github.com/jr551/mailcow-rest-api-webmail/actions/workflows/publish-image.yml)
-![alpha](https://img.shields.io/badge/status-alpha-orange)
+The Svelte 5 webmail frontend for [`mailcow-rest-api`](https://github.com/jr551/mailcow-rest-api). It provides a desktop mail UI plus a mobile/PWA experience styled around an iOS Mail-like flow.
 
-**Alpha:** this frontend is public and usable, but it is still an alpha webmail client. Expect fast changes, rough edges, and missing polish in some workflows.
+**Alpha:** public and usable, but still an alpha webmail client. Expect fast changes and rough edges in some workflows.
 
-`mailcow-rest-api-webmail` is the Svelte 5 webmail frontend for [`mailcow-rest-api`](https://github.com/jr551/mailcow-rest-api). It ships a desktop mail UI plus a mobile/PWA experience styled around an iOS Mail-like flow.
+This directory is part of the `mailcow-rest-api` repository, not a separate deployment. The API image builds it and serves the result at `/webmail/`, so there is nothing to deploy on its own and no version skew between the API and the frontend. See the [root README](../README.md) for running the container, and for hosting a build on a CDN instead.
 
 ![Desktop inbox](docs/screenshots/desktop-inbox-dark.png)
-
-## Quick Start
-
-New to mailcow, Docker, or self-hosting in general? Run the setup script — it
-copies the config files for you, finds your mailcow Docker network
-automatically, starts the containers, and checks that everything actually
-works before telling you you're done:
-
-```sh
-git clone https://github.com/jr551/mailcow-rest-api-webmail.git
-cd mailcow-rest-api-webmail
-./scripts/setup.sh
-```
-
-It only touches `docker-compose.yml` and `.env` if they don't already exist,
-so it's safe to re-run any time (e.g. after `git pull`).
-
-The frontend is static, but the browser must be able to reach `mailcow-rest-api` on the same origin:
-
-```text
-/webmail/*     -> this static webmail
-/v1/*          -> mailcow-rest-api
-/health        -> mailcow-rest-api
-/openapi.json  -> mailcow-rest-api
-```
-
-`./scripts/setup.sh` only gets you a local/loopback deployment. To serve real
-users you still need a TLS reverse proxy in front — see **Setup Modes**
-below. If you'd rather do the steps by hand:
-
-```sh
-cp docker-compose.example.yml docker-compose.yml
-cp .env.example .env
-docker compose up -d
-npm run check:config -- --url http://localhost:8080
-```
-
-Run only the static webmail image for UI inspection:
-
-```sh
-docker run --rm -p 8080:80 ghcr.io/jr551/mailcow-rest-api-webmail:master
-```
-
-Use the versioned alpha image when you want a fixed tag:
-
-```sh
-docker pull ghcr.io/jr551/mailcow-rest-api-webmail:0.1.0-alpha.3
-docker pull ghcr.io/jr551/mailcow-rest-api-webmail:master
-```
-
-## Setup Modes
-
-### 1. mailcow Same-Host Nginx
-
-Use the API repo's mailcow setup script to expose the API at `/mailcow-rest-api/`, then add one of the webmail proxy templates from this repo and route:
-
-```text
-https://webmail.example.com/webmail/       -> webmail container/static dist
-https://webmail.example.com/v1/*           -> https://mail.example.com/mailcow-rest-api/v1/*
-https://webmail.example.com/health         -> https://mail.example.com/mailcow-rest-api/health
-https://webmail.example.com/openapi.json   -> https://mail.example.com/mailcow-rest-api/openapi.json
-```
-
-Templates:
-
-- `deploy/nginx.conf`
-- `deploy/Caddyfile`
-- `deploy/docker-compose.yml`
-
-For the nginx/Caddy static templates, place the built `dist/` contents at `/var/www/mailcow-rest-api-webmail/webmail/`. The Docker image already has this layout.
-
-### 2. Standalone Docker
-
-Use `docker-compose.example.yml` as a starting point when the API and webmail run beside an existing mailcow Docker network. The webmail nginx image proxies `/v1/*`, `/health`, and `/openapi.json` to the `mailcow-rest-api` service name.
-
-```sh
-cp docker-compose.example.yml docker-compose.yml
-cp .env.example .env
-docker compose up -d
-npm run check:config -- --url http://localhost:8080
-```
-
-The compose file expects the public `mailcowdockerized_mailcow-network` Docker network. Override with `MAILCOW_NETWORK=...` if your mailcow install uses a different name.
-
-### 3. Vercel Or Static Hosting
-
-Build and publish `dist/`:
-
-```sh
-npm install
-npm run build
-```
-
-Use `deploy/vercel.json` as the Vercel rewrite template. Replace `https://mail.example.com/mailcow-rest-api` with your API URL before deploying. The template includes `/webmail/assets/*` rewrites because the Vite build is emitted with `/webmail/` as its asset base.
-
-Static/CDN hosting is fine as long as the final browser origin still serves:
-
-- `/webmail/`
-- `/webmail/mobile/`
-- `/v1/*`
-- `/health`
-- `/openapi.json`
-
-## First-Run Diagnostics
-
-The app now runs a browser-side setup check before login. If `/health` or `/openapi.json` cannot be reached, users see a setup screen instead of a vague login/network failure. It shows:
-
-- the detected frontend origin
-- the API routes being tested
-- the HTTP result for each route
-- the likely proxy/hosting fix
-
-The same checks are available from the command line:
-
-```sh
-npm run check:config -- --url https://webmail.example.com
-```
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    Browser[Browser / PWA] --> Static[Static Svelte webmail]
-    Browser --> API[mailcow-rest-api]
+    Browser[Browser / PWA] -->|/webmail/| API[mailcow-rest-api]
+    Browser -->|/v1/*| API
     API --> IMAP[mailcow Dovecot IMAP]
     API --> SMTP[mailcow Postfix SMTP]
     API --> DB[mailcow MariaDB]
@@ -140,7 +21,7 @@ flowchart LR
     API --> LLM[LLM provider]
 ```
 
-The webmail package is a static client-side app. The Docker image is only nginx serving built files; there is no webmail application server doing mailbox or AI processing inside this repo.
+This is a static client-side app — all mailbox and AI processing happens in the API. The API serves the built files itself, so the SPA and the API it calls are the same origin and no CORS configuration is involved.
 
 ## AI And Key Privacy
 
@@ -198,15 +79,15 @@ npm run check
 npm run build
 ```
 
-`VITE_DEV_API_TARGET` is only for the Vite dev proxy. Production routing is handled by your web server, CDN, or platform rewrites.
+Run these from this `webmail/` directory. `VITE_DEV_API_TARGET` points the Vite dev proxy at a local API; in production the API serves the built files directly and no proxy is involved.
 
-## Pair With The API
+`npm run build` writes to `webmail/dist/`. The image's build stage runs exactly this, so a local `dist/` is only for testing — it is excluded from the Docker context and never ends up in a published image.
 
-Use this frontend with the API image:
+To test a build the way production serves it, point the API at it:
 
 ```sh
-docker pull ghcr.io/jr551/mailcow-rest-api:master
-docker pull ghcr.io/jr551/mailcow-rest-api-webmail:master
+cd .. && WEBMAIL_DIST=./webmail/dist npm start
+# then open http://localhost:3001/webmail/
 ```
 
 The API Swagger UI lives at `/` on the API service, or `/mailcow-rest-api/` if you use the public API setup script from the API repo.
