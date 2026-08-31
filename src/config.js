@@ -238,6 +238,16 @@ module.exports = Object.freeze({
         distPath: process.env.WEBMAIL_DIST || './webmail/dist'
     },
 
+    admin: {
+        // Bearer token for /v1/admin/*. Unset leaves the whole admin surface
+        // unrouted (404), so a deployment that never configures one is not
+        // running an authenticated endpoint it doesn't know about.
+        token: process.env.ADMIN_TOKEN || '',
+        // Optional second factor on top of the token, same syntax as IP_ALLOWLIST.
+        ipAllowlist: process.env.ADMIN_IP_ALLOWLIST || '',
+        settingsPath: dataFile(process.env.ADMIN_SETTINGS_DB_PATH, 'admin-settings.db')
+    },
+
     smtp: {
         host: process.env.SMTP_HOST || '',
         port: num(process.env.SMTP_PORT, 587),

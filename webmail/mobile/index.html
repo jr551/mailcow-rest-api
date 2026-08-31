@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+    <head>
+        <meta charset="UTF-8" />
+        <link rel="icon" type="image/svg+xml" href="/webmail/favicon.svg" />
+        <link rel="manifest" href="/webmail/manifest-mobile.webmanifest" />
+        <link rel="apple-touch-icon" href="/webmail/icon.svg" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+        <meta name="apple-mobile-web-app-title" content="Webmail" />
+        <meta name="application-name" content="Webmail" />
+        <meta name="description" content="Fast, polished webmail for mailcow — mobile optimised." />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+        <meta name="color-scheme" content="light dark" />
+        <meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)" />
+        <meta name="theme-color" content="#f4f5f7" media="(prefers-color-scheme: light)" />
+        <title>Webmail Mobile</title>
+        <script>
+            (function () {
+                try {
+                    const saved = localStorage.getItem('webmail.theme');
+                    const t = saved || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+                    document.documentElement.setAttribute('data-theme', t);
+                } catch (e) {}
+            })();
+        </script>
+        <!-- Same-origin by default; see the desktop shell for the CDN override. -->
+        <script>window.__IMAP_API_BASE__ = window.__IMAP_API_BASE__ || ""</script>
+    </head>
+    <body>
+        <div id="app"></div>
+        <script type="module" src="/src/mobile/main.ts"></script>
+    </body>
+</html>

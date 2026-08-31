@@ -1,0 +1,421 @@
+/* Mobile-specific base styles — iOS safe areas, momentum scrolling, tap highlight. */
+
+html,
+body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: var(--bg-base);
+    color: var(--text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', 'Segoe UI',
+        Roboto, 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    font-size: 17px;
+    line-height: 1.35;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior-y: none;
+    touch-action: manipulation;
+}
+
+#app {
+    height: 100%;
+    min-height: 100vh;
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+}
+
+/* Mobile utility classes */
+.truncate {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+/* Native-feeling scroll */
+.scroll-y {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
+}
+
+/* Prevent text selection on UI chrome */
+.no-select {
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+/* iOS-style action sheets / modals slide up */
+@keyframes slide-up {
+    from { transform: translateY(100%); }
+    to { transform: translateY(0); }
+}
+@keyframes slide-in-right {
+    from { transform: translateX(100%); }
+    to { transform: translateX(0); }
+}
+@keyframes slide-out-right {
+    from { transform: translateX(0); }
+    to { transform: translateX(100%); }
+}
+@keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.slide-up { animation: slide-up 260ms cubic-bezier(0.2, 0.7, 0.2, 1) forwards; }
+.slide-in-right { animation: slide-in-right 260ms cubic-bezier(0.2, 0.7, 0.2, 1) forwards; }
+.slide-out-right { animation: slide-out-right 260ms cubic-bezier(0.2, 0.7, 0.2, 1) forwards; }
+.fade-in { animation: fade-in 200ms ease forwards; }
+
+/* Bottom sheet backdrop */
+.sheet-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(2px);
+    z-index: 90;
+    animation: fade-in 180ms ease;
+}
+
+/* Mobile buttons — iOS style */
+.mbtn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 8px 14px;
+    border-radius: 10px;
+    border: 1px solid transparent;
+    font-weight: 600;
+    font-size: 15px;
+    line-height: 1.2;
+    transition: background-color 120ms, transform 80ms, opacity 120ms;
+    white-space: nowrap;
+    user-select: none;
+    cursor: pointer;
+    -webkit-user-select: none;
+}
+.mbtn:active { transform: scale(0.96); opacity: 0.85; }
+.mbtn-primary {
+    background: var(--accent);
+    color: var(--text-on-accent);
+}
+.mbtn-secondary {
+    background: var(--bg-surface);
+    border-color: var(--border-soft);
+    color: var(--text-primary);
+}
+.mbtn-ghost { color: var(--accent-text); background: transparent; }
+.mbtn-danger { color: var(--danger); background: transparent; }
+
+/* Segmented control (iOS style) */
+.segments {
+    display: flex;
+    background: var(--bg-hover);
+    border-radius: 8px;
+    padding: 2px;
+    gap: 2px;
+}
+.segment {
+    flex: 1;
+    text-align: center;
+    padding: 5px 6px;
+    font-size: 13px;
+    font-weight: 500;
+    border-radius: 6px;
+    color: var(--text-secondary);
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    transition: background-color 120ms, color 120ms;
+}
+.segment.active {
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.08);
+    font-weight: 600;
+}
+
+/* Bottom nav — iOS tab bar */
+.bottom-nav {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    gap: 0;
+    padding: 4px 0 calc(4px + env(safe-area-inset-bottom));
+    background: var(--bg-surface);
+    border-top: 0.5px solid var(--border-subtle);
+    backdrop-filter: saturate(180%) blur(20px);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+}
+.nav-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1px;
+    padding: 4px 10px;
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--text-tertiary);
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    transition: color 120ms;
+    -webkit-user-select: none;
+}
+.nav-item.active { color: var(--accent); }
+
+/* Header — iOS navigation bar */
+.mheader {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 16px;
+    background: var(--bg-surface);
+    border-bottom: 0.5px solid var(--border-subtle);
+    min-height: 48px;
+}
+.mheader h1 {
+    margin: 0;
+    font-size: 17px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    text-align: center;
+    flex: 1;
+}
+
+/* Search bar — iOS style */
+.msearch {
+    flex: 0 0 auto;
+    padding: 8px 16px;
+    background: var(--bg-surface);
+    border-bottom: 0.5px solid var(--border-subtle);
+}
+.msearch input {
+    width: 100%;
+    padding: 7px 12px;
+    border-radius: 10px;
+    border: none;
+    background: var(--bg-hover);
+    font-size: 17px;
+    line-height: 1.3;
+    outline: none;
+    color: var(--text-primary);
+}
+.msearch input::placeholder { color: var(--text-tertiary); }
+.msearch input:focus {
+    background: var(--bg-hover);
+}
+/* "All folders" pill that lives next to the input — appears the moment
+   the query has anything in it, lets the user opt into a global sweep.
+   Tap-friendly target size; persists active state when scope = 'all'. */
+.msearch {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.msearch .search-scope-btn {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    background: var(--bg-base);
+    border: 1px solid var(--border-subtle);
+    border-radius: 999px;
+    cursor: pointer;
+}
+.msearch .search-scope-btn.active {
+    background: var(--accent);
+    color: var(--text-on-accent);
+    border-color: var(--accent);
+}
+.global-scan {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px 16px 4px;
+    background: var(--bg-surface);
+    border-bottom: 0.5px solid var(--border-subtle);
+}
+.global-scan .scan-bar {
+    height: 3px;
+    border-radius: 2px;
+    background: color-mix(in srgb, var(--accent) 15%, transparent);
+    overflow: hidden;
+    position: relative;
+}
+.global-scan .scan-bar::after {
+    content: '';
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: var(--pct, 0%);
+    background: var(--accent);
+    transition: width 200ms ease;
+}
+/* Folder badge on aggregated rows so the user can see where each
+   hit lives — small purple/accent pill before the subject. */
+.msg-subject .folder-badge {
+    display: inline-block;
+    margin-right: 6px;
+    padding: 1px 6px;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    border-radius: 999px;
+    vertical-align: middle;
+    max-width: 90px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Empty state */
+.mempty {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 40px 24px;
+    color: var(--text-tertiary);
+    text-align: center;
+}
+
+/* Floating compose button */
+.fab {
+    position: fixed;
+    right: 16px;
+    bottom: calc(16px + env(safe-area-inset-bottom) + 52px);
+    width: 52px;
+    height: 52px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: var(--text-on-accent);
+    border: none;
+    box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 40%, transparent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 50;
+    cursor: pointer;
+    transition: transform 120ms, background-color 120ms;
+}
+.fab:active { transform: scale(0.92); }
+
+/* Desktop-compatible button classes used by some mobile views */
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 8px 14px;
+    border-radius: 10px;
+    border: 1px solid transparent;
+    font-weight: 500;
+    font-size: 15px;
+    transition: background-color 120ms, border-color 120ms, color 120ms, transform 120ms;
+    white-space: nowrap;
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: pointer;
+    background: var(--bg-surface);
+    color: var(--text-primary);
+}
+.btn:hover { transform: translateY(-1px); }
+.btn:active { transform: translateY(0); }
+.btn:disabled { opacity: 0.55; cursor: not-allowed; transform: none !important; }
+.btn-primary { background: var(--accent); color: var(--text-on-accent); }
+.btn-primary:hover { background: var(--accent-hover); }
+.btn-secondary { background: var(--bg-surface); border-color: var(--border-soft); color: var(--text-primary); }
+.btn-secondary:hover { background: var(--bg-hover); }
+.btn-ghost { color: var(--text-secondary); background: transparent; }
+.btn-ghost:hover { background: var(--bg-hover); color: var(--text-primary); }
+.btn-danger { color: var(--danger); background: transparent; }
+.btn-danger:hover { background: var(--danger-soft); }
+.btn.small { font-size: 13px; padding: 5px 10px; }
+
+/* Toast */
+.mtoast {
+    position: fixed;
+    top: calc(12px + env(safe-area-inset-top));
+    left: 16px;
+    right: 16px;
+    z-index: 100;
+    padding: 12px 16px;
+    border-radius: 12px;
+    font-size: 15px;
+    font-weight: 500;
+    text-align: center;
+    animation: slide-down 240ms cubic-bezier(0.2, 0.7, 0.2, 1);
+    pointer-events: none;
+}
+@keyframes slide-down {
+    from { transform: translateY(-20px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+}
+.mtoast.success { background: var(--success-soft); color: var(--success); }
+.mtoast.error { background: var(--danger-soft); color: var(--danger); }
+.mtoast.info { background: var(--bg-elevated); color: var(--text-primary); border: 1px solid var(--border-soft); }
+
+/* iOS-style grouped list (Settings / Folders) */
+.ios-list {
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-surface);
+    border-radius: 12px;
+    overflow: hidden;
+    margin: 0 16px;
+}
+.ios-list .ios-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 11px 16px;
+    background: transparent;
+    border: none;
+    width: 100%;
+    text-align: left;
+    cursor: pointer;
+    font-size: 16px;
+    color: var(--text-primary);
+    transition: background-color 80ms;
+    min-height: 44px;
+}
+.ios-list .ios-row:not(:last-child) {
+    border-bottom: 0.5px solid var(--border-subtle);
+}
+.ios-list .ios-row:active { background: var(--bg-hover); }
+.ios-list .ios-row .row-label {
+    flex: 1;
+    font-weight: 400;
+}
+.ios-list .ios-row .row-value {
+    color: var(--text-tertiary);
+    font-size: 15px;
+}
+
+.ios-section-title {
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    color: var(--text-tertiary);
+    margin: 24px 16px 6px;
+    padding: 0;
+}

@@ -1,0 +1,55 @@
+{
+    "name": "mailcow-rest-api-webmail",
+    "version": "0.1.0-alpha.9",
+    "private": false,
+    "type": "module",
+    "scripts": {
+        "dev": "vite",
+        "build": "vite build",
+        "preview": "vite preview",
+        "check": "svelte-check --tsconfig ./tsconfig.json",
+        "test:e2e": "playwright test",
+        "check:config": "node scripts/check-config.mjs",
+        "setup": "bash scripts/setup.sh"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/jr551/mailcow-rest-api-webmail.git"
+    },
+    "bugs": {
+        "url": "https://github.com/jr551/mailcow-rest-api-webmail/issues"
+    },
+    "homepage": "https://github.com/jr551/mailcow-rest-api-webmail#readme",
+    "license": "MIT",
+    "dependencies": {
+        "@lucide/svelte": "^1.14.0",
+        "@melt-ui/svelte": "^0.86.6",
+        "@tiptap/core": "^3.22.5",
+        "@tiptap/extension-image": "^3.22.5",
+        "@tiptap/extension-link": "^3.22.5",
+        "@tiptap/extension-placeholder": "^3.22.5",
+        "@tiptap/extension-text-align": "^3.22.5",
+        "@tiptap/extension-underline": "^3.22.5",
+        "@tiptap/pm": "^3.22.5",
+        "@tiptap/starter-kit": "^3.22.5",
+        "aws4fetch": "^1.0.20",
+        "date-fns": "^4.1.0",
+        "eml-parse-js": "^1.2.0-beta.1",
+        "pdf-lib": "^1.17.1",
+        "pdfjs-dist": "^5.7.284",
+        "react": "^19.2.5",
+        "react-dom": "^19.2.5",
+        "svelte": "^5.0.0",
+        "tesseract.js": "^7.0.0",
+        "tldraw": "^4.5.10"
+    },
+    "devDependencies": {
+        "@playwright/test": "^1.48.0",
+        "@sveltejs/vite-plugin-svelte": "^5.0.0",
+        "@tsconfig/svelte": "^5.0.4",
+        "svelte-check": "^4.1.0",
+        "tslib": "^2.7.0",
+        "typescript": "^5.6.0",
+        "vite": "^6.0.0"
+    }
+}

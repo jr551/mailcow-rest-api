@@ -4,6 +4,17 @@
 
 `mailcow-rest-api` is a public mailcow add-on API that turns a mailcow mailbox into a REST, OpenAPI, and optional MCP surface for webmail clients, automation, and local tools.
 
+One container gives you all four surfaces:
+
+| Path | What it serves |
+|---|---|
+| `/v1/*` | REST API over IMAP, SMTP, Sieve, CalDAV, and mailcow's own database |
+| `/` | Swagger UI, with `/openapi.json` for the raw OpenAPI 3.1 document |
+| `/webmail/` | The bundled Svelte webmail (`/webmail/mobile/` for the mobile PWA) |
+| `/v1/admin/*` | Operator-only runtime settings, when `ADMIN_TOKEN` is set |
+
+There is no second container and no separate frontend deployment to keep in step — the SPA is built from `webmail/` into the image, so the API always serves the frontend it was built with.
+
 ## Backend Features
 
 - IMAP mailbox tree, message search/list/read, attachments, raw source, flags, move, delete, and append.
@@ -35,6 +46,17 @@ The Swagger UI is the source of truth for schemas and response examples. This ro
 | `GET` | `/v1/public/ical/:token.ics` | Public calendar feed |
 | `GET` | `/v1/public/event/:token/:uid/edit` | Public event edit form |
 | `POST` | `/v1/public/event/:token/:uid/edit` | Public event edit submit |
+| `GET` | `/webmail/` | Bundled webmail SPA (`/webmail/mobile/` for the mobile PWA) |
+
+### Admin
+
+Registered only when `ADMIN_TOKEN` is set. Authenticated with `Authorization: Bearer <ADMIN_TOKEN>`, not a mailbox login.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/v1/admin/settings` | Read runtime operator settings |
+| `PUT` | `/v1/admin/settings` | Toggle the webmail on/off without a restart |
+| `GET` | `/v1/admin/status` | Version, uptime, and active subsystems |
 
 ### Auth And Session
 
@@ -155,6 +177,51 @@ docker run --rm -p 3001:3001 \
   ghcr.io/jr551/mailcow-rest-api:master
 ```
 
+## Webmail
+
+The image serves the bundled Svelte webmail at `/webmail/` and its mobile PWA at `/webmail/mobile/`. Nothing extra is needed: point a browser at the API's own origin and sign in with a mailcow mailbox address and password.
+
+**Self-hosting and development.** Serving the SPA from the API is the out-of-the-box path. Because it is same-origin with `/v1/*`, there is no CORS to configure and no second TLS certificate or vhost to maintain. `window.__IMAP_API_BASE__` defaults to `""`, so API calls resolve against whatever host is serving the page.
+
+**Production and CDN hosting.** For high-traffic or edge deployments, build the SPA separately and host it on Cloudflare Pages, Netlify, or S3/CloudFront, pointing it at a remote API:
+
+```sh
+cd webmail && npm ci && npm run build   # output in webmail/dist
+```
+
+Set the API origin before the app's own scripts run, by editing the shell's inline script in `dist/index.html` (and `dist/mobile/index.html`):
+
+```html
+<script>window.__IMAP_API_BASE__ = "https://userapi.example.com"</script>
+```
+
+Then add that CDN origin to `API_CORS_ORIGINS` on the API so its cross-origin calls are answered.
+
+**Turning it off.** `WEBMAIL_ENABLED=false` removes the webmail at startup. With an `ADMIN_TOKEN` configured you can also toggle it at runtime — see below — which takes effect immediately and does not need the container recreated.
+
+## Admin API
+
+Setting `ADMIN_TOKEN` enables `/v1/admin/*`. Without it the routes are never registered. The token is operator credentials, not a mailbox login, and is sent as `Authorization: Bearer <ADMIN_TOKEN>`.
+
+```sh
+# current settings
+curl -H "Authorization: Bearer $ADMIN_TOKEN" https://api.example.com/v1/admin/settings
+
+# take the webmail offline without touching the container
+curl -X PUT -H "Authorization: Bearer $ADMIN_TOKEN" -H 'content-type: application/json' \
+  -d '{"webmail":{"enabled":false}}' https://api.example.com/v1/admin/settings
+```
+
+`GET /v1/admin/status` reports version, uptime, and which optional subsystems are live. Settings persist in `admin-settings.db` alongside the other state on the data volume.
+
+`WEBMAIL_ENABLED=false` outranks the stored setting: an operator who disabled the webmail at deploy time cannot have it switched back on through the API. The `source` field in the response says which rule is in force (`db`, `default`, or `env-forced-off`).
+
+Generate a real token, and restrict it by source IP when the API is publicly reachable:
+
+```sh
+openssl rand -hex 32
+```
+
 ## Mailcow Setup
 
 The public setup scripts are intentionally conservative. Before they start containers or write nginx config they run `install/mailcow-safety-check.sh`, which verifies Docker, Docker Compose, a mailcow checkout, the mailcow network, the mailcow nginx config directory, and running `nginx-mailcow`, `dovecot-mailcow`, and `postfix-mailcow` containers.
@@ -210,6 +277,11 @@ Copy `.env.example` to `.env`. Common values:
 | `TRUST_PROXY` | private hops | Which proxies may set `X-Forwarded-For`; never trusts arbitrary clients |
 | `CREDENTIAL_ENCRYPTION_KEY` | generated | Encrypts stored mailbox passwords at rest; set it so backups don't carry the key |
 | `DRIVE_CORS_ORIGINS` | `PUBLIC_BASE_URL` | Browser origins allowed to reach Drive buckets (required for Drive to work) |
+| `WEBMAIL_ENABLED` | `true` | Serve the bundled SPA at `/webmail/`; `false` is a hard off switch the admin API cannot undo |
+| `WEBMAIL_DIST` | `/app/webmail/dist` | Where the built SPA lives; the image sets this for you |
+| `ADMIN_TOKEN` | empty | Bearer token for `/v1/admin/*`; unset leaves the admin routes unregistered |
+| `ADMIN_IP_ALLOWLIST` | empty | Optional CIDR list restricting `/v1/admin/*` on top of the token |
+| `ADMIN_SETTINGS_DB_PATH` | `<data>/admin-settings.db` | Runtime operator settings store |
 
 ### Webhook conversion accounts
 
