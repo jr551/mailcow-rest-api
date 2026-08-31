@@ -1,0 +1,42 @@
+# Optional: add a "New webmail" button to mailcow's own sign-in page.
+#
+# The button reads the address and password already typed into mailcow's login
+# form, exchanges them for a session token against this API, and hands that
+# token to the SPA in the URL fragment — so the user signs in once, on the page
+# they were already looking at.
+#
+# This is injected by the reverse proxy rather than added to mailcow's tree,
+# because mailcow's update.sh resets its own working copy on every update.
+#
+# Install:
+#   install -D -m 644 install/webmail-handoff.js /var/www/webmail-handoff/handoff.js
+#   # edit the API and APP constants at the top of that file to match your host
+#   # then add the two blocks below to the vhost that serves the mailcow UI
+#   nginx -t && systemctl reload nginx
+#
+# The API must allow the mailcow origin cross-origin: add it to API_CORS_ORIGINS
+# (or rely on API_CORS_WILDCARD_APEX if both names share an apex domain).
+
+location = /_wm/handoff.js {
+    alias /var/www/webmail-handoff/handoff.js;
+    default_type application/javascript;
+    add_header Cache-Control "public, max-age=300";
+}
+
+location / {
+    proxy_pass http://mailcow-ui-upstream;          # your existing mailcow proxy_pass
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+
+    # sub_filter cannot rewrite a compressed body, so ask the upstream for
+    # plain text. Requires nginx built --with-http_sub_module.
+    proxy_set_header Accept-Encoding "";
+    sub_filter '</body>' '<script src="/_wm/handoff.js" defer></script></body>';
+    sub_filter_once on;
+}

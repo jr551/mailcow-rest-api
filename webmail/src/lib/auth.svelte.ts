@@ -262,6 +262,57 @@ export function setSession(s: Session | null) {
     upsertSession(s);
 }
 
+// ---------- Sign-in handoff ----------
+
+// The mailcow login page offers a "sign in to the new webmail" button. It
+// exchanges the credentials the user just typed for a session token against
+// the API, then sends the browser here with the token in the URL fragment.
+//
+// A fragment is never sent to a server and never appears in a Referer, and it
+// is wiped from the address bar and this history entry before anything else
+// runs. The token is not trusted on its own either — it is presented to the
+// API, and only a session the server confirms is adopted, so a crafted link
+// cannot plant a fake session.
+export function hasHandoff(): boolean {
+    if (typeof location === 'undefined' || !location.hash) return false;
+    const params = new URLSearchParams(location.hash.replace(/^#/, ''));
+    return !!(params.get('wm_token') && params.get('wm_user'));
+}
+
+export async function adoptHandoffSession(): Promise<boolean> {
+    if (typeof location === 'undefined' || !location.hash) return false;
+    const params = new URLSearchParams(location.hash.replace(/^#/, ''));
+    const token = params.get('wm_token');
+    const user = params.get('wm_user');
+
+    if (!token || !user) return false;
+
+    const clean = () => {
+        try {
+            history.replaceState(null, '', location.pathname + location.search);
+        } catch { /* older browsers — the hash just stays visible */ }
+    };
+    clean();
+
+    try {
+        const res = await fetch(apiUrl('/v1/auth/session'), {
+            headers: { authorization: `Bearer ${token}` }
+        });
+        if (!res.ok) return false;
+        const data = await res.json();
+        upsertSession({
+            user,
+            token,
+            expiresAt: typeof data.expiresAt === 'string'
+                ? new Date(data.expiresAt).getTime()
+                : Number(data.expiresAt)
+        });
+        return true;
+    } catch {
+        return false;
+    }
+}
+
 // ---------- Auth flows ----------
 
 // btoa() only accepts Latin1 — passwords with emoji or non-ASCII letters

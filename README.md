@@ -197,6 +197,8 @@ Set the API origin before the app's own scripts run, by editing the shell's inli
 
 Then add that CDN origin to `API_CORS_ORIGINS` on the API so its cross-origin calls are answered.
 
+**A button on mailcow's own login page.** Users who land on the mailcow UI can be offered the webmail without typing their password twice. `install/webmail-handoff.js` plus the nginx snippet in `install/webmail-handoff.nginx.example` add a **New webmail** button next to mailcow's sign-in form; it exchanges the credentials already entered for a session token and hands that token to the SPA in the URL fragment, which the app consumes and clears from the address bar immediately. It is injected by the reverse proxy rather than added to mailcow's tree, which `update.sh` resets.
+
 **Turning it off.** `WEBMAIL_ENABLED=false` removes the webmail at startup. With an `ADMIN_TOKEN` configured you can also toggle it at runtime — see below — which takes effect immediately and does not need the container recreated.
 
 ## App Passwords
