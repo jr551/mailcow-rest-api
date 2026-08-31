@@ -1,13 +1,21 @@
-node_modules
 .git
-.gitignore
-.dockerignore
 .github
-.env
-.env.local
 data
 test
-coverage
-.vscode
-.idea
-*.log
+install
+docs
+*.md
+
+# The SPA is built inside the image; a local build or install must never be
+# copied in over it (stale dist, and node_modules would balloon the context).
+webmail/node_modules
+webmail/dist
+webmail/test
+webmail/docs
+webmail/screenshots
+webmail/playwright-report
+webmail/test-results
+
+node_modules
+.env
+.env.*
