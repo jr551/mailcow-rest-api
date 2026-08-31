@@ -1,0 +1,44 @@
+services:
+  mailcow-rest-api:
+    image: ghcr.io/jr551/mailcow-rest-api:master
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      IMAP_HOST: ${IMAP_HOST:-dovecot-mailcow}
+      SMTP_HOST: ${SMTP_HOST:-postfix-mailcow}
+      MAILCOW_DB_HOST: ${MAILCOW_DB_HOST:-mysql-mailcow}
+      CACHE_PATH: /data/auth-cache.db
+      OCR_CACHE_PATH: /data/ocr-cache.db
+      PUSH_DB_PATH: /data/push.db
+      TRACKING_DB_PATH: /data/tracking.db
+      IMAGE_PROXY_CACHE_PATH: /data/image-proxy.db
+      CALENDAR_SUBS_DB_PATH: /data/calendar-subs.db
+      LITELLM_USER_STORE_PATH: /data/litellm-users.json
+      S3_DRIVE_USERS_JSON: /data/drive-users.json
+    volumes:
+      - api-data:/data
+    networks:
+      mailcow-network:
+        aliases:
+          - mailcow-rest-api
+      webmail:
+
+  webmail:
+    image: ghcr.io/jr551/mailcow-rest-api-webmail:master
+    restart: unless-stopped
+    depends_on:
+      - mailcow-rest-api
+    ports:
+      - "8080:80"
+    networks:
+      - webmail
+
+volumes:
+  api-data:
+
+networks:
+  webmail:
+  mailcow-network:
+    external: true
+    name: ${MAILCOW_NETWORK:-mailcowdockerized_mailcow-network}

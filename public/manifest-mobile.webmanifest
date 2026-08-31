@@ -1,0 +1,62 @@
+{
+    "name": "Webmail Mobile",
+    "short_name": "Webmail",
+    "description": "Mobile-optimised webmail for mailcow.",
+    "start_url": "/webmail/mobile/",
+    "scope": "/webmail/mobile/",
+    "id": "/webmail/mobile/",
+    "display": "standalone",
+    "display_override": ["standalone", "minimal-ui", "browser"],
+    "orientation": "portrait",
+    "background_color": "#121317",
+    "theme_color": "#5b8def",
+    "categories": ["productivity", "communication", "email"],
+    "lang": "en",
+    "dir": "ltr",
+    "prefer_related_applications": false,
+    "launch_handler": {
+        "client_mode": ["navigate-existing", "auto"]
+    },
+    "icons": [
+        {
+            "src": "icon.svg",
+            "type": "image/svg+xml",
+            "sizes": "any",
+            "purpose": "any"
+        },
+        {
+            "src": "icon-maskable.svg",
+            "type": "image/svg+xml",
+            "sizes": "any",
+            "purpose": "maskable"
+        }
+    ],
+    "shortcuts": [
+        {
+            "name": "Compose",
+            "short_name": "Compose",
+            "url": "/webmail/mobile/?compose=1",
+            "description": "Start a new message",
+            "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+        },
+        {
+            "name": "Inbox",
+            "short_name": "Inbox",
+            "url": "/webmail/mobile/",
+            "description": "Open the inbox",
+            "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+        }
+    ],
+    "share_target": {
+        "action": "/webmail/mobile/",
+        "method": "GET",
+        "params": {
+            "title": "share_title",
+            "text": "share_text",
+            "url": "share_url"
+        }
+    },
+    "protocol_handlers": [
+        { "protocol": "mailto", "url": "/webmail/mobile/?mailto=%s" }
+    ]
+}

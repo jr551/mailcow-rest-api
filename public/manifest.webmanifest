@@ -1,0 +1,62 @@
+{
+    "name": "Webmail (imap-rest)",
+    "short_name": "Webmail",
+    "description": "Polished webmail for mailcow with AI summaries, draft replies, and dark mode.",
+    "start_url": "/webmail/",
+    "scope": "/webmail/",
+    "id": "/webmail/",
+    "display": "standalone",
+    "display_override": ["window-controls-overlay", "standalone", "minimal-ui", "browser"],
+    "orientation": "any",
+    "background_color": "#121317",
+    "theme_color": "#5b8def",
+    "categories": ["productivity", "communication", "email"],
+    "lang": "en",
+    "dir": "ltr",
+    "prefer_related_applications": false,
+    "launch_handler": {
+        "client_mode": ["navigate-existing", "auto"]
+    },
+    "edge_side_panel": {
+        "preferred_width": 440
+    },
+    "icons": [
+        {
+            "src": "icon.svg",
+            "type": "image/svg+xml",
+            "sizes": "any",
+            "purpose": "any"
+        },
+        {
+            "src": "icon-maskable.svg",
+            "type": "image/svg+xml",
+            "sizes": "any",
+            "purpose": "maskable"
+        }
+    ],
+    "shortcuts": [
+        {
+            "name": "Compose",
+            "short_name": "Compose",
+            "url": "/webmail/?compose=1",
+            "description": "Start a new message",
+            "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+        },
+        {
+            "name": "Inbox",
+            "short_name": "Inbox",
+            "url": "/webmail/",
+            "description": "Open the inbox",
+            "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+        }
+    ],
+    "screenshots": [
+        {
+            "src": "icon.svg",
+            "sizes": "512x512",
+            "type": "image/svg+xml",
+            "form_factor": "wide",
+            "label": "Inbox view"
+        }
+    ]
+}
