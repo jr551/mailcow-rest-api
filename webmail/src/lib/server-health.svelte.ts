@@ -7,6 +7,8 @@
 // "we'll be back" panel with a polling spinner. Browsing-while-down
 // is supplied separately by the cached message list.
 
+import { apiUrl } from './api';
+
 const WINDOW_MS = 30_000;
 const FAIL_THRESHOLD = 2;
 const POLL_MS = 10_000;
@@ -77,7 +79,10 @@ function markUp() {
 
 async function probe(): Promise<void> {
     state.lastProbeAt = Date.now();
-    for (const path of ['/health', '/imap-rest/health']) {
+    // apiUrl() resolves against the configured API origin (same-origin when the
+    // API serves the SPA). '/imap-rest/health' is the legacy mount path, kept
+    // for deployments that still proxy the API under that prefix.
+    for (const path of [apiUrl('/health'), '/imap-rest/health']) {
         const ctl = new AbortController();
         const timer = setTimeout(() => ctl.abort(), PROBE_TIMEOUT_MS);
         try {

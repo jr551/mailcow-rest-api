@@ -675,7 +675,7 @@ export async function probeCapabilities(): Promise<void> {
     try {
         const [aiRes, healthRes, configRes, ttsRes] = await Promise.all([
             fetch(apiUrl('/v1/ai/capabilities')),
-            fetch('/imap-rest/health'),
+            fetch(apiUrl('/health')),
             getAiConfig().catch(() => null),
             getTtsConfig().catch(() => null)
         ]);

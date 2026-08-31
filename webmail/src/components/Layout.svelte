@@ -15,6 +15,7 @@
         deleteMailbox,
         getMailboxInfo,
         getLogins,
+        apiUrl,
         ApiError,
         type MailboxInfo,
         type LoginEntry,
@@ -203,7 +204,7 @@
     async function pingServer() {
         const t0 = performance.now();
         try {
-            const res = await fetch('/imap-rest/health', { cache: 'no-store' });
+            const res = await fetch(apiUrl('/health'), { cache: 'no-store' });
             const dt = Math.round(performance.now() - t0);
             if (!res.ok) { serverPingState = 'offline'; serverPingMs = null; return; }
             serverPingMs = dt;
