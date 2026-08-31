@@ -199,6 +199,47 @@ Then add that CDN origin to `API_CORS_ORIGINS` on the API so its cross-origin ca
 
 **Turning it off.** `WEBMAIL_ENABLED=false` removes the webmail at startup. With an `ADMIN_TOKEN` configured you can also toggle it at runtime — see below — which takes effect immediately and does not need the container recreated.
 
+## App Passwords
+
+Pointing an MCP client or a script at a mailbox normally means putting the mailbox password in a config file, where it grants IMAP, SMTP, and webmail access indefinitely and can only be withdrawn by changing the password everywhere it is used.
+
+An app password is a per-client credential instead. Users create them in the webmail under **Settings → Security → App passwords**, giving each one a name and the IP addresses or ranges it may be used from. The token is displayed once, at creation.
+
+Use it wherever the mailbox password would go — as the password with the address as username, or as a bearer token on its own:
+
+```sh
+curl -u 'user@example.com:map_...' https://api.example.com/v1/mailboxes
+curl -H 'Authorization: Bearer map_...' https://api.example.com/v1/mailboxes
+```
+
+For MCP, put it in `IMAP_REST_PASS`:
+
+```json
+{
+  "mcpServers": {
+    "mailcow-rest-api": {
+      "command": "npx",
+      "args": ["--yes", "--package", "mailcow-rest-api", "imap-rest-mcp"],
+      "env": {
+        "IMAP_REST_BASE_URL": "https://api.example.com",
+        "IMAP_REST_USER": "user@example.com",
+        "IMAP_REST_PASS": "map_..."
+      }
+    }
+  }
+}
+```
+
+How it behaves:
+
+- **IP scoping is mandatory.** At least one address or CIDR is required, and a token presented from anywhere else is rejected exactly like a wrong password. This is what makes a leaked token far less useful than a leaked mailbox password.
+- **Only the hash is stored.** A stolen database yields no usable token.
+- **They cannot manage themselves.** An app password may not create or revoke app passwords — otherwise a leaked one could issue a replacement scoped to the attacker's own network and survive revocation of the original. Managing them requires signing in with the mailbox password.
+- **Revocation is immediate,** and each row records when and from where it was last used.
+- **Optional expiry** in days, in addition to revocation.
+
+The API still performs a real IMAP login, so the mailbox password is captured when the token is minted and kept encrypted with `CREDENTIAL_ENCRYPTION_KEY`. The feature therefore requires credential encryption and is disabled without it. It also means **changing the mailbox password invalidates existing app passwords**, since the stored copy no longer matches — recreate them, or sign in to the webmail once to re-key them.
+
 ## Admin API
 
 Setting `ADMIN_TOKEN` enables `/v1/admin/*`. Without it the routes are never registered. The token is operator credentials, not a mailbox login, and is sent as `Authorization: Bearer <ADMIN_TOKEN>`.

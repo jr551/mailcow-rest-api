@@ -39,31 +39,39 @@ const DATA_PATHS = (cfg) => ({
     tracking: cfg.tracking.dbPath,
     imageProxy: cfg.imageProxy.cachePath,
     calendarSubs: cfg.calendarSubs.dbPath,
-    webhooks: cfg.webhooks.dbPath
+    webhooks: cfg.webhooks.dbPath,
+    adminSettings: cfg.admin.settingsPath,
+    appPasswords: cfg.appPasswords.dbPath
 });
 
+const UNSET_DB_ENV = {
+    OCR_CACHE_PATH: undefined, AI_CACHE_PATH: undefined, PUSH_DB_PATH: undefined,
+    TRACKING_DB_PATH: undefined, IMAGE_PROXY_CACHE_PATH: undefined,
+    CALENDAR_SUBS_DB_PATH: undefined, WEBHOOK_DB_PATH: undefined, IMAP_CACHE_PATH: undefined,
+    ADMIN_SETTINGS_DB_PATH: undefined, APP_PASSWORDS_DB_PATH: undefined
+};
+
+// The config joins with the host's separator, so on Windows a '/data' prefix
+// comes back as '\data'. The invariant under test is "same directory as the
+// cache", not which slash this OS writes it with.
+const dirOf = (p) => path.dirname(p).replace(/\\/g, '/');
+
 test('every sqlite file defaults to the cache directory', () => {
-    const cfg = loadConfigWith({
-        CACHE_PATH: '/data/cache.db',
-        OCR_CACHE_PATH: undefined, AI_CACHE_PATH: undefined, PUSH_DB_PATH: undefined,
-        TRACKING_DB_PATH: undefined, IMAGE_PROXY_CACHE_PATH: undefined,
-        CALENDAR_SUBS_DB_PATH: undefined, WEBHOOK_DB_PATH: undefined, IMAP_CACHE_PATH: undefined
-    });
+    const cfg = loadConfigWith({ CACHE_PATH: '/data/cache.db', ...UNSET_DB_ENV });
     for (const [name, p] of Object.entries(DATA_PATHS(cfg))) {
-        assert.equal(path.dirname(p), '/data', `${name} (${p}) must sit beside cache.db`);
+        assert.equal(dirOf(p), '/data', `${name} (${p}) must sit beside cache.db`);
     }
 });
 
 test('an explicit override still wins', () => {
     const cfg = loadConfigWith({
         CACHE_PATH: '/data/cache.db',
-        AI_CACHE_PATH: '/elsewhere/ai.db',
-        IMAP_CACHE_PATH: undefined, OCR_CACHE_PATH: undefined, PUSH_DB_PATH: undefined,
-        TRACKING_DB_PATH: undefined, IMAGE_PROXY_CACHE_PATH: undefined,
-        CALENDAR_SUBS_DB_PATH: undefined, WEBHOOK_DB_PATH: undefined
+        ...UNSET_DB_ENV,
+        AI_CACHE_PATH: '/elsewhere/ai.db'
     });
     assert.equal(cfg.ai.cachePath, '/elsewhere/ai.db');
-    assert.equal(cfg.imapCache.path, '/data/imap-cache.db');
+    assert.equal(dirOf(cfg.imapCache.path), '/data');
+    assert.equal(path.basename(cfg.imapCache.path), 'imap-cache.db');
 });
 
 test('a relative CACHE_PATH keeps the others alongside it', () => {

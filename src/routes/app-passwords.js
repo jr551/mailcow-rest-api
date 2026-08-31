@@ -41,14 +41,21 @@ module.exports = async function appPasswordRoutes(app, { store } = {}) {
                     type: 'object',
                     properties: {
                         appPasswords: { type: 'array', items: appPasswordPublic },
-                        limit: { type: 'integer' }
+                        limit: { type: 'integer' },
+                        // The address this request came from, so a client can
+                        // offer it as the range to scope a new token to.
+                        yourIp: { type: ['string', 'null'] }
                     }
                 }
             }
         }
     }, async (req) => {
         requireFullLogin(req);
-        return { appPasswords: store.list({ user: req.creds.user }), limit: store.maxPerUser };
+        return {
+            appPasswords: store.list({ user: req.creds.user }),
+            limit: store.maxPerUser,
+            yourIp: req.ip || null
+        };
     });
 
     app.post('/v1/me/app-passwords', {

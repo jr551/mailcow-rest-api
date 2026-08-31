@@ -594,7 +594,7 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         }
     }));
 
-    await app.register(sessionRoutes, { cache, imap: imapCfg, sessionTtlMs: config.session.ttlMs });
+    await app.register(sessionRoutes, { cache, imap: imapCfg, sessionTtlMs: config.session.ttlMs, appPasswords: appPasswordStore });
     await app.register(mailboxRoutes, { pool, imapCache });
     await app.register(messageRoutes, { pool, ocrCache, imapCache });
     await app.register(aiRoutes, { aiCache });

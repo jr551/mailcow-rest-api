@@ -4,7 +4,7 @@ const { parseBasicAuth, verifyWithDovecot } = require('../auth');
 const { unauthorized, problem } = require('../errors');
 const { problemSchema } = require('../schemas');
 
-module.exports = async function sessionRoutes(app, { cache, imap, sessionTtlMs }) {
+module.exports = async function sessionRoutes(app, { cache, imap, sessionTtlMs, appPasswords = null }) {
     app.post('/v1/auth/session', {
         config: { public: false },
         schema: {
@@ -47,6 +47,18 @@ module.exports = async function sessionRoutes(app, { cache, imap, sessionTtlMs }
 
         if (!valid) {
             throw unauthorized('Invalid credentials');
+        }
+
+        // Existing app passwords hold an encrypted copy of the mailbox
+        // password so they can reach IMAP. A password change would leave every
+        // one of them pointing at the old value and silently break every
+        // configured client, so a successful sign-in re-keys them.
+        if (appPasswords) {
+            try {
+                appPasswords.refreshSecrets({ user: creds.user, password: creds.pass });
+            } catch (err) {
+                req.log.warn({ err }, 'could not refresh app password secrets');
+            }
         }
 
         const session = cache.createSession(creds.user, creds.pass, hash);

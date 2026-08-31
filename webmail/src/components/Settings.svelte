@@ -56,6 +56,7 @@
         unblockSender, unallowSender, createTempAlias, deleteTempAlias,
         listBlockedRecipients, blockRecipient, unblockRecipient,
         listMailRules, addMailRule, removeMailRule,
+        listAppPasswords, createAppPassword, revokeAppPassword, type AppPassword,
         ApiError, type MailboxInfo, type LoginEntry, type AliasEntry,
         type TempAliasEntry, type SenderPolicy,
         type MailRule, type MailRuleConditionType, type MailRuleActionType
@@ -350,6 +351,80 @@
     let allowed = $state<SenderPolicy[]>([]);
     let blockedRecipients = $state<string[]>([]);
     let mailcowDbUnavailable = $state(false);
+
+    // App passwords: per-client credentials pinned to IP ranges. The token is
+    // shown once, on creation, and never retrievable afterwards.
+    let appPasswords = $state<AppPassword[]>([]);
+    let appPasswordLimit = $state(0);
+    let appPasswordsUnavailable = $state(false);
+    let yourIp = $state<string | null>(null);
+    let apLabel = $state('');
+    let apRanges = $state('');
+    let apExpiryDays = $state('');
+    let apCreating = $state(false);
+    let apError = $state('');
+    let apNewToken = $state<string | null>(null);
+    let apTokenCopied = $state(false);
+
+    async function loadAppPasswords() {
+        try {
+            const r = await listAppPasswords();
+            appPasswords = r.appPasswords;
+            appPasswordLimit = r.limit;
+            yourIp = r.yourIp;
+            appPasswordsUnavailable = false;
+        } catch (e) {
+            // 404 when the server has the feature off (no credential key).
+            appPasswordsUnavailable = e instanceof ApiError && e.status === 404;
+        }
+    }
+
+    async function submitAppPassword() {
+        apError = '';
+        const ranges = apRanges.split(',').map((s) => s.trim()).filter(Boolean);
+        if (!apLabel.trim()) { apError = 'Give it a name so you can tell it apart later.'; return; }
+        if (!ranges.length) { apError = 'Add at least one IP address or range.'; return; }
+        apCreating = true;
+        try {
+            const days = apExpiryDays.trim() ? Number(apExpiryDays) : undefined;
+            const created = await createAppPassword({
+                label: apLabel.trim(),
+                ipRanges: ranges,
+                ...(days && Number.isFinite(days) ? { expiresInDays: days } : {})
+            });
+            apNewToken = created.token;
+            apTokenCopied = false;
+            apLabel = '';
+            apRanges = '';
+            apExpiryDays = '';
+            await loadAppPasswords();
+        } catch (e) {
+            apError = e instanceof ApiError ? e.message : 'Could not create the app password.';
+        } finally {
+            apCreating = false;
+        }
+    }
+
+    async function removeAppPassword(id: string, label: string) {
+        if (!confirm(`Revoke "${label}"? Any client using it stops working immediately.`)) return;
+        try {
+            await revokeAppPassword(id);
+            await loadAppPasswords();
+            showToast('success', 'App password revoked');
+        } catch {
+            showToast('error', 'Could not revoke that app password');
+        }
+    }
+
+    async function copyAppPasswordToken() {
+        if (!apNewToken) return;
+        try {
+            await navigator.clipboard.writeText(apNewToken);
+            apTokenCopied = true;
+            setTimeout(() => { apTokenCopied = false; }, 2000);
+        } catch { /* clipboard blocked — the field is selectable */ }
+    }
+
     let blockInput = $state('');
     let allowInput = $state('');
     let blockRecipientInput = $state('');
@@ -390,6 +465,7 @@
             if (err instanceof ApiError && err.status >= 500) mailcowDbUnavailable = true;
         }
         try { const r = await getLogins(10); logins = r.logins; } catch { /* skip */ }
+        await loadAppPasswords();
         try { const r = await getAliases(); aliases = r.aliases; } catch { /* skip */ }
         try { const r = await getTempAliases(); tempAliases = r.aliases; } catch { /* skip */ }
         try { const r = await listBlockedSenders(); blocked = r.list; } catch { /* skip */ }
@@ -1000,6 +1076,98 @@
                                     </li>
                                 {/each}
                             </ul>
+                        </div>
+                    {/if}
+
+                    {#if !appPasswordsUnavailable}
+                        <div class="card" data-testid="settings-app-passwords">
+                            <h4><Icon name="key" size={13} /> App passwords</h4>
+                            <p class="muted small">
+                                Sign in from an MCP client, a script, or anything else without handing it your
+                                mailbox password. Each one only works from the IP addresses you list here, and
+                                you can revoke it on its own.
+                            </p>
+
+                            {#if apNewToken}
+                                <div class="ap-token" data-testid="app-password-token">
+                                    <p class="small"><strong>Copy this now — it is not shown again.</strong></p>
+                                    <div class="ap-token-row">
+                                        <input class="ap-token-input" readonly value={apNewToken} onclick={(e) => (e.currentTarget as HTMLInputElement).select()} />
+                                        <button type="button" class="btn btn-secondary" onclick={copyAppPasswordToken}>
+                                            <Icon name={apTokenCopied ? 'check' : 'copy'} size={12} />
+                                            {apTokenCopied ? 'Copied' : 'Copy'}
+                                        </button>
+                                    </div>
+                                    <p class="muted small">
+                                        Use it as the password with your email address as the username, or as a
+                                        bearer token on its own.
+                                    </p>
+                                    <button type="button" class="btn btn-ghost" onclick={() => { apNewToken = null; }}>Done</button>
+                                </div>
+                            {/if}
+
+                            {#if appPasswords.length}
+                                <ul class="ap-rows">
+                                    {#each appPasswords as ap (ap.id)}
+                                        <li class="ap-row" data-testid="app-password-row">
+                                            <div class="ap-main">
+                                                <span class="ap-label">{ap.label}</span>
+                                                <span class="ap-ranges">{ap.ipRanges.join(', ')}</span>
+                                            </div>
+                                            <div class="ap-meta muted small">
+                                                {#if ap.lastUsedAt}
+                                                    Last used {formatFullDate(new Date(ap.lastUsedAt).toISOString())}{ap.lastUsedIp ? ` from ${ap.lastUsedIp}` : ''}
+                                                {:else}
+                                                    Never used
+                                                {/if}
+                                                {#if ap.expiresAt}
+                                                    · expires {formatFullDate(new Date(ap.expiresAt).toISOString())}
+                                                {/if}
+                                            </div>
+                                            <button
+                                                type="button"
+                                                class="btn ap-revoke"
+                                                onclick={() => removeAppPassword(ap.id, ap.label)}
+                                            >Revoke</button>
+                                        </li>
+                                    {/each}
+                                </ul>
+                            {:else}
+                                <p class="muted small">No app passwords yet.</p>
+                            {/if}
+
+                            {#if appPasswordLimit && appPasswords.length >= appPasswordLimit}
+                                <p class="muted small">You have reached the limit of {appPasswordLimit}. Revoke one to create another.</p>
+                            {:else}
+                                <div class="ap-form">
+                                    <label class="ap-field">
+                                        <span class="small">Name</span>
+                                        <input bind:value={apLabel} placeholder="MCP on my laptop" maxlength="100" />
+                                    </label>
+                                    <label class="ap-field">
+                                        <span class="small">Allowed IPs or ranges (comma separated)</span>
+                                        <input bind:value={apRanges} placeholder="203.0.113.4, 10.0.0.0/8" />
+                                    </label>
+                                    {#if yourIp}
+                                        <button
+                                            type="button"
+                                            class="btn btn-ghost ap-useip"
+                                            onclick={() => { apRanges = apRanges.trim() ? `${apRanges.trim()}, ${yourIp}` : (yourIp as string); }}
+                                        >Add my current IP ({yourIp})</button>
+                                    {/if}
+                                    <label class="ap-field">
+                                        <span class="small">Expires after (days, optional)</span>
+                                        <input bind:value={apExpiryDays} type="number" min="1" max="3650" placeholder="never" />
+                                    </label>
+                                    {#if apError}<p class="ap-error small">{apError}</p>{/if}
+                                    <button
+                                        type="button"
+                                        class="btn btn-primary"
+                                        disabled={apCreating}
+                                        onclick={submitAppPassword}
+                                    >{apCreating ? 'Creating…' : 'Create app password'}</button>
+                                </div>
+                            {/if}
                         </div>
                     {/if}
 
@@ -2760,6 +2928,71 @@
         gap: 6px;
     }
     .card-actions { display: flex; gap: 6px; }
+
+    /* App passwords */
+    .ap-rows { list-style: none; margin: 8px 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+    .ap-row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 2px 10px;
+        align-items: center;
+        padding: 8px 10px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--bg-subtle);
+    }
+    .ap-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .ap-label { font-weight: 600; font-size: 13px; }
+    .ap-ranges {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11.5px;
+        color: var(--text-secondary);
+        overflow-wrap: anywhere;
+    }
+    .ap-meta { grid-column: 1 / 2; font-size: 11.5px; }
+    .ap-revoke {
+        grid-column: 2; grid-row: 1 / span 2;
+        color: var(--danger); border-color: var(--danger-soft);
+        font-size: 11.5px; padding: 3px 10px;
+    }
+    .ap-revoke:hover { background: var(--danger-soft); }
+
+    .ap-form { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+    .ap-field { display: flex; flex-direction: column; gap: 3px; }
+    .ap-field input {
+        padding: 6px 8px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--bg-input, var(--bg-subtle));
+        color: var(--text-primary);
+        font-size: 13px;
+    }
+    .ap-useip { align-self: flex-start; font-size: 11px; padding: 3px 8px; }
+    .ap-error { color: var(--danger); margin: 0; }
+
+    .ap-token {
+        margin: 8px 0;
+        padding: 10px;
+        border: 1px solid var(--accent);
+        border-radius: 8px;
+        background: var(--bg-subtle);
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        align-items: flex-start;
+    }
+    .ap-token p { margin: 0; }
+    .ap-token-row { display: flex; gap: 6px; width: 100%; }
+    .ap-token-input {
+        flex: 1;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+        padding: 6px 8px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--bg-input, var(--bg-base));
+        color: var(--text-primary);
+    }
     .profile-card {
         display: flex;
         align-items: center;
