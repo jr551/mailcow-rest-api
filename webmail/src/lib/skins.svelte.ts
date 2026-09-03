@@ -1080,6 +1080,112 @@ export const SKINS: Skin[] = [
         }
     },
 
+    // ─── Microsoft Outlook on the web (full spitting-image palette) ───────
+    {
+        id: 'outlook',
+        label: 'Outlook',
+        description: 'Microsoft Outlook on the web — azure chrome, Segoe UI, white surfaces.',
+        swatch: '#0078d4',
+        full: true,
+        extras: {
+            css: `
+                /* Azure command bar. The topbar is the OWA header: brand and
+                 * ghost icons go white, the search box becomes the white
+                 * OWA search field, the user chip already paints itself
+                 * with --bg-base (white) so it reads as the OWA avatar. */
+                .topbar {
+                    background: #0078d4 !important;
+                    border-bottom: 1px solid #106ebe !important;
+                }
+                .topbar .brand-mark { color: #fff !important; }
+                .topbar .brand-sub { color: rgba(255,255,255,0.75) !important; }
+                .topbar .logo { background: rgba(255,255,255,0.18) !important; }
+                .topbar .btn-ghost,
+                .topbar .theme-toggle { color: #fff !important; }
+                .topbar .btn-ghost:hover,
+                .topbar .theme-toggle:hover {
+                    background: rgba(255,255,255,0.15) !important;
+                    color: #fff !important;
+                }
+                .topbar .search-wrap {
+                    background: #ffffff !important;
+                    border: 1px solid #ffffff !important;
+                }
+                .topbar .search-wrap input { color: #242424 !important; }
+                .topbar .search-wrap input::placeholder { color: #616161 !important; }
+                .topbar .search-scope-btn { color: #0078d4 !important; border-color: #c8c6c4 !important; }
+                .topbar .muted { color: rgba(255,255,255,0.85) !important; }
+
+                /* OWA marks unread rows with a blue edge bar and a blue
+                 * bolded subject — no dot, no tint. */
+                .row.unread { box-shadow: inset 3px 0 0 var(--accent) !important; }
+                .row.unread .subject { color: var(--accent-text) !important; }
+
+                /* OWA is flat: rows, folders and buttons don't lift. */
+                .btn:hover, .row:hover, .folder:hover { transform: none !important; }
+            `
+        },
+        themeColor: '#0078d4',
+        vars: {
+            // OWA surfaces are white on white; hover is Fluent neutralLighter
+            // and selection is the classic OWA light-blue row.
+            '--bg-base': '#ffffff',
+            '--bg-surface': '#ffffff',
+            '--bg-surface-alt': '#faf9f8',
+            '--bg-elevated': '#ffffff',
+            '--bg-hover': '#f3f2f1',
+            '--bg-active': '#edebe9',
+            '--bg-selected': '#cfe4fa',
+            '--bg-overlay': 'rgba(0, 0, 0, 0.4)',
+            '--bg-input': '#ffffff',
+            '--bg-tag': '#f0f0f0',
+
+            '--text-primary': '#242424',
+            '--text-secondary': '#424242',
+            '--text-tertiary': '#616161',
+            '--text-on-accent': '#ffffff',
+            '--text-link': '#0078d4',
+
+            '--border-subtle': '#ededed',
+            '--border-soft': '#e0e0e0',
+            '--border-strong': '#c8c6c4',
+            '--border-focus': '#0078d4',
+
+            // Communication blue family: base, hover shade, pale wash,
+            // link-safe dark shade.
+            '--accent': '#0078d4',
+            '--accent-hover': '#106ebe',
+            '--accent-soft': '#eff6fc',
+            '--accent-text': '#005a9e',
+            '--unread-dot': '#0078d4',
+
+            // Fluent semantics; the star becomes the OWA flag red.
+            '--danger': '#a4262c',
+            '--danger-soft': '#f7e6e8',
+            '--success': '#107c10',
+            '--success-soft': '#dff6dd',
+            '--warning': '#bc4b09',
+            '--warning-soft': '#fff4ce',
+            '--star': '#c50f1f',
+
+            '--font-sans': `'Segoe UI', 'Segoe UI Variable Text', 'Segoe UI Web (West European)',
+                -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', sans-serif`,
+
+            // Fluent shape: near-square chrome, 4px controls.
+            '--radius-xs': '2px',
+            '--radius-sm': '4px',
+            '--radius-md': '4px',
+            '--radius-lg': '6px',
+            '--radius-xl': '8px',
+
+            // Fluent elevations (flat hairline → dialog shadow).
+            '--shadow-sm': '0 1px 2px rgba(0, 0, 0, 0.06)',
+            '--shadow-md': '0 3.2px 7.2px rgba(0, 0, 0, 0.132), 0 0.6px 1.8px rgba(0, 0, 0, 0.108)',
+            '--shadow-lg': '0 12px 28px rgba(0, 0, 0, 0.24), 0 2px 8px rgba(0, 0, 0, 0.16)',
+            '--pill-padding': '2px 8px'
+        }
+    },
+
     // ─── Photo themes (load real images at runtime) ───────────────────────
     // These hit third-party endpoints (cataas.com / loremflickr.com) the
     // first time the theme activates, then the browser caches them. Opt-in

@@ -51,7 +51,7 @@
     import BulkBar from './BulkBar.svelte';
     import { getShortcuts, blockSender as apiBlockSender, type Shortcut } from '../lib/api';
     import { shortcutsItems, embeddedShortcut, popupShortcut } from '../lib/shortcuts-store';
-    import { probeCapabilities, settings } from '../lib/settings.svelte';
+    import { probeCapabilities, settings, setHideSidebar } from '../lib/settings.svelte';
     import { initImapSync, newThread as newAiThread, appendMessage as appendAiMessage, requestAutoSend as requestAutoSendAi } from '../lib/ai-threads.svelte';
     import { toggleSelected, clearSelection, selectAllVisible } from '../lib/store.svelte';
     import * as cache from '../lib/cache';
@@ -1492,6 +1492,17 @@
 
 <div class="shell" data-density={settings.density} data-testid="shell">
     <header class="topbar">
+        <button
+            type="button"
+            class="btn btn-ghost sidebar-toggle"
+            title={settings.hideSidebar ? 'Show sidebar' : 'Hide sidebar'}
+            aria-label={settings.hideSidebar ? 'Show sidebar' : 'Hide sidebar'}
+            aria-pressed={settings.hideSidebar}
+            onclick={() => setHideSidebar(!settings.hideSidebar)}
+            data-testid="sidebar-toggle"
+        >
+            <Icon name={settings.hideSidebar ? 'panelLeftOpen' : 'panelLeftClose'} size={16} />
+        </button>
         <div class="brand">
             <div class="logo" aria-hidden="true">
                 <Icon name="mail" size={18} />
@@ -1788,7 +1799,9 @@
     {/if}
 
     <div class="body">
+        {#if !settings.hideSidebar}
         <AppSwitcher />
+        {/if}
         {#if ui.app === 'calendar'}
             <CalendarApp />
         {:else if ui.app === 'ai'}

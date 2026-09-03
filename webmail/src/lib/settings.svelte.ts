@@ -129,6 +129,11 @@ export interface Settings {
      *  there is on screen during a share or to anyone glancing over. The
      *  ticker still shows timing, which is the useful part. */
     calendarTickerTitles: boolean;
+    /** Collapse the left sidebar — the narrow app rail (Mail / Calendar /
+     *  AI / Drive), not the folder box list next to it. Toggled from the
+     *  topbar panel button, remembered here so a hidden rail survives
+     *  reloads. */
+    hideSidebar: boolean;
     /** Client-side rules. Run when the inbox list loads — match on
      *  envelope fields and either move the message somewhere, archive
      *  it, or kick off an AI action that pops the row away while it
@@ -222,6 +227,7 @@ function load(): Settings {
                 weatherUnits: parsed.weatherUnits === 'fahrenheit' ? 'fahrenheit' : 'celsius',
                 calendarTicker: parsed.calendarTicker !== false,
                 calendarTickerTitles: !!parsed.calendarTickerTitles,
+                hideSidebar: !!parsed.hideSidebar,
                 clientRules: Array.isArray(parsed.clientRules)
                     ? parsed.clientRules.filter(isValidClientRule)
                     : []
@@ -264,6 +270,7 @@ function load(): Settings {
         weatherUnits: 'celsius',
         calendarTicker: true,
         calendarTickerTitles: false,
+        hideSidebar: false,
         clientRules: []
     };
 }
@@ -529,6 +536,11 @@ export function isVipAddress(addresses: Array<string | null | undefined>): strin
 
 export function setWeatherChip(on: boolean) {
     state.weatherChip = on;
+    persist(state);
+}
+
+export function setHideSidebar(on: boolean) {
+    state.hideSidebar = on;
     persist(state);
 }
 
