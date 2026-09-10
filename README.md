@@ -181,6 +181,10 @@ docker run --rm -p 3001:3001 \
 
 The image serves the bundled Svelte webmail at `/webmail/` and its mobile PWA at `/webmail/mobile/`. Nothing extra is needed: point a browser at the API's own origin and sign in with a mailcow mailbox address and password.
 
+![The bundled webmail in its default Outlook skin](webmail/docs/screenshots/outlook-skin-inbox.png)
+
+The webmail ships with an Outlook-on-the-web skin as the default theme — azure command bar, Segoe UI, Fluent surfaces. Settings → Appearance offers a dozen other skins (accent-only and full themes) plus a custom accent picker.
+
 **Self-hosting and development.** Serving the SPA from the API is the out-of-the-box path. Because it is same-origin with `/v1/*`, there is no CORS to configure and no second TLS certificate or vhost to maintain. `window.__IMAP_API_BASE__` defaults to `""`, so API calls resolve against whatever host is serving the page.
 
 **Production and CDN hosting.** For high-traffic or edge deployments, build the SPA separately and host it on Cloudflare Pages, Netlify, or S3/CloudFront, pointing it at a remote API:

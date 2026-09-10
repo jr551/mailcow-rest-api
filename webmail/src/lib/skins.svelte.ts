@@ -54,6 +54,10 @@ const SQUARE_CHROME = {
 
 const MONO_FONT = `'IBM Plex Mono', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace`;
 
+// Skin applied when the user has never picked one (and the fallback when a
+// stored skin id no longer exists). Outlook is the shipping default.
+const DEFAULT_SKIN_ID = 'outlook';
+
 export const SKINS: Skin[] = [
     {
         id: 'default',
@@ -1081,6 +1085,7 @@ export const SKINS: Skin[] = [
     },
 
     // ─── Microsoft Outlook on the web (full spitting-image palette) ───────
+    // This is the default skin — see DEFAULT_SKIN_ID below.
     {
         id: 'outlook',
         label: 'Outlook',
@@ -1120,6 +1125,19 @@ export const SKINS: Skin[] = [
                  * bolded subject — no dot, no tint. */
                 .row.unread { box-shadow: inset 3px 0 0 var(--accent) !important; }
                 .row.unread .subject { color: var(--accent-text) !important; }
+                .row .unread-dot { display: none !important; }
+
+                /* OWA folder counts are plain blue numerals, not pills. */
+                .folder .count {
+                    background: transparent !important;
+                    color: var(--accent) !important;
+                    padding: 0 !important;
+                    min-width: 0 !important;
+                }
+                .folder.active .count {
+                    background: transparent !important;
+                    color: var(--accent-text) !important;
+                }
 
                 /* OWA is flat: rows, folders and buttons don't lift. */
                 .btn:hover, .row:hover, .folder:hover { transform: none !important; }
@@ -1135,7 +1153,7 @@ export const SKINS: Skin[] = [
             '--bg-elevated': '#ffffff',
             '--bg-hover': '#f3f2f1',
             '--bg-active': '#edebe9',
-            '--bg-selected': '#cfe4fa',
+            '--bg-selected': '#deecf9',
             '--bg-overlay': 'rgba(0, 0, 0, 0.4)',
             '--bg-input': '#ffffff',
             '--bg-tag': '#f0f0f0',
@@ -1482,7 +1500,7 @@ function load(): SkinState {
             const parsed = JSON.parse(raw);
             const sem = parsed.semantics || {};
             return {
-                skinId: typeof parsed.skinId === 'string' ? parsed.skinId : 'default',
+                skinId: typeof parsed.skinId === 'string' ? parsed.skinId : DEFAULT_SKIN_ID,
                 customAccent: typeof parsed.customAccent === 'string' ? parsed.customAccent : '#5b8def',
                 semantics: {
                     danger: typeof sem.danger === 'string' ? sem.danger : defaultSemantics.danger,
@@ -1497,7 +1515,7 @@ function load(): SkinState {
             };
         }
     } catch { /* noop */ }
-    return { skinId: 'default', customAccent: '#5b8def', semantics: { ...defaultSemantics }, customCss: '' };
+    return { skinId: DEFAULT_SKIN_ID, customAccent: '#5b8def', semantics: { ...defaultSemantics }, customCss: '' };
 }
 
 function persist(s: SkinState) {
@@ -1633,7 +1651,7 @@ export function applyCurrentSkin() {
         applyExtras(null);
         return;
     }
-    const skin = SKINS.find((s) => s.id === state.skinId) || SKINS[0];
+    const skin = SKINS.find((s) => s.id === state.skinId) || SKINS.find((s) => s.id === DEFAULT_SKIN_ID) || SKINS[0];
     applyVars(skin.vars);
     applyExtras(skin);
 }

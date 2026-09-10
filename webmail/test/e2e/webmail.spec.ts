@@ -393,6 +393,12 @@ test('AI button is replaced by "Set up AI" when no provider configured', async (
     await expect(page.getByTestId('ai-btn')).not.toBeVisible();
 });
 
+// These two need a real service worker — the suite-wide block would make
+// them vacuous.
+test.describe('service-worker tests', () => {
+    test.use({ serviceWorkers: 'allow' });
+
+
 test('PWA: manifest links + service worker register + offline fallback', async ({ page }) => {
     await page.goto('/webmail/');
     // Manifest is linked.
@@ -412,11 +418,34 @@ test('PWA: manifest links + service worker register + offline fallback', async (
     // Once registered (browser-side), querying registrations shows ours.
     const registered = await page.evaluate(async () => {
         if (!('serviceWorker' in navigator)) return false;
-        await new Promise((r) => setTimeout(r, 400)); // give the SW a moment to register
-        const regs = await navigator.serviceWorker.getRegistrations();
-        return regs.length > 0 && regs.some((r) => (r.active || r.installing || r.waiting));
+        // Registration is async — poll rather than assume a fixed delay is enough.
+        const deadline = Date.now() + 5000;
+        while (Date.now() < deadline) {
+            const regs = await navigator.serviceWorker.getRegistrations();
+            if (regs.length > 0 && regs.some((r) => (r.active || r.installing || r.waiting))) return true;
+            const { promise, resolve } = Promise.withResolvers<void>();
+            setTimeout(resolve, 200);
+            await promise;
+        }
+        return false;
     });
     expect(registered).toBeTruthy();
+});
+
+test('SW push event posts a webmail-new-mail message to the page', async ({ page }) => {
+    // Simulates the SW dispatch by manually triggering the listener inline.
+    // (We can't fire a real Push event in headless Playwright without a
+    // platform push service.) The handler registered by Layout responds
+    // by playing the chime + refreshing — we just verify the handler is
+    // wired up.
+    await login(page);
+    const wired = await page.evaluate(async () => {
+        if (!('serviceWorker' in navigator)) return false;
+        const reg = await navigator.serviceWorker.ready;
+        return !!reg && !!reg.active;
+    });
+    expect(wired).toBeTruthy();
+});
 });
 
 test('Settings shows Install + Notification + Sounds controls', async ({ page }) => {
@@ -1054,20 +1083,6 @@ test('install banner appears when beforeinstallprompt fires', async ({ page }) =
     await expect(page.getByTestId('install-banner')).not.toBeVisible();
 });
 
-test('SW push event posts a webmail-new-mail message to the page', async ({ page }) => {
-    // Simulates the SW dispatch by manually triggering the listener inline.
-    // (We can't fire a real Push event in headless Playwright without a
-    // platform push service.) The handler registered by Layout responds
-    // by playing the chime + refreshing — we just verify the handler is
-    // wired up.
-    await login(page);
-    const wired = await page.evaluate(async () => {
-        if (!('serviceWorker' in navigator)) return false;
-        const reg = await navigator.serviceWorker.ready;
-        return !!reg && !!reg.active;
-    });
-    expect(wired).toBeTruthy();
-});
 
 test('AI panel exposes Summarize, Draft, Action items, and Translate', async ({ page }) => {
     await page.addInitScript(() => localStorage.setItem('webmail.theme', 'dark'));

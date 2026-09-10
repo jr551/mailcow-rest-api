@@ -14,7 +14,12 @@ export default defineConfig({
         trace: 'off',
         video: 'off',
         actionTimeout: 10_000,
-        navigationTimeout: 15_000
+        navigationTimeout: 15_000,
+        // The app's service worker intercepts /v1/* fetches and re-issues
+        // them itself; SW-initiated requests bypass page.route() mocks and
+        // hit the real (nonexistent) backend. Block SW registration so the
+        // fixtures see every request.
+        serviceWorkers: 'block'
     },
     projects: [
         {
