@@ -7,7 +7,7 @@
 // reliable, and the per-user budget enforcement still applies via the
 // scoped LiteLLM key.
 
-import { settings, capabilities } from './settings.svelte';
+import { settings, capabilities, aiAuthKey } from './settings.svelte';
 import { cachedChatCompletion } from './ai-cache.svelte';
 import { maybeFlagCooldown, aiCooldownActive, aiCooldownLabel } from './ai-cooldown.svelte';
 
@@ -62,7 +62,9 @@ function resolve(): { baseUrl: string; model: string; apiKey: string } | null {
         return {
             baseUrl: capabilities.aiConfig.baseUrl.replace(/\/+$/, ''),
             model: capabilities.aiConfig.model,
-            apiKey: capabilities.aiConfig.apiKey
+            // Proxied mode returns apiKey:'' — the credential is the
+            // session token, resolved per call so a renewal is picked up.
+            apiKey: aiAuthKey()
         };
     }
     const llm = settings.llm;

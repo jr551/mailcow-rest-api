@@ -3,7 +3,7 @@
 // bot, no server roundtrip. Each action returns a `prompt` you can drop
 // into a new AI thread.
 
-import { settings, capabilities } from './settings.svelte';
+import { settings, capabilities, aiAuthKey } from './settings.svelte';
 
 export interface EmailAction {
     title: string;     // short label (≤ 6 words)
@@ -61,7 +61,7 @@ function resolveModel(): string {
     return defaults[llm.preset] || defaults.openai;
 }
 function resolveApiKey(): string {
-    if (capabilities.aiConfig?.configured) return capabilities.aiConfig.apiKey;
+    if (capabilities.aiConfig?.configured) return aiAuthKey();
     return settings.llm.apiKey;
 }
 function isConfigured(): boolean {

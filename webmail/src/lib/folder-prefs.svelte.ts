@@ -2,7 +2,7 @@
 // expand/collapse state for hierarchical folders. Lives entirely in
 // localStorage; no server round-trip needed.
 
-import { settings, capabilities } from './settings.svelte';
+import { settings, capabilities, aiAuthKey } from './settings.svelte';
 
 const ICON_KEY = 'webmail.folder-icons.v1';
 const EXPAND_KEY = 'webmail.folder-expanded.v1';
@@ -191,7 +191,7 @@ function resolveModel(): string {
     return defaults[llm.preset] || defaults.openai;
 }
 function resolveApiKey(): string {
-    if (capabilities.aiConfig?.configured) return capabilities.aiConfig.apiKey;
+    if (capabilities.aiConfig?.configured) return aiAuthKey();
     return settings.llm.apiKey;
 }
 

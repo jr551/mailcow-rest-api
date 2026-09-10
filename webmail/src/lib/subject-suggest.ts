@@ -5,7 +5,7 @@
 // Same provider plumbing as email-actions; we avoid going through the
 // streaming chatTurn() because we only need a 6-token reply.
 
-import { settings, capabilities } from './settings.svelte';
+import { settings, capabilities, aiAuthKey } from './settings.svelte';
 import { cachedChatCompletion } from './ai-cache.svelte';
 
 const PRESETS: Record<string, { url: string; model: string }> = {
@@ -23,7 +23,7 @@ function resolve(): { baseUrl: string; model: string; apiKey: string } | null {
         return {
             baseUrl: capabilities.aiConfig.baseUrl.replace(/\/+$/, ''),
             model: capabilities.aiConfig.model,
-            apiKey: capabilities.aiConfig.apiKey
+            apiKey: aiAuthKey()
         };
     }
     const llm = settings.llm;
