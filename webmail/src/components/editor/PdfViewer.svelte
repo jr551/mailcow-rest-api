@@ -79,12 +79,17 @@
     let dragOffsetX = 0;
     let dragOffsetY = 0;
 
+    // pdfjs v6 removed PDFDocumentProxy.destroy() — the loading task owns
+    // teardown, so keep a handle on it for onDestroy.
+    let loadingTask: pdfjsLib.PDFDocumentLoadingTask | null = null;
+
     onMount(async () => {
         try {
             // pdfjs mutates the buffer it's given, which can break a second
             // open of the same document (rare in practice, but cheap to guard).
             const buf = bytes.slice(0);
-            pdfDoc = await pdfjsLib.getDocument({ data: buf }).promise;
+            loadingTask = pdfjsLib.getDocument({ data: buf });
+            pdfDoc = await loadingTask.promise;
             totalPages = pdfDoc.numPages;
             docReady = true;
             await renderPage(pageNum);
@@ -94,7 +99,7 @@
         }
     });
     onDestroy(() => {
-        pdfDoc?.destroy?.().catch(() => { /* noop */ });
+        loadingTask?.destroy().catch(() => { /* noop */ });
     });
 
     async function renderPage(num: number) {

@@ -161,6 +161,17 @@ export async function applyMocks(page: Page) {
         });
     });
 
+    // The setup diagnostics probe /openapi.json before letting the SPA render;
+    // without this mock the whole suite stalls on the "cannot reach the API"
+    // screen.
+    await page.route('**/openapi.json', (route) => {
+        route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({ openapi: '3.1.0', info: { title: 'mailcow-rest-api', version: '0.0.0-mock' }, paths: {} })
+        });
+    });
+
     // Bearer-token session endpoints (matches v0.2.0 server implementation).
     await page.route('**/v1/auth/session', (route, request) => {
         if (request.method() === 'POST') {
@@ -863,6 +874,12 @@ export async function applyMocks(page: Page) {
 
 export async function login(page: Page) {
     await page.goto('/webmail/');
+    // The setup diagnostics run on mount; while they run, App.svelte swaps
+    // between <SetupDiagnostics/> and <Login/>, remounting Login and wiping
+    // anything already typed. Wait for the probe requests to finish, then
+    // for the form to exist on the settled tree.
+    await page.waitForLoadState('networkidle');
+    await page.waitForSelector('[data-testid=login-user]');
     await page.fill('[data-testid=login-user]', MOCK_USER);
     await page.fill('[data-testid=login-pass]', MOCK_PASS);
     await page.click('[data-testid=login-submit]');
