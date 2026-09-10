@@ -78,6 +78,17 @@ async function checkEndpoint(check: SetupCheck): Promise<SetupCheck> {
         });
         const contentType = res.headers.get('content-type') || '';
         if (!res.ok) {
+            // 429 means the API answered — the rate limiter is working and
+            // the route exists. Report it as a warning, not a wiring failure,
+            // so a busy client IP doesn't get told the deployment is broken.
+            if (res.status === 429) {
+                return {
+                    ...check,
+                    status: 'warn',
+                    statusCode: res.status,
+                    detail: `${check.path} is reachable but rate-limited (HTTP 429) — retry in a minute.`
+                };
+            }
             return {
                 ...check,
                 status: 'fail',
