@@ -525,11 +525,6 @@
                     {/if}
                 </div>
             {/if}
-            <button type="button" class="footer-btn" title="Keyboard shortcuts (?)" onclick={() => (ui.helpOpen = true)} data-testid="sidebar-help">
-                <Icon name="info" size={13} />
-                <span>Shortcuts</span>
-                <kbd>?</kbd>
-            </button>
         </div>
     </div>
 </aside>

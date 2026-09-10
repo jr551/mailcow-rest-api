@@ -19,11 +19,14 @@ async function makeApp() {
 test('rate limit: blocks after max requests from the same IP', async () => {
     const app = await makeApp();
     try {
+        // /health is exempt (monitors + the SPA's diagnostics poll it), so
+        // probe a public route that still counts — the limiter is a
+        // route-level hook, so authed routes 401 before it ever runs.
         for (let i = 0; i < 3; i++) {
-            const res = await app.inject({ method: 'GET', url: '/health', headers: { 'x-forwarded-for': '9.9.9.9' } });
+            const res = await app.inject({ method: 'GET', url: '/v1/ai/capabilities', headers: { 'x-forwarded-for': '9.9.9.9' } });
             assert.equal(res.statusCode, 200);
         }
-        const blocked = await app.inject({ method: 'GET', url: '/health', headers: { 'x-forwarded-for': '9.9.9.9' } });
+        const blocked = await app.inject({ method: 'GET', url: '/v1/ai/capabilities', headers: { 'x-forwarded-for': '9.9.9.9' } });
         assert.equal(blocked.statusCode, 429);
     } finally {
         await app.close();

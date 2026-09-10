@@ -209,7 +209,7 @@ Then add that CDN origin to `API_CORS_ORIGINS` on the API so its cross-origin ca
 
 Pointing an MCP client or a script at a mailbox normally means putting the mailbox password in a config file, where it grants IMAP, SMTP, and webmail access indefinitely and can only be withdrawn by changing the password everywhere it is used.
 
-An app password is a per-client credential instead. Users create them in the webmail under **Settings → Security → App passwords**, giving each one a name and the IP addresses or ranges it may be used from. The token is displayed once, at creation.
+An app password is a per-client credential instead. Users create them in the webmail under **Settings → Security → Agent access link**, which mints a 24-hour, unpinned token and hands back a pasteable URL — the token rides in the `#agent=` fragment so it never reaches a server log. The same card lists every live credential with its last-used IP and a revoke button.
 
 Use it wherever the mailbox password would go — as the password with the address as username, or as a bearer token on its own:
 
@@ -245,6 +245,20 @@ How it behaves:
 - **Optional expiry** in days, in addition to revocation.
 
 The API still performs a real IMAP login, so the mailbox password is captured when the token is minted and kept encrypted with `CREDENTIAL_ENCRYPTION_KEY`. The feature therefore requires credential encryption and is disabled without it. It also means **changing the mailbox password invalidates existing app passwords**, since the stored copy no longer matches — recreate them, or sign in to the webmail once to re-key them.
+
+## Webhook Inboxes
+
+The reverse of a mail rule: give an external service a URL and anything it POSTs lands in your INBOX as an email. Users mint them under **Settings → Security → Webhook inboxes**; the URL is shown once, at creation.
+
+```sh
+curl -X POST https://api.example.com/v1/hook/whi_... \
+  -H 'content-type: application/json' \
+  -d '{"alert":"disk 90% on nas"}'
+```
+
+The subject comes from `?subject=`, an `X-Webhook-Subject` header, or a `subject`/`title` field in a JSON body — otherwise it falls back to the inbox label. The body becomes the message text. Delivery is a real IMAP APPEND, so the mail behaves like any other: filters, push, and notifications all apply.
+
+Because the ingest path needs the mailbox password to APPEND, webhook inboxes share the app-password plumbing: the password is stored encrypted with `CREDENTIAL_ENCRYPTION_KEY`, the feature is disabled without it, and a password change invalidates existing inboxes until the user signs in once to re-key them. `WEBHOOK_INBOXES_ENABLED=false` turns the whole surface off; `WEBHOOK_INBOXES_MAX_PER_USER` caps how many each mailbox may hold (default 10).
 
 ## Admin API
 

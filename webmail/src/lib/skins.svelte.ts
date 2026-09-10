@@ -1133,6 +1133,11 @@ export const SKINS: Skin[] = [
                  * stays. */
                 .voice-fab { display: none !important; }
 
+                /* OWA's topbar carries no ambient chips — weather and the
+                 * calendar ticker stay hidden under this skin even when the
+                 * user has them enabled for other skins. */
+                .topbar .weather-wrap, .topbar .cal-ticker { display: none !important; }
+
                 /* OWA marks unread rows with a blue edge bar and a blue
                  * bolded subject — no dot, no tint. */
                 .row.unread { box-shadow: inset 3px 0 0 var(--accent) !important; }

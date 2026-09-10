@@ -6,7 +6,7 @@
     import { pwa, promptInstall, subscribePush, unsubscribePush, pushSubscriptionStatus } from '../../lib/pwa.svelte';
     import {
         settings, capabilities, setProxyImages, setAlwaysAllowImages, setDefaultFromAddress,
-        setDensity, setKeyboardShortcuts, setGroupThreads, setPageSize, setAccountChipDisplay,
+        setDensity, setGroupThreads, setPageSize, setAccountChipDisplay,
         setLlm, setUseCustomLlm,
         setPhishingScan, setTrackOpensDefault, setAiSuggestSubjectOnBlur, setDisplayName,
         setPhishingScanTimeoutSec, setPhishingScanPromptAddendum, setPhishingScanConfidenceFloor,
@@ -393,21 +393,6 @@
                     class:on={settings.groupThreads}
                     class:off={!settings.groupThreads}
                     onclick={() => setGroupThreads(!settings.groupThreads)}
-                >
-                    <span class="toggle-knob"></span>
-                </button>
-            </div>
-            <div class="ios-row toggle-row">
-                <div class="toggle-info">
-                    <span class="row-label">Keyboard shortcuts</span>
-                    <span class="muted small">j/k navigate, r reply, c compose, # trash</span>
-                </div>
-                <button
-                    type="button"
-                    class="toggle-switch"
-                    class:on={settings.keyboardShortcuts}
-                    class:off={!settings.keyboardShortcuts}
-                    onclick={() => setKeyboardShortcuts(!settings.keyboardShortcuts)}
                 >
                     <span class="toggle-knob"></span>
                 </button>

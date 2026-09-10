@@ -111,6 +111,61 @@ function scrubText(input, counts) {
     return out;
 }
 
+// --- PII pass -------------------------------------------------------------
+// Due-diligence layer for mail leaving to a *cloud* provider: addresses and
+// phone numbers the model doesn't need to see. Local providers (Ollama on
+// the LAN) skip this — nothing leaves the network anyway.
+
+// Email addresses. Keep the domain — "a message from @amazon.co.uk" still
+// summarizes fine — but drop the local part.
+const EMAIL_ADDR = /\b[A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+\.[A-Za-z]{2,})\b/g;
+
+// E.164-ish international numbers and common grouped formats. Requires a
+// leading + or a clear group structure so bare digit runs (order numbers,
+// dates) are left alone.
+const PHONE = /(?:\+\d{1,3}[\s.-]?)?(?:\(\d{2,4}\)[\s.-]?|\b\d{3,4}[\s.-])\d{3,4}[\s.-]\d{3,4}\b/g;
+
+function scrubPii(input, counts) {
+    if (typeof input !== 'string' || !input) return input;
+    let out = input;
+    out = out.replace(EMAIL_ADDR, (_m, domain) => {
+        counts['email-address'] = (counts['email-address'] || 0) + 1;
+        return `[redacted]@${domain}`;
+    });
+    out = out.replace(PHONE, (m) => {
+        const digits = m.replace(/\D/g, '');
+        if (digits.length < 7 || digits.length > 15) return m;
+        counts['phone-number'] = (counts['phone-number'] || 0) + 1;
+        return '[redacted:phone]';
+    });
+    return out;
+}
+
+// Same walk as scrubMessages, applying the PII pass on top.
+function scrubMessagesPii(messages) {
+    const counts = {};
+    if (!Array.isArray(messages)) return { messages, counts, redacted: 0 };
+    const cleaned = messages.map((m) => {
+        if (!m || typeof m !== 'object') return m;
+        if (typeof m.content === 'string') {
+            return { ...m, content: scrubPii(m.content, counts) };
+        }
+        if (Array.isArray(m.content)) {
+            return {
+                ...m,
+                content: m.content.map((part) => (
+                    part && typeof part === 'object' && typeof part.text === 'string'
+                        ? { ...part, text: scrubPii(part.text, counts) }
+                        : part
+                ))
+            };
+        }
+        return m;
+    });
+    const redacted = Object.values(counts).reduce((a, b) => a + b, 0);
+    return { messages: cleaned, counts, redacted };
+}
+
 // Walk an OpenAI-shaped messages array, scrubbing every text field we can
 // reach. Content may be a string or the multimodal array form.
 function scrubMessages(messages) {
@@ -137,4 +192,4 @@ function scrubMessages(messages) {
     return { messages: cleaned, counts, redacted };
 }
 
-module.exports = { scrubText, scrubMessages, luhnValid };
+module.exports = { scrubText, scrubMessages, scrubPii, scrubMessagesPii, luhnValid };

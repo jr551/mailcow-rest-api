@@ -45,6 +45,13 @@ function swBuildVersion(): Plugin {
 export default defineConfig({
     plugins: [svelte(), swBuildVersion()],
     base: '/webmail/',
+    define: {
+        // The API's own version, so the SPA can tell when the server has
+        // moved on and it's running a stale cached build.
+        __APP_VERSION__: JSON.stringify(
+            JSON.parse(readFileSync(resolve(__dirname, '../package.json'), 'utf8')).version
+        )
+    },
     build: {
         outDir: 'dist',
         emptyOutDir: true,

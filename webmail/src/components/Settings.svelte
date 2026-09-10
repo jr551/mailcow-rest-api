@@ -25,8 +25,8 @@
 
     import { onMount } from 'svelte';
     import {
-        settings, capabilities, setLlm, setUseCustomLlm, setDensity, setAlwaysAllowImages, setGroupThreads, setProxyImages, setPermanentSignIn, setPhishingScan, setTrackOpensDefault, setAiSuggestSubjectOnBlur, setPhishingScanTimeoutSec, setPhishingScanPromptAddendum, setPhishingScanConfidenceFloor,
-        setKeyboardShortcuts, setAiSystemPrompt, setAccountChipDisplay,
+        settings, capabilities, setLlm, setUseCustomLlm, setAiFeatures, setDensity, setAlwaysAllowImages, setGroupThreads, setProxyImages, setPermanentSignIn, setPhishingScan, setTrackOpensDefault, setAiSuggestSubjectOnBlur, setPhishingScanTimeoutSec, setPhishingScanPromptAddendum, setPhishingScanConfidenceFloor,
+        setAiSystemPrompt, setAccountChipDisplay,
         setDefaultFromAddress, setDisplayName, deriveNameFromAddress, setPageSize,
         addClientRule, updateClientRule, removeClientRule,
         type ClientRuleConditionType, type ClientRuleActionType,
@@ -57,6 +57,7 @@
         listBlockedRecipients, blockRecipient, unblockRecipient,
         listMailRules, addMailRule, removeMailRule,
         listAppPasswords, createAppPassword, revokeAppPassword, type AppPassword,
+        listWebhookInboxes, createWebhookInbox, revokeWebhookInbox, type WebhookInbox,
         ApiError, type MailboxInfo, type LoginEntry, type AliasEntry,
         type TempAliasEntry, type SenderPolicy,
         type MailRule, type MailRuleConditionType, type MailRuleActionType
@@ -352,26 +353,20 @@
     let blockedRecipients = $state<string[]>([]);
     let mailcowDbUnavailable = $state(false);
 
-    // App passwords: per-client credentials pinned to IP ranges. The token is
-    // shown once, on creation, and never retrievable afterwards.
+    // Agent access links: a pasteable URL carrying a 24-hour token an agent
+    // can use as a bearer credential. Backed by the app-password store with
+    // no IP pin — the point is handing it to something whose network you
+    // don't control, so scoping would just break it.
     let appPasswords = $state<AppPassword[]>([]);
-    let appPasswordLimit = $state(0);
     let appPasswordsUnavailable = $state(false);
-    let yourIp = $state<string | null>(null);
-    let apLabel = $state('');
-    let apRanges = $state('');
-    let apExpiryDays = $state('');
-    let apCreating = $state(false);
-    let apError = $state('');
-    let apNewToken = $state<string | null>(null);
-    let apTokenCopied = $state(false);
+    let agentLinkBusy = $state(false);
+    let agentLink = $state<string | null>(null);
+    let agentLinkCopied = $state(false);
 
     async function loadAppPasswords() {
         try {
             const r = await listAppPasswords();
             appPasswords = r.appPasswords;
-            appPasswordLimit = r.limit;
-            yourIp = r.yourIp;
             appPasswordsUnavailable = false;
         } catch (e) {
             // 404 when the server has the feature off (no credential key).
@@ -379,49 +374,101 @@
         }
     }
 
-    async function submitAppPassword() {
-        apError = '';
-        const ranges = apRanges.split(',').map((s) => s.trim()).filter(Boolean);
-        if (!apLabel.trim()) { apError = 'Give it a name so you can tell it apart later.'; return; }
-        if (!ranges.length) { apError = 'Add at least one IP address or range.'; return; }
-        apCreating = true;
+    async function createAgentLink() {
+        agentLinkBusy = true;
         try {
-            const days = apExpiryDays.trim() ? Number(apExpiryDays) : undefined;
             const created = await createAppPassword({
-                label: apLabel.trim(),
-                ipRanges: ranges,
-                ...(days && Number.isFinite(days) ? { expiresInDays: days } : {})
+                label: `agent-link ${new Date().toISOString().slice(0, 16)}`,
+                ipRanges: ['0.0.0.0/0', '::/0'],
+                expiresInDays: 1
             });
-            apNewToken = created.token;
-            apTokenCopied = false;
-            apLabel = '';
-            apRanges = '';
-            apExpiryDays = '';
+            // The token rides in the fragment so it never hits a server log.
+            agentLink = `${location.origin}/#agent=${created.token}`;
+            agentLinkCopied = false;
             await loadAppPasswords();
         } catch (e) {
-            apError = e instanceof ApiError ? e.message : 'Could not create the app password.';
+            showToast('error', e instanceof ApiError ? e.message : 'Could not create the link');
         } finally {
-            apCreating = false;
+            agentLinkBusy = false;
         }
+    }
+
+    async function copyAgentLink() {
+        if (!agentLink) return;
+        try {
+            await navigator.clipboard.writeText(agentLink);
+            agentLinkCopied = true;
+            setTimeout(() => { agentLinkCopied = false; }, 2000);
+        } catch { /* clipboard blocked — the field is selectable */ }
     }
 
     async function removeAppPassword(id: string, label: string) {
-        if (!confirm(`Revoke "${label}"? Any client using it stops working immediately.`)) return;
+        if (!confirm(`Revoke "${label}"? Anything using it stops working immediately.`)) return;
         try {
             await revokeAppPassword(id);
             await loadAppPasswords();
-            showToast('success', 'App password revoked');
+            showToast('success', 'Revoked');
         } catch {
-            showToast('error', 'Could not revoke that app password');
+            showToast('error', 'Could not revoke');
         }
     }
 
-    async function copyAppPasswordToken() {
-        if (!apNewToken) return;
+    // Webhook inboxes: user-minted URLs that turn a POST into an email in
+    // this mailbox. The URL is shown once, on creation.
+    let webhookInboxes = $state<WebhookInbox[]>([]);
+    let webhookLimit = $state(0);
+    let webhooksUnavailable = $state(false);
+    let whLabel = $state('');
+    let whCreating = $state(false);
+    let whError = $state('');
+    let whNewUrl = $state<string | null>(null);
+    let whUrlCopied = $state(false);
+
+    async function loadWebhookInboxes() {
         try {
-            await navigator.clipboard.writeText(apNewToken);
-            apTokenCopied = true;
-            setTimeout(() => { apTokenCopied = false; }, 2000);
+            const r = await listWebhookInboxes();
+            webhookInboxes = r.inboxes;
+            webhookLimit = r.limit;
+            webhooksUnavailable = false;
+        } catch (e) {
+            webhooksUnavailable = e instanceof ApiError && e.status === 404;
+        }
+    }
+
+    async function submitWebhookInbox() {
+        whError = '';
+        if (!whLabel.trim()) { whError = 'Give it a name so you can tell it apart later.'; return; }
+        whCreating = true;
+        try {
+            const created = await createWebhookInbox({ label: whLabel.trim() });
+            whNewUrl = created.url;
+            whUrlCopied = false;
+            whLabel = '';
+            await loadWebhookInboxes();
+        } catch (e) {
+            whError = e instanceof ApiError ? e.message : 'Could not create the webhook inbox.';
+        } finally {
+            whCreating = false;
+        }
+    }
+
+    async function removeWebhookInbox(id: string, label: string) {
+        if (!confirm(`Revoke "${label}"? POSTs to its URL stop arriving immediately.`)) return;
+        try {
+            await revokeWebhookInbox(id);
+            await loadWebhookInboxes();
+            showToast('success', 'Webhook inbox revoked');
+        } catch {
+            showToast('error', 'Could not revoke that webhook inbox');
+        }
+    }
+
+    async function copyWebhookUrl() {
+        if (!whNewUrl) return;
+        try {
+            await navigator.clipboard.writeText(whNewUrl);
+            whUrlCopied = true;
+            setTimeout(() => { whUrlCopied = false; }, 2000);
         } catch { /* clipboard blocked — the field is selectable */ }
     }
 
@@ -466,6 +513,7 @@
         }
         try { const r = await getLogins(10); logins = r.logins; } catch { /* skip */ }
         await loadAppPasswords();
+        await loadWebhookInboxes();
         try { const r = await getAliases(); aliases = r.aliases; } catch { /* skip */ }
         try { const r = await getTempAliases(); tempAliases = r.aliases; } catch { /* skip */ }
         try { const r = await listBlockedSenders(); blocked = r.list; } catch { /* skip */ }
@@ -1080,29 +1128,29 @@
                     {/if}
 
                     {#if !appPasswordsUnavailable}
-                        <div class="card" data-testid="settings-app-passwords">
-                            <h4><Icon name="key" size={13} /> App passwords</h4>
+                        <div class="card" data-testid="settings-agent-link">
+                            <h4><Icon name="key" size={13} /> Agent access link</h4>
                             <p class="muted small">
-                                Sign in from an MCP client, a script, or anything else without handing it your
-                                mailbox password. Each one only works from the IP addresses you list here, and
-                                you can revoke it on its own.
+                                A pasteable link that gives an agent (MCP client, script, CI job) access to
+                                your mailbox for 24 hours — no mailbox password, no IP pinning. The token
+                                rides in the URL fragment so it never reaches a server log.
                             </p>
 
-                            {#if apNewToken}
-                                <div class="ap-token" data-testid="app-password-token">
+                            {#if agentLink}
+                                <div class="ap-token" data-testid="agent-link-token">
                                     <p class="small"><strong>Copy this now — it is not shown again.</strong></p>
                                     <div class="ap-token-row">
-                                        <input class="ap-token-input" readonly value={apNewToken} onclick={(e) => (e.currentTarget as HTMLInputElement).select()} />
-                                        <button type="button" class="btn btn-secondary" onclick={copyAppPasswordToken}>
-                                            <Icon name={apTokenCopied ? 'check' : 'copy'} size={12} />
-                                            {apTokenCopied ? 'Copied' : 'Copy'}
+                                        <input class="ap-token-input" readonly value={agentLink} onclick={(e) => (e.currentTarget as HTMLInputElement).select()} />
+                                        <button type="button" class="btn btn-secondary" onclick={copyAgentLink}>
+                                            <Icon name={agentLinkCopied ? 'check' : 'copy'} size={12} />
+                                            {agentLinkCopied ? 'Copied' : 'Copy'}
                                         </button>
                                     </div>
                                     <p class="muted small">
-                                        Use it as the password with your email address as the username, or as a
-                                        bearer token on its own.
+                                        Paste it to the agent — it reads the token after <code>#agent=</code>
+                                        and uses it as a bearer credential. Expires in 24 h.
                                     </p>
-                                    <button type="button" class="btn btn-ghost" onclick={() => { apNewToken = null; }}>Done</button>
+                                    <button type="button" class="btn btn-ghost" onclick={() => { agentLink = null; }}>Done</button>
                                 </div>
                             {/if}
 
@@ -1133,39 +1181,84 @@
                                     {/each}
                                 </ul>
                             {:else}
-                                <p class="muted small">No app passwords yet.</p>
+                                <p class="muted small">No active links.</p>
                             {/if}
 
-                            {#if appPasswordLimit && appPasswords.length >= appPasswordLimit}
-                                <p class="muted small">You have reached the limit of {appPasswordLimit}. Revoke one to create another.</p>
+                            <button
+                                type="button"
+                                class="btn btn-primary"
+                                disabled={agentLinkBusy}
+                                onclick={createAgentLink}
+                                data-testid="create-agent-link"
+                            >{agentLinkBusy ? 'Creating…' : 'Create 24-hour agent link'}</button>
+                        </div>
+                    {/if}
+
+                    {#if !webhooksUnavailable}
+                        <div class="card" data-testid="settings-webhook-inboxes">
+                            <h4><Icon name="inbox" size={13} /> Webhook inboxes</h4>
+                            <p class="muted small">
+                                Give a service a URL — anything it POSTs lands in your INBOX as an email.
+                                Optional <code>?subject=</code> or <code>X-Webhook-Subject</code> sets the subject.
+                            </p>
+
+                            {#if whNewUrl}
+                                <div class="ap-token" data-testid="webhook-inbox-url">
+                                    <p class="small"><strong>Copy this now — it is not shown again.</strong></p>
+                                    <div class="ap-token-row">
+                                        <input class="ap-token-input" readonly value={whNewUrl} onclick={(e) => (e.currentTarget as HTMLInputElement).select()} />
+                                        <button type="button" class="btn btn-secondary" onclick={copyWebhookUrl}>
+                                            <Icon name={whUrlCopied ? 'check' : 'copy'} size={12} />
+                                            {whUrlCopied ? 'Copied' : 'Copy'}
+                                        </button>
+                                    </div>
+                                    <p class="muted small">POST any body to it — JSON, form data, plain text.</p>
+                                    <button type="button" class="btn btn-ghost" onclick={() => { whNewUrl = null; }}>Done</button>
+                                </div>
+                            {/if}
+
+                            {#if webhookInboxes.length}
+                                <ul class="ap-rows">
+                                    {#each webhookInboxes as wh (wh.id)}
+                                        <li class="ap-row" data-testid="webhook-inbox-row">
+                                            <div class="ap-main">
+                                                <span class="ap-label">{wh.label}</span>
+                                            </div>
+                                            <div class="ap-meta muted small">
+                                                {#if wh.lastUsedAt}
+                                                    Last delivery {formatFullDate(new Date(wh.lastUsedAt).toISOString())}
+                                                {:else}
+                                                    Never used
+                                                {/if}
+                                            </div>
+                                            <button
+                                                type="button"
+                                                class="btn ap-revoke"
+                                                onclick={() => removeWebhookInbox(wh.id, wh.label)}
+                                            >Revoke</button>
+                                        </li>
+                                    {/each}
+                                </ul>
+                            {:else}
+                                <p class="muted small">No webhook inboxes yet.</p>
+                            {/if}
+
+                            {#if webhookLimit && webhookInboxes.length >= webhookLimit}
+                                <p class="muted small">You have reached the limit of {webhookLimit}. Revoke one to create another.</p>
                             {:else}
                                 <div class="ap-form">
                                     <label class="ap-field">
                                         <span class="small">Name</span>
-                                        <input bind:value={apLabel} placeholder="MCP on my laptop" maxlength="100" />
+                                        <input bind:value={whLabel} placeholder="Uptime monitor" maxlength="100" data-testid="webhook-inbox-label" />
                                     </label>
-                                    <label class="ap-field">
-                                        <span class="small">Allowed IPs or ranges (comma separated)</span>
-                                        <input bind:value={apRanges} placeholder="203.0.113.4, 10.0.0.0/8" />
-                                    </label>
-                                    {#if yourIp}
-                                        <button
-                                            type="button"
-                                            class="btn btn-ghost ap-useip"
-                                            onclick={() => { apRanges = apRanges.trim() ? `${apRanges.trim()}, ${yourIp}` : (yourIp as string); }}
-                                        >Add my current IP ({yourIp})</button>
-                                    {/if}
-                                    <label class="ap-field">
-                                        <span class="small">Expires after (days, optional)</span>
-                                        <input bind:value={apExpiryDays} type="number" min="1" max="3650" placeholder="never" />
-                                    </label>
-                                    {#if apError}<p class="ap-error small">{apError}</p>{/if}
+                                    {#if whError}<p class="ap-error small">{whError}</p>{/if}
                                     <button
                                         type="button"
                                         class="btn btn-primary"
-                                        disabled={apCreating}
-                                        onclick={submitAppPassword}
-                                    >{apCreating ? 'Creating…' : 'Create app password'}</button>
+                                        disabled={whCreating}
+                                        onclick={submitWebhookInbox}
+                                        data-testid="create-webhook-inbox"
+                                    >{whCreating ? 'Creating…' : 'Create webhook inbox'}</button>
                                 </div>
                             {/if}
                         </div>
@@ -2153,24 +2246,6 @@
 
                 <h4 class="section-head"><Icon name="key" size={13} /> Input</h4>
 
-                <div class="form-row">
-                    <div class="row-text">
-                        <strong>Keyboard shortcuts</strong>
-                        <span class="muted">
-                            j/k to navigate, r/a/f to reply, c to compose, # to trash, ? for help.
-                            Off by default to avoid surprising key presses when a search field loses focus.
-                        </span>
-                    </div>
-                    <label class="toggle compact">
-                        <input
-                            type="checkbox"
-                            checked={settings.keyboardShortcuts}
-                            onchange={(e) => setKeyboardShortcuts((e.currentTarget as HTMLInputElement).checked)}
-                            data-testid="settings-shortcuts-toggle"
-                        />
-                        <span>{settings.keyboardShortcuts ? 'On' : 'Off'}</span>
-                    </label>
-                </div>
 
                 <h4 class="section-head" data-testid="settings-privacy-heading"><Icon name="shield" size={13} /> Reading</h4>
 
@@ -2471,6 +2546,19 @@
                         Your key stays in this browser; the chat bot calls the provider directly.
                     </p>
 
+                <label class="toggle">
+                    <input
+                        type="checkbox"
+                        checked={settings.aiFeatures}
+                        onchange={(e) => setAiFeatures((e.currentTarget as HTMLInputElement).checked)}
+                        data-testid="settings-ai-features"
+                    />
+                    <span>AI features</span>
+                </label>
+                <p class="muted small" style="margin:-4px 0 8px 26px;">
+                    Off hides the chat bot, AI panel, and every AI suggestion — nothing is sent to any model.
+                </p>
+
                 {#if capabilities.caps && !capabilities.caps.configured}
                     <div class="banner warn">
                         <Icon name="info" size={14} />
@@ -2483,7 +2571,7 @@
                     <div class="banner ok">
                         <Icon name="info" size={14} />
                         <span>
-                            Server default: <code>{capabilities.caps.preset || capabilities.caps.kind}</code>
+                            Mailserver proxy → <code>{capabilities.caps.preset || capabilities.caps.kind}</code>
                             {capabilities.caps.model ? ` · ${capabilities.caps.model}` : ''}
                         </span>
                     </div>
@@ -2496,8 +2584,12 @@
                         onchange={(e) => setUseCustomLlm((e.currentTarget as HTMLInputElement).checked)}
                         data-testid="settings-use-custom"
                     />
-                    <span>Use my own provider</span>
+                    <span>Use a local LLM</span>
                 </label>
+                <p class="muted small" style="margin:-4px 0 8px 26px;">
+                    Point it at your own Ollama or other OpenAI-compatible server — it runs
+                    client-side, so your mail never leaves this browser for AI features.
+                </p>
 
                 <div class="form" class:disabled={!settings.useCustomLlm}>
                     <div class="row">

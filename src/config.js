@@ -247,6 +247,15 @@ module.exports = Object.freeze({
         maxPerUser: num(process.env.APP_PASSWORDS_MAX_PER_USER, 25)
     },
 
+    webhookInboxes: {
+        // User-minted "webhook → email" ingest URLs. Needs credential
+        // encryption for the same reason app passwords do: the mailbox
+        // password is kept so the ingest route can APPEND over IMAP.
+        enabled: bool(process.env.WEBHOOK_INBOXES_ENABLED, true),
+        dbPath: dataFile(process.env.WEBHOOK_INBOXES_DB_PATH, 'webhook-inboxes.db'),
+        maxPerUser: num(process.env.WEBHOOK_INBOXES_MAX_PER_USER, 10)
+    },
+
     admin: {
         // Bearer token for /v1/admin/*. Unset leaves the whole admin surface
         // unrouted (404), so a deployment that never configures one is not

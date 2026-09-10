@@ -24,7 +24,6 @@ export interface UiState {
     composeOpen: boolean;
     composeContext: { replyTo?: MessageDetail | null; mode?: 'new' | 'reply' | 'replyAll' | 'forward' } | null;
     settingsOpen: boolean;
-    helpOpen: boolean;
     setupOpen: boolean;
     aiPanelOpen: boolean;
     selected: Set<number>;
@@ -113,7 +112,6 @@ const initial: UiState = {
     composeOpen: false,
     composeContext: null,
     settingsOpen: false,
-    helpOpen: false,
     setupOpen: false,
     aiPanelOpen: false,
     selected: new Set<number>(),

@@ -49,6 +49,8 @@ const iconProxyRoutes = require('./routes/icon-proxy');
 const trackingRoutes = require('./routes/tracking');
 const imageProxyRoutes = require('./routes/image-proxy');
 const telemetryRoutes = require('./routes/telemetry');
+const webhookInboxRoutes = require('./routes/webhook-inbox');
+const { createWebhookInboxStore } = require('./webhook-inbox-store');
 const { createMailcowDb } = require('./mailcow-db');
 const { createSieveManager } = require('./sieve-manager');
 const pkg = require('../package.json');
@@ -402,6 +404,20 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         app.log.warn('app passwords disabled — no credential encryption key available');
     }
 
+    // Webhook inboxes retain the mailbox password for the same reason app
+    // passwords do — the ingest route has to APPEND over IMAP — so the
+    // feature is gated on the secret box in the same way.
+    const webhookInboxStore = config.webhookInboxes.enabled && secretBox.enabled
+        ? createWebhookInboxStore({
+            filePath: config.webhookInboxes.dbPath,
+            secretBox,
+            maxPerUser: config.webhookInboxes.maxPerUser
+        })
+        : null;
+    if (config.webhookInboxes.enabled && !secretBox.enabled) {
+        app.log.warn('webhook inboxes disabled — no credential encryption key available');
+    }
+
     app.decorate('adminSettings', adminSettings);
     if (appPasswordStore) app.decorate('appPasswordStore', appPasswordStore);
     app.decorate('cache', cache);
@@ -534,7 +550,7 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
     });
 
     // Expose the OpenAPI document at the canonical /openapi.json path.
-    app.get('/openapi.json', { config: { public: true }, schema: { hide: true } }, async (req) => {
+    app.get('/openapi.json', { config: { public: true, rateLimit: false }, schema: { hide: true } }, async (req) => {
         const doc = app.swagger();
         return {
             ...doc,
@@ -572,10 +588,14 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
     app.addHook('onRequest', createAuthHook({ cache, imap: imapCfg, appPasswords: appPasswordStore }));
 
     app.get('/health', {
-        config: { public: true },
+        // Probed by monitors and the webmail's setup diagnostics — exempt
+        // from the limiter so a busy client IP can't knock itself offline.
+        config: { public: true, rateLimit: false },
         schema: { tags: ['system'], summary: 'Liveness/health check' }
     }, async () => ({
         ok: true,
+        // Lets the SPA notice it's running a stale build and self-refresh.
+        version: pkg.version,
         cache: cache.size(),
         pool: pool.count(),
         capabilities: {
@@ -594,7 +614,7 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         }
     }));
 
-    await app.register(sessionRoutes, { cache, imap: imapCfg, sessionTtlMs: config.session.ttlMs, appPasswords: appPasswordStore });
+    await app.register(sessionRoutes, { cache, imap: imapCfg, sessionTtlMs: config.session.ttlMs, appPasswords: appPasswordStore, webhookInboxes: webhookInboxStore });
     await app.register(mailboxRoutes, { pool, imapCache });
     await app.register(messageRoutes, { pool, ocrCache, imapCache });
     await app.register(aiRoutes, { aiCache });
@@ -639,6 +659,7 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
     await app.register(appRoutes, { distDir: process.env.ANDROID_DIST_DIR || '/app/dist/android' });
     await app.register(adminRoutes, { adminSettings, appPasswordStore });
     await app.register(appPasswordRoutes, { store: appPasswordStore });
+    await app.register(webhookInboxRoutes, { store: webhookInboxStore, pool, getPublicBaseUrl });
     await app.register(iconProxyRoutes);
     await app.register(trackingRoutes, { store: trackingStore, smtp: config.smtp });
     await app.register(imageProxyRoutes, { cache: imageProxyCache, maxBytesPerDay: config.imageProxy.maxBytesPerDay });
@@ -659,6 +680,7 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         if (calendarSubStore) calendarSubStore.close();
         if (adminSettings) adminSettings.close();
         if (appPasswordStore) appPasswordStore.close();
+        if (webhookInboxStore) webhookInboxStore.close();
         if (mailcowDb) await mailcowDb.close();
     });
 

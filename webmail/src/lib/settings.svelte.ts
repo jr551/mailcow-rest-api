@@ -32,10 +32,10 @@ export type ListFilter = 'all' | 'unread' | 'starred' | 'attachments' | 'ai-sort
 export interface Settings {
     llm: LlmConfig;
     useCustomLlm: boolean; // when false, server defaults are used (no provider override sent)
+    /** Master switch for every AI surface (chat bot, AI panel, suggestions). */
+    aiFeatures: boolean;
     density: Density;
     listFilter: ListFilter;
-    /** When true, j/k/r/a/c/s/u/#/etc. are bound to actions globally. Off by default. */
-    keyboardShortcuts: boolean;
     /** User-supplied system prompt for the AI surface. Empty → use the built-in default. */
     aiSystemPrompt: string;
     /** What the top-right account chip shows: 'email' or 'name'. */
@@ -179,10 +179,10 @@ function load(): Settings {
             return {
                 llm: { ...defaultLlm, ...(parsed.llm || {}) },
                 useCustomLlm: !!parsed.useCustomLlm,
+                aiFeatures: parsed.aiFeatures !== false,
                 density: parsed.density === 'compact' ? 'compact' : 'comfortable',
                 listFilter: ['all', 'unread', 'starred', 'attachments', 'ai-sorted'].includes(parsed.listFilter)
                     ? parsed.listFilter : 'all',
-                keyboardShortcuts: !!parsed.keyboardShortcuts,
                 aiSystemPrompt: typeof parsed.aiSystemPrompt === 'string' ? parsed.aiSystemPrompt : '',
                 accountChipDisplay: parsed.accountChipDisplay === 'name' ? 'name' : 'email',
                 defaultFromAddress: typeof parsed.defaultFromAddress === 'string' ? parsed.defaultFromAddress : '',
@@ -237,9 +237,9 @@ function load(): Settings {
     return {
         llm: { ...defaultLlm },
         useCustomLlm: false,
+        aiFeatures: true,
         density: 'comfortable',
         listFilter: 'all',
-        keyboardShortcuts: false,
         aiSystemPrompt: '',
         accountChipDisplay: 'email',
         defaultFromAddress: '',
@@ -318,6 +318,11 @@ export function setUseCustomLlm(on: boolean) {
     persist(state);
 }
 
+export function setAiFeatures(on: boolean) {
+    state.aiFeatures = on;
+    persist(state);
+}
+
 export function setDensity(d: Density) {
     state.density = d;
     persist(state);
@@ -328,10 +333,6 @@ export function setListFilter(f: ListFilter) {
     persist(state);
 }
 
-export function setKeyboardShortcuts(on: boolean) {
-    state.keyboardShortcuts = on;
-    persist(state);
-}
 
 export function setAiSystemPrompt(prompt: string) {
     state.aiSystemPrompt = prompt;
@@ -568,9 +569,9 @@ export function setCalendarTickerTitles(on: boolean) {
 export function reset() {
     state.llm = { ...defaultLlm };
     state.useCustomLlm = false;
+    state.aiFeatures = true;
     state.density = 'comfortable';
     state.listFilter = 'all';
-    state.keyboardShortcuts = false;
     state.aiSystemPrompt = '';
     state.accountChipDisplay = 'email';
     state.defaultFromAddress = '';
@@ -725,6 +726,7 @@ export async function probeCapabilities(): Promise<void> {
 //   - Server has its own LLM_API_KEY (caps.configured), OR
 //   - Server has LLM_ALLOW_CLIENT_OVERRIDE=true AND the user supplied a key
 export function aiAvailable(): boolean {
+    if (!state.aiFeatures) return false;
     if (!capState.caps) return false;
     if (capState.caps.configured) return true;
     if (capState.caps.allowClientOverride && state.useCustomLlm && state.llm.apiKey) return true;

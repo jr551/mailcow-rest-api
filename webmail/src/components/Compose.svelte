@@ -148,6 +148,9 @@
     // initial state mirrors settings.trackOpensDefault so users who always
     // want tracking only have to flip it once in Settings.
     let trackOpens = $state(settings.trackOpensDefault);
+    // Tracking lives behind a collapsed "Advanced" row — it's a niche
+    // feature and shouldn't sit in the main toolbar.
+    let advancedOpen = $state(false);
 
     // AI history reference. When the To field contains a single valid
     // address, we kick off a one-shot summary of the user's prior
@@ -824,17 +827,30 @@
                 </button>
                 <button
                     type="button"
-                    class={`btn btn-ghost spy-btn icon-only ${trackOpens ? 'on' : ''}`}
-                    title={trackOpens
-                        ? 'Invisible Tracker is ON — you\'ll get an email when this message is opened. Click to disable.'
-                        : 'Invisible Tracker — get an email when the recipient opens this message.'}
-                    aria-label={trackOpens ? 'Disable invisible tracker' : 'Enable invisible tracker'}
-                    aria-pressed={trackOpens}
-                    onclick={() => { trackOpens = !trackOpens; }}
-                    data-testid="compose-spy-btn"
+                    class="btn btn-ghost"
+                    title="Advanced options"
+                    aria-expanded={advancedOpen}
+                    onclick={() => { advancedOpen = !advancedOpen; }}
+                    data-testid="compose-advanced-btn"
                 >
-                    <Icon name="spy" size={16} />
+                    <Icon name={advancedOpen ? 'chevronUp' : 'chevronDown'} size={14} />
+                    <span class="muted small">Advanced</span>
                 </button>
+                {#if advancedOpen}
+                    <button
+                        type="button"
+                        class={`btn btn-ghost spy-btn icon-only ${trackOpens ? 'on' : ''}`}
+                        title={trackOpens
+                            ? 'Invisible Tracker is ON — you\'ll get an email when this message is opened. Click to disable.'
+                            : 'Invisible Tracker — get an email when the recipient opens this message.'}
+                        aria-label={trackOpens ? 'Disable invisible tracker' : 'Enable invisible tracker'}
+                        aria-pressed={trackOpens}
+                        onclick={() => { trackOpens = !trackOpens; }}
+                        data-testid="compose-spy-btn"
+                    >
+                        <Icon name="spy" size={16} />
+                    </button>
+                {/if}
                 {#if trackOpens}
                     <!-- Tracking is invisible to the recipient, so it must be
                          plainly visible to the sender for as long as it is on

@@ -29,7 +29,6 @@
     import AiPanel from './AiPanel.svelte';
     import ThemeToggle from './ThemeToggle.svelte';
     import Settings from './Settings.svelte';
-    import HelpDialog from './HelpDialog.svelte';
     import SetupGuide from './SetupGuide.svelte';
     import InboxSummary from './InboxSummary.svelte';
     import LatencyChip from './LatencyChip.svelte';
@@ -63,7 +62,7 @@
     import { myAvatars } from '../lib/avatars.svelte';
     import Avatar from './Avatar.svelte';
     import { sentStatusState, resumePolling, dismissSent, clearOldSent } from '../lib/sent-status.svelte';
-    import { isVoiceAvailable, isSttAvailable } from '../lib/voice.svelte';
+    import { isVoiceAvailable, isSttAvailable, voicePrefs } from '../lib/voice.svelte';
     import type { MessageDetail as MessageDetailType } from '../lib/api';
 
     // Page size resolves dynamically from settings.pageSize. 'unlimited'
@@ -209,6 +208,27 @@
             if (!res.ok) { serverPingState = 'offline'; serverPingMs = null; return; }
             serverPingMs = dt;
             serverPingState = dt > 800 ? 'slow' : 'live';
+            // If the server reports a newer app version than this build,
+            // the SPA is running a stale cached shell — drop every cache
+            // and reload once. sessionStorage guards against a loop if the
+            // static files genuinely haven't updated yet.
+            try {
+                const body = await res.clone().json();
+                const serverV = typeof body?.version === 'string' ? body.version : '';
+                if (serverV && serverV !== __APP_VERSION__
+                    && !sessionStorage.getItem('webmail.reloadedFor')) {
+                    sessionStorage.setItem('webmail.reloadedFor', serverV);
+                    if ('caches' in window) {
+                        const keys = await caches.keys();
+                        await Promise.all(keys.map((k) => caches.delete(k)));
+                    }
+                    if ('serviceWorker' in navigator) {
+                        try { (await navigator.serviceWorker.getRegistration('/webmail/'))?.update(); } catch { /* noop */ }
+                    }
+                    window.location.reload();
+                    return;
+                }
+            } catch { /* non-JSON health body — ignore */ }
         } catch {
             serverPingState = 'offline';
             serverPingMs = null;
@@ -1234,24 +1254,19 @@
             }
             return;
         }
-        // Esc, ArrowUp/Down and `?` (help) are always live; the rest of the
-        // single-key shortcuts (j/k/r/a/c/s/u/#/e/f/x/z/etc.) are off by
-        // default and gated on settings.keyboardShortcuts to avoid trapping
-        // people who just want to type in a search field that lost focus.
-        const alwaysLive = e.key === 'Escape' || e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === '?' || e.key === '/';
-        if (!alwaysLive && !settings.keyboardShortcuts) return;
+        // Only Escape and arrow navigation stay live — the single-key
+        // shortcut layer (j/k/r/a/c/s/u/#/?/etc.) was removed.
         const idx = ui.messages.findIndex((m) => m.uid === ui.selectedUid);
-        if (e.key === 'j' || e.key === 'ArrowDown') {
+        if (e.key === 'ArrowDown') {
             const next = ui.messages[Math.min(ui.messages.length - 1, idx < 0 ? 0 : idx + 1)];
             if (next) { playClick(); selectMessage(next.uid); }
             e.preventDefault();
-        } else if (e.key === 'k' || e.key === 'ArrowUp') {
+        } else if (e.key === 'ArrowUp') {
             const prev = ui.messages[Math.max(0, idx < 0 ? 0 : idx - 1)];
             if (prev) { playClick(); selectMessage(prev.uid); }
             e.preventDefault();
         } else if (e.key === 'Escape') {
             if (ui.composeOpen) ui.composeOpen = false;
-            else if (ui.helpOpen) ui.helpOpen = false;
             else if (ui.settingsOpen) ui.settingsOpen = false;
             else if (ui.aiPanelOpen) ui.aiPanelOpen = false;
             else if (ui.selected.size > 0) clearSelection();
@@ -1259,36 +1274,6 @@
                 ui.selectedUid = null;
                 ui.detail = null;
             }
-        } else if (e.key === 's' && ui.selectedUid != null) {
-            toggleStar(ui.selectedUid);
-        } else if (e.key === 'u' && ui.selectedUid != null) {
-            toggleUnread(ui.selectedUid);
-        } else if (e.key === '#' && ui.selectedUid != null) {
-            trashMessage(ui.selectedUid);
-        } else if (e.key === 'e' && ui.selectedUid != null) {
-            archiveMessage(ui.selectedUid);
-        } else if (e.key === 'r' && ui.detail) {
-            openCompose(ui.detail, 'reply');
-        } else if (e.key === 'a' && ui.detail) {
-            openCompose(ui.detail, 'replyAll');
-        } else if (e.key === 'f' && ui.detail) {
-            openCompose(ui.detail, 'forward');
-        } else if (e.key === 'x' && ui.selectedUid != null) {
-            toggleSelected(ui.selectedUid);
-        } else if (e.key === 'c') {
-            openCompose();
-        } else if (e.key === '/') {
-            const el = document.querySelector<HTMLInputElement>('input[data-testid="search-input"]');
-            if (el) {
-                el.focus();
-                e.preventDefault();
-            }
-        } else if (e.key === '?') {
-            ui.helpOpen = true;
-            e.preventDefault();
-        } else if ((e.key === 'z' || e.key === 'Z') && ui.undo) {
-            performUndo();
-            e.preventDefault();
         }
     }
 
@@ -1730,15 +1715,6 @@
                                 <Icon name="download" size={14} /> Connect a device
                             </button>
                         </li>
-                        <li>
-                            <button
-                                type="button"
-                                role="menuitem"
-                                onclick={() => { accountMenuOpen = false; ui.helpOpen = true; }}
-                            >
-                                <Icon name="info" size={14} /> Keyboard shortcuts
-                            </button>
-                        </li>
                         <li role="separator" aria-orientation="horizontal" class="account-sep"></li>
                         <li>
                             <button
@@ -1905,7 +1881,7 @@
             />
             {/if}
         </main>
-        {#if ui.aiPanelOpen}
+        {#if ui.aiPanelOpen && settings.aiFeatures}
             <AiPanel onClose={() => (ui.aiPanelOpen = false)} />
         {/if}
         {/if}
@@ -1931,17 +1907,14 @@
         <Settings onClose={() => (ui.settingsOpen = false)} />
     {/if}
 
-    {#if ui.helpOpen}
-        <HelpDialog onClose={() => (ui.helpOpen = false)} />
-    {/if}
 
     {#if ui.setupOpen}
         <SetupGuide onClose={() => (ui.setupOpen = false)} />
     {/if}
 
-    {#if !ui.aiPanelOpen && ui.app !== 'ai' && ui.app !== 'drive'}
+    {#if !ui.aiPanelOpen && ui.app !== 'ai' && ui.app !== 'drive' && settings.aiFeatures}
         <ChatBot composeOpen={ui.composeOpen} />
-        {#if isVoiceAvailable() && isSttAvailable()}
+        {#if voicePrefs.enabled && isVoiceAvailable() && isSttAvailable()}
             <button
                 type="button"
                 class="voice-fab"

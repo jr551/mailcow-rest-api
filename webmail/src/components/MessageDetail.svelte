@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { fade } from 'svelte/transition';
     import { ui, showToast } from '../lib/store.svelte';
     import { markSpam, markTrusted, isTrustedSender } from '../lib/spam-feedback.svelte';
     import { themeState } from '../lib/theme.svelte';
@@ -43,6 +44,13 @@
     let folderPickerAtt = $state<Attachment | null>(null);
     let folderPickerBlob = $state<Blob | null>(null);
 
+    // Keep the previous message on screen while the next one loads so the
+    // pane crossfades instead of flashing a spinner. `shown` only changes
+    // once a fresh body has actually arrived.
+    let shown = $state<MessageDetail | null>(null);
+    $effect(() => {
+        if (ui.detail) shown = ui.detail;
+    });
     // --- Phishing scan -----------------------------------------------
     let phishingScanning = $state(false);
     let phishingResult = $state<PhishingScanResult | null>(null);
@@ -662,6 +670,44 @@
         }
     }
 
+    // AI-suggested block: ask the model for the broadest sensible pattern
+    // (usually the whole domain, or a subdomain wildcard) and confirm with
+    // the user before applying. Falls back to the exact address when AI
+    // isn't configured or declines.
+    let aiBlockBusy = $state(false);
+    async function doAiBlockSender(d: MessageDetail) {
+        const addr = d.envelope.from?.[0]?.address;
+        if (!addr || aiBlockBusy) return;
+        moveOpen = false;
+        aiBlockBusy = true;
+        try {
+            const { suggestBlockPattern } = await import('../lib/block-suggest');
+            const suggestion = await suggestBlockPattern({
+                from: addr,
+                fromName: d.envelope.from?.[0]?.name || '',
+                subject: d.envelope.subject || ''
+            });
+            const pattern = suggestion || addr;
+            const scope = pattern === addr ? addr : pattern;
+            if (!confirm(`Block all mail matching ${scope}?`)) return;
+            await blockSender(pattern);
+            showToast('success', `Blocked ${pattern}`);
+        } catch (err) {
+            // AI unavailable or failed — fall back to the exact address.
+            if (confirm(`Couldn't get a suggestion — block ${addr} exactly?`)) {
+                try {
+                    await blockSender(addr);
+                    showToast('success', `Blocked ${addr}`);
+                } catch (e2) {
+                    const msg = e2 instanceof ApiError ? (e2.detail || e2.title) : (e2 as Error).message;
+                    showToast('error', msg || 'Could not block sender');
+                }
+            }
+        } finally {
+            aiBlockBusy = false;
+        }
+    }
+
     async function doAllowSender(addr: string | null | undefined) {
         if (!addr) return;
         moveOpen = false;
@@ -822,7 +868,7 @@
 <svelte:window onclick={onWindowClick} />
 
 <section class="detail" aria-label="Message detail">
-    {#if !ui.detail && !ui.detailLoading && !ui.detailError}
+    {#if !shown && !ui.detailLoading && !ui.detailError}
         <div class="empty muted">
             <div class="empty-icon" aria-hidden="true">
                 <Icon name="mail" size={36} />
@@ -832,12 +878,12 @@
                 Tip — use <kbd>j</kbd> / <kbd>k</kbd> to navigate, <kbd>Enter</kbd> to open
             </p>
         </div>
-    {:else if ui.detailLoading}
+    {:else if !shown && ui.detailLoading}
         <div class="empty"><div class="spinner"></div></div>
-    {:else if ui.detailError}
+    {:else if ui.detailError && !shown}
         <div class="empty error" role="alert">{ui.detailError}</div>
-    {:else if ui.detail}
-        {@const d = ui.detail}
+    {:else if shown}
+        {@const d = shown}
         {@const _isTrack = isTrackingEmail(d.envelope.subject)}
         {@const _isSms = isSmsMessage({
             from: d.envelope.from,
@@ -854,6 +900,8 @@
             ...((d.envelope.to || []).map((a) => a.address)),
             ...((d.envelope.cc || []).map((a) => a.address))
         ])}
+        {#key d.uid}
+        <div class="detail-swap" in:fade={{ duration: 140 }}>
         <header class="detail-header">
             <div class="back" >
                 <button
@@ -1211,6 +1259,14 @@
                                         onclick={() => doBlockSender(d.envelope.from?.[0]?.address)}
                                         data-testid="block-sender-btn"
                                     ><Icon name="spam" size={13} /> Block {d.envelope.from?.[0]?.address || 'sender'}</button>
+                                <li>
+                                    <button
+                                        type="button"
+                                        role="menuitem"
+                                        disabled={aiBlockBusy}
+                                        onclick={() => doAiBlockSender(d)}
+                                        data-testid="ai-block-sender-btn"
+                                    ><Icon name="sparkles" size={13} /> {aiBlockBusy ? 'Thinking…' : 'Block senders like this (AI)'}</button>
                                 </li>
                                 <li>
                                     <button
@@ -1597,6 +1653,8 @@
                 </ul>
             </section>
         {/if}
+        </div>
+        {/key}
     {/if}
 </section>
 
@@ -1694,6 +1752,14 @@
         min-width: 0;
         min-height: 0;
         background: var(--bg-surface);
+    }
+    /* Keyed wrapper that fades the new message in over the old one. */
+    .detail-swap {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-height: 0;
+        min-width: 0;
     }
     .empty {
         flex: 1;

@@ -545,6 +545,26 @@ export async function revokeAppPassword(id: string): Promise<void> {
     return request('DELETE', `/v1/me/app-passwords/${encodeURIComponent(id)}`);
 }
 
+export interface WebhookInbox {
+    id: string;
+    label: string;
+    createdAt: number | null;
+    lastUsedAt: number | null;
+}
+
+export async function listWebhookInboxes(): Promise<{ inboxes: WebhookInbox[]; limit: number }> {
+    return request('GET', '/v1/me/webhook-inboxes');
+}
+
+/** The `url`/`token` are returned only here — they cannot be fetched again. */
+export async function createWebhookInbox(opts: { label: string }): Promise<WebhookInbox & { url: string; token: string }> {
+    return request('POST', '/v1/me/webhook-inboxes', { body: opts });
+}
+
+export async function revokeWebhookInbox(id: string): Promise<void> {
+    return request('DELETE', `/v1/me/webhook-inboxes/${encodeURIComponent(id)}`);
+}
+
 export async function getTempAliases(): Promise<{ user: string; aliases: TempAliasEntry[] }> {
     return request('GET', '/v1/me/temp-aliases');
 }

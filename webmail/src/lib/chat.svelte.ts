@@ -13,7 +13,7 @@
 
 import {
     settings, setLlm, setUseCustomLlm, setDensity, setListFilter,
-    setKeyboardShortcuts, setAiSystemPrompt, setAccountChipDisplay,
+    setAiSystemPrompt, setAccountChipDisplay,
     setDefaultFromAddress, setDisplayName, setPageSize,
     setAlwaysAllowImages, setGroupThreads, setProxyImages, setPermanentSignIn,
     setPhishingScan, setTrackOpensDefault, setAiSuggestSubjectOnBlur,
@@ -473,7 +473,7 @@ export const TOOLS: ToolDef[] = [
             description: [
                 'Update one user setting. Valid keys:',
                 'density (comfortable|compact), listFilter (all|unread|starred|attachments),',
-                'keyboardShortcuts (bool), accountChipDisplay (email|name),',
+                'accountChipDisplay (email|name),',
                 'defaultFromAddress (string), displayName (string),',
                 'pageSize (1..1000 or "unlimited"), aiSystemPrompt (string),',
                 'alwaysAllowImages (bool), groupThreads (bool), proxyImages (bool),',
@@ -760,7 +760,6 @@ export async function execTool(name: string, args: Record<string, unknown>): Pro
             return {
                 density: settings.density,
                 listFilter: settings.listFilter,
-                keyboardShortcuts: settings.keyboardShortcuts,
                 aiSystemPrompt: settings.aiSystemPrompt,
                 accountChipDisplay: settings.accountChipDisplay,
                 defaultFromAddress: settings.defaultFromAddress,
@@ -823,7 +822,6 @@ export async function execTool(name: string, args: Record<string, unknown>): Pro
                         setListFilter(value as 'all' | 'unread' | 'starred' | 'attachments'); return { ok: true };
                     }
                     throw new Error('listFilter must be one of all, unread, starred, attachments');
-                case 'keyboardShortcuts': setKeyboardShortcuts(bool(value)); return { ok: true };
                 case 'aiSystemPrompt': setAiSystemPrompt(String(value || '')); return { ok: true };
                 case 'accountChipDisplay':
                     if (value === 'email' || value === 'name') { setAccountChipDisplay(value); return { ok: true }; }

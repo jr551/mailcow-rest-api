@@ -55,7 +55,10 @@ function cachePut(key, val) {
 
 module.exports = async function iconProxyRoutes(app) {
     app.get('/v1/proxy/icon', {
-        config: { public: true },
+        // Public, cached, allowlisted — a busy inbox legitimately fires one
+        // of these per sender domain; counting them against the global
+        // limiter starves real API calls.
+        config: { public: true, rateLimit: false },
         schema: {
             tags: ['system'],
             summary: 'Proxy a sender-avatar icon (allowlisted hosts only)',

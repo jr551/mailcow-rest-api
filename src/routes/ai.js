@@ -3,9 +3,23 @@
 const llm = require('../llm');
 const config = require('../config');
 const { problem } = require('../errors');
-const { scrubMessages } = require('../secret-scrub');
+const { scrubMessages, scrubMessagesPii } = require('../secret-scrub');
 const { sendDecoys } = require('../llm-decoys');
 
+
+// Loopback / RFC1918 / link-local hosts are treated as local — the PII pass
+// is skipped for them since the request never leaves the operator's network.
+function isLocalBaseUrl(baseUrl) {
+    try {
+        const h = new URL(baseUrl).hostname.toLowerCase();
+        if (h === 'localhost' || h === '::1' || h.endsWith('.local') || h.endsWith('.internal')) return true;
+        if (/^127\./.test(h) || /^10\./.test(h) || /^192\.168\./.test(h) || /^169\.254\./.test(h)) return true;
+        const m = h.match(/^172\.(\d+)\./);
+        if (m && Number(m[1]) >= 16 && Number(m[1]) <= 31) return true;
+        if (h.startsWith('fd') || h.startsWith('fe80')) return true; // IPv6 ULA / link-local
+        return false;
+    } catch { return false; }
+}
 // `provider` block in the request body lets clients override the server's
 // default LLM (so the Settings panel can target a user's own key/endpoint).
 // Server admins can disable overrides via LLM_ALLOW_CLIENT_OVERRIDE=false.
@@ -369,6 +383,20 @@ module.exports = async function aiRoutes(app, opts = {}) {
                 req.log.info(
                     { redacted: scrubbed.redacted, kinds: Object.keys(scrubbed.counts) },
                     'redacted credentials from outbound AI request'
+                );
+            }
+        }
+
+        // PII pass for cloud providers: sender addresses and phone numbers
+        // the model doesn't need. Skipped for local providers (Ollama on
+        // the LAN) — nothing leaves the network anyway.
+        if (config.ai.scrubSecrets && !isLocalBaseUrl(resolved.baseUrl)) {
+            const pii = scrubMessagesPii(body.messages);
+            if (pii.redacted > 0) {
+                body.messages = pii.messages;
+                req.log.info(
+                    { redacted: pii.redacted, kinds: Object.keys(pii.counts) },
+                    'redacted PII from outbound AI request'
                 );
             }
         }
