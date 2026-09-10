@@ -1,4 +1,4 @@
-# 📮 mailcow-rest-api
+# 📮 mailcow-rest-api (Mailcow addon)
 
 **One container. Your whole mailbox as an API — plus a webmail.**
 
