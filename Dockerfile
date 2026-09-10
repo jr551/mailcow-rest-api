@@ -1,6 +1,6 @@
 # The Svelte webmail is built from source in the image so the API and the SPA
 # it serves can never drift apart at deploy time.
-FROM node:22-alpine AS webmail-build
+FROM node:26-alpine AS webmail-build
 
 WORKDIR /webmail
 
@@ -13,7 +13,7 @@ COPY webmail/ ./
 COPY package.json /package.json
 RUN npm run build
 
-FROM node:22-alpine AS deps
+FROM node:26-alpine AS deps
 
 WORKDIR /app
 
@@ -24,7 +24,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev \
     && npm cache clean --force
 
-FROM node:22-alpine AS runtime
+FROM node:26-alpine AS runtime
 
 RUN apk add --no-cache tini wget ca-certificates \
     && adduser -D -u 10001 mailcowrest
