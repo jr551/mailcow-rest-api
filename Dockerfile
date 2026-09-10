@@ -8,6 +8,9 @@ COPY webmail/package.json webmail/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 
 COPY webmail/ ./
+# The SPA stamps the API's version at build time (vite.config.ts reads
+# ../package.json) so a stale cached shell can self-refresh.
+COPY package.json /package.json
 RUN npm run build
 
 FROM node:22-alpine AS deps

@@ -47,9 +47,17 @@ export default defineConfig({
     base: '/webmail/',
     define: {
         // The API's own version, so the SPA can tell when the server has
-        // moved on and it's running a stale cached build.
+        // moved on and it's running a stale cached build. The Docker build
+        // only copies webmail/ into the build stage, so fall back to the
+        // webmail package version when the parent manifest isn't there.
         __APP_VERSION__: JSON.stringify(
-            JSON.parse(readFileSync(resolve(__dirname, '../package.json'), 'utf8')).version
+            (() => {
+                for (const p of ['../package.json', 'package.json']) {
+                    try { return JSON.parse(readFileSync(resolve(__dirname, p), 'utf8')).version; }
+                    catch { /* next candidate */ }
+                }
+                return '0.0.0';
+            })()
         )
     },
     build: {
