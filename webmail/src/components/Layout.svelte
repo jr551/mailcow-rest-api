@@ -1510,6 +1510,11 @@
             <span class="brand-name">
                 <span class="brand-mark">Mail</span><span class="brand-sub">imap-rest</span>
             </span>
+            <!-- Outlook skin only: OWA shows the signed-in user in the header.
+                 Hidden by default; skin-outlook's extras CSS reveals it. -->
+            <span class="brand-user" aria-hidden="true">
+                <span class="brand-user-emoji">👤</span>{authState.activeUser?.split('@')[0] || ''}
+            </span>
         </div>
         <div class="search-wrap">
             <Icon name="search" size={16} />
@@ -2249,6 +2254,15 @@
         letter-spacing: 0.06em;
         text-transform: uppercase;
         color: var(--text-tertiary);
+    }
+    .brand-user {
+        display: none;
+        align-items: center;
+        gap: 6px;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text-secondary);
+        white-space: nowrap;
     }
     .search-wrap {
         flex: 1;
