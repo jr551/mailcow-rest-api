@@ -1,174 +1,27 @@
-# mailcow-rest-api
+# 📮 mailcow-rest-api
 
-**Swagger/OpenAPI first:** after starting the API, open `/` for Swagger UI or `/openapi.json` for the raw OpenAPI 3.1 document.
+**One container. Your whole mailbox as an API — plus a webmail.**
 
-`mailcow-rest-api` is a public mailcow add-on API that turns a mailcow mailbox into a REST, OpenAPI, and optional MCP surface for webmail clients, automation, and local tools.
+Turns a mailcow mailbox into a REST + OpenAPI surface for automation, MCP clients, and the bundled webmail. No second container, no separate frontend deploy.
 
-One container gives you all four surfaces:
-
-| Path | What it serves |
+| Path | What you get |
 |---|---|
-| `/v1/*` | REST API over IMAP, SMTP, Sieve, CalDAV, and mailcow's own database |
-| `/` | Swagger UI, with `/openapi.json` for the raw OpenAPI 3.1 document |
-| `/webmail/` | The bundled Svelte webmail (`/webmail/mobile/` for the mobile PWA) |
-| `/v1/admin/*` | Operator-only runtime settings, when `ADMIN_TOKEN` is set |
+| `/v1/*` | 🔌 REST API — IMAP, SMTP, Sieve, CalDAV, mailcow's own DB |
+| `/` | 📖 Swagger UI (`/openapi.json` for the raw spec) |
+| `/webmail/` | 📧 Bundled webmail (`/webmail/mobile/` for the PWA) |
+| `/v1/admin/*` | 🛠️ Operator settings, when `ADMIN_TOKEN` is set |
 
-There is no second container and no separate frontend deployment to keep in step — the SPA is built from `webmail/` into the image, so the API always serves the frontend it was built with.
+## 🚀 Quick start
 
-## Backend Features
-
-- IMAP mailbox tree, message search/list/read, attachments, raw source, flags, move, delete, and append.
-- SMTP send with draft/reply metadata and pending approval links.
-- Mailcow account data for mailbox profile, aliases, temporary aliases, sender allow/block lists, and send-from identities.
-- Sieve-backed mail rules and blocked-recipient management.
-- SOGo CalDAV calendar list, event CRUD, iCal token publishing, and public event edit links.
-- Web Push subscription storage and notification polling.
-- Image/icon proxying, OCR cache, tracking pixels, and tracking event reads.
-- Optional S3/Backblaze B2 drive provisioning for browser-side file storage.
-- Optional AI routes for capabilities, configuration, summarise, draft reply, actions, translation, inbox sorting, phishing scan, TTS config, and web search.
-- Optional MCP stdio adapter through `bin/imap-rest-mcp`.
-- IP allowlisting and per-IP rate limiting in front of the IMAP auth path.
-
-## Full API Surface
-
-The Swagger UI is the source of truth for schemas and response examples. This route list is included so the public README shows the whole surface at a glance.
-
-### Public And Docs
-
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/` | Swagger UI |
-| `GET` | `/openapi.json` | OpenAPI JSON |
-| `GET` | `/health` | Health check |
-| `GET` | `/v1/app/android/version.json` | Android app version metadata |
-| `GET` | `/v1/app/android.apk` | Android APK download when configured |
-| `GET` | `/v1/track/:ref.gif` | Tracking pixel |
-| `GET` | `/v1/public/ical/:token.ics` | Public calendar feed |
-| `GET` | `/v1/public/event/:token/:uid/edit` | Public event edit form |
-| `POST` | `/v1/public/event/:token/:uid/edit` | Public event edit submit |
-| `GET` | `/webmail/` | Bundled webmail SPA (`/webmail/mobile/` for the mobile PWA) |
-
-### Admin
-
-Registered only when `ADMIN_TOKEN` is set. Authenticated with `Authorization: Bearer <ADMIN_TOKEN>`, not a mailbox login.
-
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/v1/admin/settings` | Read runtime operator settings |
-| `PUT` | `/v1/admin/settings` | Toggle the webmail on/off without a restart |
-| `GET` | `/v1/admin/status` | Version, uptime, and active subsystems |
-
-### Auth And Session
-
-| Method | Path | Purpose |
-|---|---|---|
-| `POST` | `/v1/auth/session` | Create bearer session from mailbox credentials |
-| `GET` | `/v1/auth/session` | Inspect current session |
-
-Authenticated routes accept either HTTP Basic auth using the mailbox credentials or `Authorization: Bearer <token>` from `/v1/auth/session`.
-
-### Mailboxes And Messages
-
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/v1/mailboxes` | List mailbox folders |
-| `POST` | `/v1/mailboxes` | Create mailbox folder |
-| `PUT` | `/v1/mailboxes/:path` | Rename mailbox folder |
-| `DELETE` | `/v1/mailboxes/:path` | Delete mailbox folder |
-| `GET` | `/v1/mailboxes/:path/messages` | List/search messages |
-| `POST` | `/v1/mailboxes/:path/messages` | Append a raw message |
-| `GET` | `/v1/mailboxes/:path/messages/:uid` | Read message details |
-| `GET` | `/v1/mailboxes/:path/messages/:uid/raw` | Read raw RFC 822 source |
-| `GET` | `/v1/mailboxes/:path/messages/:uid/attachments/:attachmentId` | Download attachment |
-| `GET` | `/v1/mailboxes/:path/messages/:uid/attachments/:attachmentId/text` | Extract attachment text/OCR |
-| `PUT` | `/v1/mailboxes/:path/messages/:uid/flags` | Set message flags |
-| `PUT` | `/v1/mailboxes/:path/messages/:uid/move` | Move message |
-| `DELETE` | `/v1/mailboxes/:path/messages/:uid` | Delete message |
-| `POST` | `/v1/messages/send` | Send a message through SMTP |
-| `GET` | `/v1/messages/approve/:token` | Approve pending send |
-| `GET` | `/v1/messages/deny/:token` | Deny pending send |
-| `GET` | `/v1/messages/send/:messageId/status` | Read send status |
-
-### Account, Rules, And Sender Policy
-
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/v1/me/mailbox` | Mailbox profile and quota |
-| `GET` | `/v1/me/logins` | Login aliases |
-| `GET` | `/v1/me/aliases` | Mail aliases |
-| `GET` | `/v1/me/temp-aliases` | Temporary aliases |
-| `POST` | `/v1/me/temp-aliases` | Create temporary alias |
-| `DELETE` | `/v1/me/temp-aliases/:address` | Delete temporary alias |
-| `GET` | `/v1/me/send-from` | Send-from identities |
-| `GET` | `/v1/me/shortcuts` | Admin-defined webmail shortcuts |
-| `GET` | `/v1/me/mail-rules` | Sieve mail rules |
-| `POST` | `/v1/me/mail-rules` | Create/update mail rule |
-| `DELETE` | `/v1/me/mail-rules/:id` | Delete mail rule |
-| `GET` | `/v1/me/blocked-recipients` | List blocked recipients |
-| `POST` | `/v1/me/blocked-recipients` | Add blocked recipient |
-| `DELETE` | `/v1/me/blocked-recipients/:recipient` | Remove blocked recipient |
-| `GET` | `/v1/me/blocked-senders` | List blocked senders |
-| `POST` | `/v1/me/blocked-senders` | Add blocked sender |
-| `DELETE` | `/v1/me/blocked-senders/:prefid` | Remove blocked sender |
-| `GET` | `/v1/me/allowed-senders` | List allowed senders |
-| `POST` | `/v1/me/allowed-senders` | Add allowed sender |
-| `DELETE` | `/v1/me/allowed-senders/:prefid` | Remove allowed sender |
-
-### Calendar
-
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/v1/me/calendars` | List calendars |
-| `GET` | `/v1/me/calendars/:calendar/events` | List calendar events |
-| `GET` | `/v1/me/calendars/:calendar/events/:uid` | Read event |
-| `POST` | `/v1/me/calendars/:calendar/events` | Create/update event |
-| `DELETE` | `/v1/me/calendars/:calendar/events/:uid` | Delete event |
-| `GET` | `/v1/me/calendars/:calendar/ical` | Download calendar iCal |
-| `POST` | `/v1/me/calendars/:calendar/ical-token` | Create iCal token |
-| `GET` | `/v1/me/calendars/:calendar/ical-token` | Read iCal token |
-| `DELETE` | `/v1/me/calendars/:calendar/ical-token` | Revoke iCal token |
-| `GET` | `/v1/me/calendar-subscriptions` | List subscribed calendars |
-| `POST` | `/v1/me/calendar-subscriptions` | Add subscribed calendar |
-| `DELETE` | `/v1/me/calendar-subscriptions/:id` | Remove subscribed calendar |
-| `GET` | `/v1/me/calendar-subscriptions/:id/events` | List subscribed calendar events |
-
-### Drive, Push, Proxy, Tracking, Telemetry, And AI
-
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/v1/drive/config` | Browser-side S3/B2 drive config |
-| `GET` | `/v1/drive/quota` | Drive quota |
-| `GET` | `/v1/push/config` | Web Push public config |
-| `POST` | `/v1/push/subscribe` | Add push subscription |
-| `DELETE` | `/v1/push/subscribe` | Remove push subscription |
-| `POST` | `/v1/push/test` | Send diagnostic push |
-| `GET` | `/v1/proxy/image` | Fetch/cache remote image |
-| `GET` | `/v1/proxy/icon` | Fetch/cache sender icon |
-| `GET` | `/v1/tracking` | List tracking events |
-| `DELETE` | `/v1/tracking/:ref` | Delete tracking ref |
-| `POST` | `/v1/telemetry/error` | Store client error report |
-| `GET` | `/v1/telemetry/recent` | Read recent client errors |
-| `GET` | `/v1/ai/capabilities` | AI feature availability |
-| `GET` | `/v1/ai/config` | Browser AI provider config |
-| `POST` | `/v1/ai/llm/chat/completions` | OpenAI-compatible chat proxy (server holds the provider key) |
-| `POST` | `/v1/ai/web-search` | AI web search helper |
-| `GET` | `/v1/ai/tts-config` | Text-to-speech config |
-| `POST` | `/v1/ai/summarize` | Summarise text/message |
-| `POST` | `/v1/ai/draft-reply` | Draft a reply |
-| `POST` | `/v1/ai/actions` | Extract action items |
-| `POST` | `/v1/ai/translate` | Translate text |
-| `POST` | `/v1/ai/sort-inbox` | Sort inbox into AI categories |
-| `POST` | `/v1/ai/phishing-scan` | Phishing risk scan |
-
-## Docker Image
-
-The public image is published to GitHub Container Registry:
+On a mailcow host:
 
 ```sh
-docker pull ghcr.io/jr551/mailcow-rest-api:master
+curl -fsSL https://raw.githubusercontent.com/jr551/mailcow-rest-api/master/install/quickstart.sh | sudo sh
 ```
 
-Minimal local run near a mailcow deployment:
+Then open `https://<your-mailcow-host>/mailcow-rest-api/` — Swagger UI is right there.
+
+Or plain Docker:
 
 ```sh
 docker run --rm -p 3001:3001 \
@@ -177,35 +30,52 @@ docker run --rm -p 3001:3001 \
   ghcr.io/jr551/mailcow-rest-api:master
 ```
 
-## Webmail
+## ✨ What it does
 
-The image serves the bundled Svelte webmail at `/webmail/` and its mobile PWA at `/webmail/mobile/`. Nothing extra is needed: point a browser at the API's own origin and sign in with a mailcow mailbox address and password.
+- 📬 **Mail** — read, search, move, flag, delete, send, attachments, raw source
+- 🤖 **AI** — inbox sort, summarize, draft reply, phishing scan, translate (server-proxied, key never reaches the browser)
+- 🔗 **Webhook inboxes** — give a service a URL, its POSTs land in your INBOX
+- 🔑 **Agent links** — one click → a 24 h pasteable credential for MCP/scripts
+- 📅 **Calendar** — SOGo CalDAV events, iCal publishing, public edit links
+- 🚫 **Rules & policies** — Sieve mail rules, sender allow/block, blocked recipients
+- 📁 **Drive** — optional S3/B2-backed file storage for the browser
+- 🔔 **Push** — web-push subscriptions + notification polling
+- 🛡️ **Safety** — IP allowlists, per-IP rate limiting, credential encryption at rest
+- 🧩 **MCP** — `bin/imap-rest-mcp` stdio adapter for agent tooling
+
+## 📧 The webmail
 
 ![The bundled webmail in its default Outlook skin](webmail/docs/screenshots/outlook-skin-inbox.png)
 
-The webmail ships with an Outlook-on-the-web skin as the default theme — azure command bar, Segoe UI, Fluent surfaces. Settings → Appearance offers a dozen other skins (accent-only and full themes) plus a custom accent picker.
+Ships in the image at `/webmail/` — sign in with a mailcow mailbox address + password. Outlook-on-the-web skin by default; a dozen other skins, a custom accent picker, and a custom-CSS box under **Settings → Appearance**.
 
-**Self-hosting and development.** Serving the SPA from the API is the out-of-the-box path. Because it is same-origin with `/v1/*`, there is no CORS to configure and no second TLS certificate or vhost to maintain. `window.__IMAP_API_BASE__` defaults to `""`, so API calls resolve against whatever host is serving the page.
+<details>
+<summary><b>Self-hosting, CDN builds, and the mailcow sign-in button</b></summary>
 
-**Production and CDN hosting.** For high-traffic or edge deployments, build the SPA separately and host it on Cloudflare Pages, Netlify, or S3/CloudFront, pointing it at a remote API:
+**Same-origin (default).** The SPA is built from `webmail/` into the image, so the API always serves the frontend it was built with. `window.__IMAP_API_BASE__` defaults to `""` — no CORS, no second vhost.
+
+**CDN / separate hosting.** Build the SPA yourself and host it on Cloudflare Pages, Netlify, or S3/CloudFront:
 
 ```sh
 cd webmail && npm ci && npm run build   # output in webmail/dist
 ```
 
-Set the API origin before the app's own scripts run, by editing the shell's inline script in `dist/index.html` (and `dist/mobile/index.html`):
+Point it at a remote API by editing the shell's inline script in `dist/index.html` (and `dist/mobile/index.html`):
 
 ```html
 <script>window.__IMAP_API_BASE__ = "https://userapi.example.com"</script>
 ```
 
-Then add that CDN origin to `API_CORS_ORIGINS` on the API so its cross-origin calls are answered.
+Then add that origin to `API_CORS_ORIGINS` on the API.
 
-**A button on mailcow's own login page.** Users who land on the mailcow UI can be offered the webmail without typing their password twice. `install/webmail-handoff.js` plus the nginx snippet in `install/webmail-handoff.nginx.example` add a **New webmail** button next to mailcow's sign-in form; it exchanges the credentials already entered for a session token and hands that token to the SPA in the URL fragment, which the app consumes and clears from the address bar immediately. It is injected by the reverse proxy rather than added to mailcow's tree, which `update.sh` resets.
+**A button on mailcow's own login page.** `install/webmail-handoff.js` plus the nginx snippet in `install/webmail-handoff.nginx.example` add a **New webmail** button next to mailcow's sign-in form; it exchanges the typed credentials for a session token and hands it to the SPA in the URL fragment. Injected by the reverse proxy, not into mailcow's tree (which `update.sh` resets).
 
-**Turning it off.** `WEBMAIL_ENABLED=false` removes the webmail at startup. With an `ADMIN_TOKEN` configured you can also toggle it at runtime — see below — which takes effect immediately and does not need the container recreated.
+**Turning it off.** `WEBMAIL_ENABLED=false` removes the webmail at startup. With `ADMIN_TOKEN` set you can also toggle it at runtime via the admin API — immediate, no container recreate.
 
-## App Passwords
+</details>
+
+<details>
+<summary><b>🔑 App passwords & agent access links</b></summary>
 
 Pointing an MCP client or a script at a mailbox normally means putting the mailbox password in a config file, where it grants IMAP, SMTP, and webmail access indefinitely and can only be withdrawn by changing the password everywhere it is used.
 
@@ -246,7 +116,10 @@ How it behaves:
 
 The API still performs a real IMAP login, so the mailbox password is captured when the token is minted and kept encrypted with `CREDENTIAL_ENCRYPTION_KEY`. The feature therefore requires credential encryption and is disabled without it. It also means **changing the mailbox password invalidates existing app passwords**, since the stored copy no longer matches — recreate them, or sign in to the webmail once to re-key them.
 
-## Webhook Inboxes
+</details>
+
+<details>
+<summary><b>🔗 Webhook inboxes</b></summary>
 
 The reverse of a mail rule: give an external service a URL and anything it POSTs lands in your INBOX as an email. Users mint them under **Settings → Security → Webhook inboxes**; the URL is shown once, at creation.
 
@@ -260,7 +133,10 @@ The subject comes from `?subject=`, an `X-Webhook-Subject` header, or a `subject
 
 Because the ingest path needs the mailbox password to APPEND, webhook inboxes share the app-password plumbing: the password is stored encrypted with `CREDENTIAL_ENCRYPTION_KEY`, the feature is disabled without it, and a password change invalidates existing inboxes until the user signs in once to re-key them. `WEBHOOK_INBOXES_ENABLED=false` turns the whole surface off; `WEBHOOK_INBOXES_MAX_PER_USER` caps how many each mailbox may hold (default 10).
 
-## Admin API
+</details>
+
+<details>
+<summary><b>🛠️ Admin API</b></summary>
 
 Setting `ADMIN_TOKEN` enables `/v1/admin/*`. Without it the routes are never registered. The token is operator credentials, not a mailbox login, and is sent as `Authorization: Bearer <ADMIN_TOKEN>`.
 
@@ -275,45 +151,115 @@ curl -X PUT -H "Authorization: Bearer $ADMIN_TOKEN" -H 'content-type: applicatio
 
 `GET /v1/admin/status` reports version, uptime, and which optional subsystems are live. Settings persist in `admin-settings.db` alongside the other state on the data volume.
 
-`WEBMAIL_ENABLED=false` outranks the stored setting: an operator who disabled the webmail at deploy time cannot have it switched back on through the API. The `source` field in the response says which rule is in force (`db`, `default`, or `env-forced-off`).
-
 Generate a real token, and restrict it by source IP when the API is publicly reachable:
 
 ```sh
 openssl rand -hex 32
 ```
 
-## Mailcow Setup
+</details>
 
-The public setup scripts are intentionally conservative. Before they start containers or write nginx config they run `install/mailcow-safety-check.sh`, which verifies Docker, Docker Compose, a mailcow checkout, the mailcow network, the mailcow nginx config directory, and running `nginx-mailcow`, `dovecot-mailcow`, and `postfix-mailcow` containers.
+<details>
+<summary><b>📋 Full API surface</b></summary>
 
-Quick install on a mailcow host:
+The Swagger UI is the source of truth for schemas and response examples. This route list shows the whole surface at a glance.
 
-```sh
-curl -fsSL https://raw.githubusercontent.com/jr551/mailcow-rest-api/master/install/quickstart.sh | sudo sh
-```
+### Public and docs
 
-Manual install:
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/` | Swagger UI |
+| `GET` | `/openapi.json` | Raw OpenAPI 3.1 document |
+| `GET` | `/health` | Liveness/health check |
+| `GET` | `/webmail/` | Bundled webmail SPA (`/webmail/mobile/` for the mobile PWA) |
 
-```sh
-git clone https://github.com/jr551/mailcow-rest-api.git /opt/mailcow-rest-api
-cd /opt/mailcow-rest-api
-cp .env.example .env
-sudo install/mailcow-safety-check.sh
-sudo install/setup.sh
-```
+### Admin
 
-The default setup exposes the API through mailcow nginx at:
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/v1/admin/status` | Version, uptime, subsystem status |
+| `GET` | `/v1/admin/settings` | Read runtime settings |
+| `PUT` | `/v1/admin/settings` | Update runtime settings |
 
-- `https://<your-mailcow-host>/mailcow-rest-api/`
-- `https://<your-mailcow-host>/mailcow-rest-api/openapi.json`
-- `https://<your-mailcow-host>/mailcow-rest-api/health`
+### Auth and session
 
-Set `MAILCOW_PATH` if your mailcow checkout is not `/opt/mailcow-dockerized`, and set `MAILCOW_NETWORK` if your Docker network name differs from `mailcowdockerized_mailcow-network`.
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/v1/auth/session` | Exchange credentials for a session token |
+| `DELETE` | `/v1/auth/session` | Sign out |
+| `GET` | `/v1/me/app-passwords` | List app passwords |
+| `POST` | `/v1/me/app-passwords` | Mint an app password |
+| `DELETE` | `/v1/me/app-passwords/{id}` | Revoke an app password |
+| `GET` | `/v1/me/webhook-inboxes` | List webhook inboxes |
+| `POST` | `/v1/me/webhook-inboxes` | Mint a webhook inbox |
+| `DELETE` | `/v1/me/webhook-inboxes/{id}` | Revoke a webhook inbox |
+| `POST` | `/v1/hook/{token}` | Webhook ingest — POST lands in the owner's INBOX |
 
-Install this checkout outside of `/opt/mailcow-dockerized` (e.g. as a sibling directory like `/opt/mailcow-rest-api`) so mailcow's own `update.sh` — which resets its working tree — never touches it. The quickstart and manual install commands above already do this.
+### Mailboxes and messages
 
-## Configuration
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/v1/mailboxes` | List the mailbox tree |
+| `GET` | `/v1/mailboxes/{path}/messages` | List/search messages |
+| `GET` | `/v1/mailboxes/{path}/messages/{uid}` | Read message detail |
+| `GET` | `/v1/mailboxes/{path}/messages/{uid}/raw` | Raw RFC 822 source |
+| `GET` | `/v1/mailboxes/{path}/messages/{uid}/attachments/{id}` | Download an attachment |
+| `GET` | `/v1/mailboxes/{path}/messages/{uid}/attachments/{id}/text` | Extract attachment text/OCR |
+| `PUT` | `/v1/mailboxes/{path}/messages/{uid}/flags` | Set message flags |
+| `PUT` | `/v1/mailboxes/{path}/messages/{uid}/move` | Move a message |
+| `DELETE` | `/v1/mailboxes/{path}/messages/{uid}` | Delete a message |
+| `POST` | `/v1/mailboxes/{path}/messages` | Append a message |
+| `POST` | `/v1/send` | Send mail (draft/reply metadata, pending approvals) |
+
+### Account, rules, and sender policy
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/v1/me` | Mailbox profile |
+| `GET` | `/v1/me/aliases` | Aliases |
+| `GET`/`POST`/`DELETE` | `/v1/me/temp-aliases*` | Temporary aliases |
+| `GET`/`POST`/`DELETE` | `/v1/me/sender-policy*` | Allow/block sender lists |
+| `GET`/`POST`/`DELETE` | `/v1/me/mail-rules*` | Sieve-backed mail rules |
+| `GET`/`POST`/`DELETE` | `/v1/me/blocked-recipients*` | Blocked recipients |
+| `GET` | `/v1/me/logins` | Recent logins |
+
+### Calendar
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/v1/me/calendars` | List SOGo calendars |
+| `GET`/`POST` | `/v1/me/calendars/{id}/events*` | Event list/create |
+| `PUT`/`DELETE` | `/v1/me/calendars/{id}/events/{uid}` | Event update/delete |
+| `GET`/`POST`/`DELETE` | `/v1/me/calendars/{id}/ical-token` | Public iCal feed token |
+| `GET`/`PUT` | `/v1/ical/{token}*` | Public feed + event edit links |
+
+### Drive, push, proxy, tracking, telemetry, and AI
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET`/`PUT` | `/v1/me/drive*` | Drive config and quota |
+| `POST`/`DELETE` | `/v1/me/push*` | Web-push subscriptions |
+| `GET` | `/v1/me/notifications` | Poll notifications |
+| `GET` | `/v1/proxy/icon` | Sender-avatar icon proxy (allowlisted) |
+| `GET` | `/v1/proxy/image` | Remote image proxy |
+| `GET`/`POST` | `/v1/me/tracking*` | Tracking pixels and events |
+| `POST` | `/v1/telemetry` | Client telemetry |
+| `GET` | `/v1/ai/capabilities` | AI feature flags |
+| `GET` | `/v1/ai/config` | Client-usable AI endpoint (proxied) |
+| `POST` | `/v1/ai/summarize` | Summarize text |
+| `POST` | `/v1/ai/draft-reply` | Draft a reply |
+| `POST` | `/v1/ai/actions` | Extract actions |
+| `POST` | `/v1/ai/translate` | Translate text |
+| `POST` | `/v1/ai/sort-inbox` | Rank inbox messages |
+| `POST` | `/v1/ai/phishing-scan` | Phishing verdict |
+| `GET` | `/v1/ai/tts-config` | TTS config |
+| `POST` | `/v1/ai/web-search` | Web search |
+| `POST` | `/v1/ai/llm/chat/completions` | Same-origin OpenAI-compatible proxy |
+
+</details>
+
+<details>
+<summary><b>⚙️ Configuration</b></summary>
 
 Copy `.env.example` to `.env`. Common values:
 
@@ -331,10 +277,12 @@ Copy `.env.example` to `.env`. Common values:
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | empty | Enables push delivery |
 | `RATE_LIMIT_MAX` / `RATE_LIMIT_WINDOW_MS` | `300` / `60000` | Per-IP request cap; `RATE_LIMIT_ENABLED=false` to disable |
 | `WEBHOOK_ACCOUNTS` | empty | JSON array of mailboxes whose mail is POSTed to a webhook and then deleted |
+| `WEBHOOK_INBOXES_ENABLED` | `true` | User-minted POST→INBOX URLs; needs `CREDENTIAL_ENCRYPTION_KEY` |
+| `WEBHOOK_INBOXES_MAX_PER_USER` | `10` | Per-mailbox cap on webhook inboxes |
 | `LLM_REASONING_EFFORT` | `none` | Reasoning budget; `none` keeps short answers from being eaten by thinking tokens |
 | `AI_CACHE_TTL_MS` | `43200000` | Per-user completion cache TTL (12h); `AI_CACHE_ENABLED=false` to disable |
 | `LLM_SCRUB_SECRETS` | `true` | Strip credentials from prompts before they reach the provider |
-| `LLM_DECOY_COUNT` | `0` | Decoy requests per real one; multiplies token spend, see README |
+| `LLM_DECOY_COUNT` | `0` | Decoy requests per real one; multiplies token spend |
 | `TRUST_PROXY` | private hops | Which proxies may set `X-Forwarded-For`; never trusts arbitrary clients |
 | `CREDENTIAL_ENCRYPTION_KEY` | generated | Encrypts stored mailbox passwords at rest; set it so backups don't carry the key |
 | `DRIVE_CORS_ORIGINS` | `PUBLIC_BASE_URL` | Browser origins allowed to reach Drive buckets (required for Drive to work) |
@@ -390,7 +338,38 @@ unreplayable. No body-only `X-Webhook-Signature` is sent: emitting one
 alongside the timestamped signature would let an attacker strip the two
 headers above and replay the request anyway.
 
-## Development
+</details>
+
+<details>
+<summary><b>📦 Mailcow setup details</b></summary>
+
+The public setup scripts are intentionally conservative. Before they start containers or write nginx config they run `install/mailcow-safety-check.sh`, which verifies Docker, Docker Compose, a mailcow checkout, the mailcow network, the mailcow nginx config directory, and running `nginx-mailcow`, `dovecot-mailcow`, and `postfix-mailcow` containers.
+
+Manual install:
+
+```sh
+git clone https://github.com/jr551/mailcow-rest-api.git /opt/mailcow-rest-api
+cd /opt/mailcow-rest-api
+cp .env.example .env
+sudo install/mailcow-safety-check.sh
+sudo install/setup.sh
+```
+
+The default setup exposes the API through mailcow nginx at:
+
+- `https://<your-mailcow-host>/mailcow-rest-api/`
+- `https://<your-mailcow-host>/mailcow-rest-api/openapi.json`
+- `https://<your-mailcow-host>/mailcow-rest-api/health`
+
+Set `MAILCOW_PATH` if your mailcow checkout is not `/opt/mailcow-dockerized`, and set `MAILCOW_NETWORK` if your Docker network name differs from `mailcowdockerized_mailcow-network`.
+
+Install this checkout outside of `/opt/mailcow-dockerized` (e.g. as a sibling directory like `/opt/mailcow-rest-api`) so mailcow's own `update.sh` — which resets its working tree — never touches it.
+
+For production edge hardening (rate limiting, security headers, ban coverage), see [`docs/deployment-hardening.md`](docs/deployment-hardening.md).
+
+</details>
+
+## 🧪 Development
 
 ```sh
 npm install
