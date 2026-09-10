@@ -221,13 +221,13 @@ function load(): Settings {
                 vipAddresses: typeof parsed.vipAddresses === 'string'
                     ? parsed.vipAddresses
                     : 'family@delivering.email, family@rowe.net.me',
-                weatherChip: parsed.weatherChip !== false,
+                weatherChip: !!parsed.weatherChip,
                 weatherLatitude: typeof parsed.weatherLatitude === 'number' ? parsed.weatherLatitude : 51.5074,
                 weatherLongitude: typeof parsed.weatherLongitude === 'number' ? parsed.weatherLongitude : -0.1278,
                 weatherUnits: parsed.weatherUnits === 'fahrenheit' ? 'fahrenheit' : 'celsius',
-                calendarTicker: parsed.calendarTicker !== false,
+                calendarTicker: !!parsed.calendarTicker,
                 calendarTickerTitles: !!parsed.calendarTickerTitles,
-                hideSidebar: !!parsed.hideSidebar,
+                hideSidebar: parsed.hideSidebar !== false,
                 clientRules: Array.isArray(parsed.clientRules)
                     ? parsed.clientRules.filter(isValidClientRule)
                     : []
@@ -264,13 +264,13 @@ function load(): Settings {
         preSendCheck: true,
         composeHistorySummary: true,
         vipAddresses: 'family@delivering.email, family@rowe.net.me',
-        weatherChip: true,
+        weatherChip: false,
         weatherLatitude: 51.5074,
         weatherLongitude: -0.1278,
         weatherUnits: 'celsius',
-        calendarTicker: true,
+        calendarTicker: false,
         calendarTickerTitles: false,
-        hideSidebar: false,
+        hideSidebar: true,
         clientRules: []
     };
 }

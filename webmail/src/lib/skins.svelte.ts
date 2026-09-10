@@ -1121,6 +1121,18 @@ export const SKINS: Skin[] = [
                 .topbar .search-scope-btn { color: #0078d4 !important; border-color: #c8c6c4 !important; }
                 .topbar .muted { color: rgba(255,255,255,0.85) !important; }
 
+                /* Signed-in user next to the brand, like OWA's header. */
+                .topbar .brand-user {
+                    display: inline-flex !important;
+                    color: #fff !important;
+                    margin-left: 4px;
+                }
+                .topbar .brand-user-emoji { font-size: 14px; }
+
+                /* OWA's header is sparse — no mic FAB; the Assistant button
+                 * stays. */
+                .voice-fab { display: none !important; }
+
                 /* OWA marks unread rows with a blue edge bar and a blue
                  * bolded subject — no dot, no tint. */
                 .row.unread { box-shadow: inset 3px 0 0 var(--accent) !important; }
