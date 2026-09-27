@@ -138,16 +138,20 @@ function compileAction(action) {
             // Auto-move: the message is filed into a folder and stays there.
             // No `stop`, so later rules can still see it — matching how
             // `copy` behaves and how users expect a "move" rule to compose.
-            return `    fileinto "${escapeSieveString(action.folder)}";`;
+            // `:create` so a rule targeting a folder that does not exist yet
+            // still delivers instead of failing LDA on
+            // lda_mailbox_autocreate=no hosts (mailcow's default).
+            return `    fileinto :create "${escapeSieveString(action.folder)}";`;
         case 'webhook':
             // Not a real Sieve action: the message is filed into the
             // webhook's hidden mailbox and the forwarder does the HTTP POST,
             // then moves it back to INBOX when `keep` is set. `redirect`
             // can't stand in here — it takes an email address, so Dovecot
-            // rejects the script at PUTSCRIPT. `stop` because the mailbox
-            // move already removed it from the delivery path; letting later
-            // rules act would double-handle it.
-            return `    fileinto "${escapeSieveString(webhookMailbox(action.webhookId))}";\n    stop;`;
+            // rejects the script at PUTSCRIPT; `:create` because the
+            // `.wh-*` mailbox does not exist until the first delivery and
+            // lda_mailbox_autocreate is off on mailcow. `stop` because the
+            // mailbox move already removed it from the delivery path.
+            return `    fileinto :create "${escapeSieveString(webhookMailbox(action.webhookId))}";\n    stop;`;
         default:
             throw new Error(`Unknown action type: ${action.type}`);
     }
@@ -174,6 +178,9 @@ function compileRulesScript(rules, preservedContent) {
     if (needsEnvelope) requirements.push('"envelope"');
     if (needsCopy) requirements.push('"copy"');
     if (needsFileinto) requirements.push('"fileinto"');
+    // `fileinto :create` is the mailbox extension — required whenever we emit
+    // `:create`, which is every fileinto and webhook rule.
+    if (needsFileinto) requirements.push('"mailbox"');
 
     let out = '';
     if (requirements.length) {
@@ -252,7 +259,7 @@ function parseAction(actionStr) {
         return { type: 'redirect', to: unescapeSieveString(redirectMatch[1]) };
     }
 
-    const fileintoMatch = actionStr.match(/fileinto "([^"]+)"/);
+    const fileintoMatch = actionStr.match(/fileinto(?: :create)? "([^"]+)"/);
     if (fileintoMatch) {
         const folder = unescapeSieveString(fileintoMatch[1]);
         // A fileinto into the `.wh-*` namespace is our own `webhook` action —

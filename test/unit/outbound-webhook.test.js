@@ -28,8 +28,8 @@ test('sieve: webhook action round-trips through compile and parse', () => {
     const script = compileRulesScript(rules, '');
     // Parking is fileinto, not redirect — Dovecot needs the extension declared
     // and rejects a `redirect` whose argument isn't an address.
-    assert.match(script, /require \[.*"fileinto".*\];/);
-    assert.match(script, /fileinto "\.wh-deadbeefcafe";/);
+    assert.match(script, /require \[.*"fileinto".*"mailbox".*\];/);
+    assert.match(script, /fileinto :create "\.wh-deadbeefcafe";/);
 
     const parsed = parseRules(script);
     assert.strictEqual(parsed.rules.length, 1);
@@ -106,8 +106,8 @@ test('sieve: fileinto compiles, declares the extension, and round-trips', () => 
     }];
     const script = compileRulesScript(rules, '');
     // Dovecot rejects fileinto without the extension declared.
-    assert.match(script, /require \["fileinto"\];/);
-    assert.match(script, /fileinto "Receipts";/);
+    assert.match(script, /require \["fileinto", "mailbox"\];/);
+    assert.match(script, /fileinto :create "Receipts";/);
     const parsed = parseRules(script);
     assert.deepStrictEqual(parsed.rules[0].action, { type: 'fileinto', folder: 'Receipts' });
 });
