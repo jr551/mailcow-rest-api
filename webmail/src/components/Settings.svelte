@@ -28,11 +28,10 @@
         settings, capabilities, setLlm, setUseCustomLlm, setAiFeatures, setDensity, setAlwaysAllowImages, setGroupThreads, setProxyImages, setPermanentSignIn, setPhishingScan, setTrackOpensDefault, setAiSuggestSubjectOnBlur, setPhishingScanTimeoutSec, setPhishingScanPromptAddendum, setPhishingScanConfidenceFloor,
         setAiSystemPrompt, setAccountChipDisplay,
         setDefaultFromAddress, setDisplayName, deriveNameFromAddress, setPageSize,
-        addClientRule, updateClientRule, removeClientRule,
-        type ClientRuleConditionType, type ClientRuleActionType,
         setTesseractOcrInstalled, setPhishingScanOcrInline,
         setSpamSuggest, setSpamSuggestConfidenceFloor, setSpamSweepBatchSize, setAiSortSweepSpam,
-        setVipAddresses
+        setVipAddresses, setPreSendCheck, setComposeHistorySummary,
+        setCalendarTicker, setCalendarTickerTitles
     } from '../lib/settings.svelte';
     import { runSpamSweep, bulkMove, type SweepCandidate } from '../lib/spam-sweep';
     import { warmupTesseract, teardownTesseract } from '../lib/tesseract-ocr';
@@ -63,13 +62,155 @@
         type MailRule, type MailRuleConditionType, type MailRuleActionType
     } from '../lib/api';
     import { formatBytes, formatFullDate } from '../lib/format';
+    import {
+        listOutboundWebhooks, createOutboundWebhook, updateOutboundWebhook,
+        deleteOutboundWebhook, isOutboundWebhooksUnavailable,
+        type OutboundWebhook
+    } from '../lib/outbound-webhooks';
     import Icon from './Icon.svelte';
     import Avatar from './Avatar.svelte';
     import { ensureCountry, geoipCache, flagEmoji } from '../lib/geoip.svelte';
     import type { IconName } from '../lib/icons';
 
-    type TabId = 'account' | 'security' | 'privacy' | 'phishing' | 'filters' | 'mail-rules' | 'compose' | 'appearance' | 'sounds' | 'ai' | 'notifications';
-    let activeTab = $state<TabId>('account');
+    // Outlook's Settings is a three-column overlay: a category rail on the
+    // left, a sub-section list in the middle, one content pane on the right.
+    // The middle column's item id doubles as the legacy `settings-tab-<id>`
+    // data-testid, so the pre-existing tab ids are preserved verbatim and
+    // every spec that clicks `settings-tab-privacy` still lands correctly.
+    type SectionId =
+        | 'account' | 'security'
+        | 'notifications' | 'ai' | 'sounds' | 'appearance' | 'calendar' | 'people'
+        | 'message-list' | 'reading-pane' | 'privacy' | 'compose' | 'smart-suggestions'
+        | 'attachments' | 'mail-rules' | 'conditional-formatting' | 'sweep' | 'junk'
+        | 'filters' | 'forwarding' | 'outbound-hooks';
+    type CategoryId = 'account' | 'general' | 'email' | 'calendar' | 'people';
+
+    interface SectionDef {
+        id: SectionId;
+        label: string;
+        icon: IconName;
+        /** Words the rail's search box matches against (label is included). */
+        keywords: string;
+    }
+
+    interface CategoryDef {
+        id: CategoryId;
+        label: string;
+        icon: IconName;
+        sections: SectionDef[];
+    }
+
+    const CATEGORIES: CategoryDef[] = [
+        {
+            id: 'account', label: 'Account', icon: 'user',
+            sections: [
+                { id: 'account', label: 'Account', icon: 'user', keywords: 'profile storage quota alias disposable from address avatar' },
+                { id: 'security', label: 'Security', icon: 'shield', keywords: 'password app agent link login session device revoke' }
+            ]
+        },
+        {
+            id: 'general', label: 'General', icon: 'monitor',
+            sections: [
+                { id: 'notifications', label: 'Notifications', icon: 'bell', keywords: 'push install pwa desktop alert' },
+                { id: 'ai', label: 'AI', icon: 'sparkles', keywords: 'llm openai anthropic model provider prompt voice chat' },
+                { id: 'sounds', label: 'Sounds', icon: 'bell', keywords: 'audio chime event pack mute' },
+                { id: 'appearance', label: 'Appearance', icon: 'palette', keywords: 'skin accent colour theme density layout sidebar' },
+                { id: 'calendar', label: 'Calendar', icon: 'calendar', keywords: 'ticker event header caldav' },
+                { id: 'people', label: 'People', icon: 'user', keywords: 'vip contact family badge avatar address' }
+            ]
+        },
+        {
+            id: 'email', label: 'Email', icon: 'inbox',
+            sections: [
+                { id: 'message-list', label: 'Message list', icon: 'inbox', keywords: 'page size density group thread chip list' },
+                { id: 'reading-pane', label: 'Reading pane', icon: 'eye', keywords: 'avatar gravatar sender preview' },
+                { id: 'privacy', label: 'Images & privacy', icon: 'shield', keywords: 'remote image proxy ip tracking' },
+                { id: 'compose', label: 'Compose', icon: 'pencil', keywords: 'write send tracker display name from address' },
+                { id: 'smart-suggestions', label: 'Smart suggestions', icon: 'sparkles', keywords: 'subject proofread history summary pre-send' },
+                { id: 'attachments', label: 'Attachments', icon: 'paperclip', keywords: 'file download link preview' },
+                { id: 'mail-rules', label: 'Rules', icon: 'filter', keywords: 'sieve block redirect forward copy fileinto move folder stop' },
+                { id: 'conditional-formatting', label: 'Conditional formatting', icon: 'palette', keywords: 'tone formatting colour' },
+                { id: 'sweep', label: 'Sweep', icon: 'filter', keywords: 'spam trash batch bulk classify' },
+                { id: 'junk', label: 'Junk email', icon: 'shieldAlert', keywords: 'scam phishing ocr trusted spam quarantine' },
+                { id: 'filters', label: 'Message handling', icon: 'filter', keywords: 'block allow sender recipient catchall' },
+                { id: 'forwarding', label: 'Forwarding and IMAP', icon: 'send', keywords: 'alias imap smtp device connect port' },
+                { id: 'outbound-hooks', label: 'Outbound webhooks', icon: 'globe', keywords: 'webhook post url inbound outgoing api' }
+            ]
+        },
+        {
+            id: 'calendar', label: 'Calendar', icon: 'calendar',
+            sections: []
+        },
+        {
+            id: 'people', label: 'People', icon: 'user',
+            sections: []
+        }
+    ];
+
+    // Calendar and People are Outlook categories with nothing to show yet —
+    // their live sections live under General so they're not duplicated, and
+    // the rail entry explains where the controls actually are rather than
+    // opening an empty pane.
+    const CATEGORY_PLACEHOLDERS: Record<CategoryId, { note: string; goto: CategoryId; gotoLabel: string } | null> = {
+        account: null,
+        general: null,
+        email: null,
+        calendar: { note: 'Calendar settings currently live under General.', goto: 'general', gotoLabel: 'Go to General' },
+        people: { note: 'People settings currently live under General.', goto: 'general', gotoLabel: 'Go to General' }
+    };
+
+    let activeCategory = $state<CategoryId>('account');
+    let activeSection = $state<SectionId>('account');
+    let settingsSearch = $state('');
+
+    const SECTIONS_BY_ID: Record<string, SectionDef> = Object.fromEntries(
+        CATEGORIES.flatMap((c) => c.sections).map((s) => [s.id, s])
+    );
+
+    // The rail's search box filters sections in *every* category, and a hit
+    // outside the current category switches to the category that owns it —
+    // otherwise typing "sieve" would show a match the user cannot open.
+    const searchHits = $derived.by(() => {
+        const q = settingsSearch.trim().toLowerCase();
+        if (!q) return null;
+        return CATEGORIES.map((c) => ({
+            cat: c,
+            sections: c.sections.filter((s) => `${s.label} ${s.keywords}`.toLowerCase().includes(q))
+        })).filter((r) => r.sections.length);
+    });
+
+    const activeCategoryDef = $derived(CATEGORIES.find((c) => c.id === activeCategory)!);
+    const activeCategoryPlaceholder = $derived(CATEGORY_PLACEHOLDERS[activeCategory]);
+    const visibleSections = $derived(
+        searchHits
+            ? searchHits.flatMap((r) => r.sections)
+            : activeCategoryDef.sections
+    );
+
+    function selectCategory(id: CategoryId) {
+        activeCategory = id;
+        const def = CATEGORIES.find((c) => c.id === id)!;
+        // Only move the content pane when the currently-shown section isn't
+        // one of the new category's — otherwise clicking the rail item
+        // you're already on would yank you to its first child.
+        if (!def.sections.some((s) => s.id === activeSection)) {
+            activeSection = def.sections[0]?.id ?? activeSection;
+        }
+    }
+
+    function selectSection(s: SectionDef) {
+        activeSection = s.id;
+        // Clicking a search hit has to move the rail too, or the middle
+        // column and the highlighted category disagree.
+        const owner = CATEGORIES.find((c) => c.sections.some((x) => x.id === s.id));
+        if (owner) activeCategory = owner.id;
+    }
+
+    // A hit in a different category opens on click. This is what makes the
+    // middle column legible while searching.
+    function sectionCategory(id: SectionId): CategoryId | null {
+        return CATEGORIES.find((c) => c.sections.some((x) => x.id === id))?.id ?? null;
+    }
 
     // Sweep state lives at the top so the runner survives tab switches.
     let sweepRunning = $state(false);
@@ -134,22 +275,6 @@
         }
     }
 
-    // Tabs in the order they read top-to-bottom. Privacy and Filters are
-    // separate now — privacy is image-loading + tracker behaviour;
-    // filters is the blocked/allowed sender + recipient + sieve rule list.
-    const TABS: { id: TabId; label: string; icon: IconName }[] = [
-        { id: 'account', label: 'Account', icon: 'user' },
-        { id: 'security', label: 'Security', icon: 'shield' },
-        { id: 'privacy', label: 'Privacy', icon: 'eye' },
-        { id: 'phishing', label: 'AI scam scan', icon: 'shieldAlert' },
-        { id: 'filters', label: 'Filters & blocks', icon: 'filter' },
-        { id: 'mail-rules', label: 'Mail rules', icon: 'filter' },
-        { id: 'compose', label: 'Compose', icon: 'pencil' },
-        { id: 'appearance', label: 'Appearance', icon: 'palette' },
-        { id: 'sounds', label: 'Sounds', icon: 'bell' },
-        { id: 'ai', label: 'AI', icon: 'sparkles' },
-        { id: 'notifications', label: 'Notifications', icon: 'bell' }
-    ];
 
     // --- Collapsible section state -------------------------------------------------
     let showBlockedSenders = $state(true);
@@ -158,40 +283,6 @@
     let showMailRules = $state(true);
     let showAiAdvanced = $state(false);
     let trustedAddInput = $state('');
-    let showClientRules = $state(true);
-
-    let clientRuleConditionType = $state<ClientRuleConditionType>('from-domain');
-    let clientRuleConditionValue = $state('');
-    let clientRuleActionType = $state<ClientRuleActionType>('archive');
-    let clientRuleActionFolder = $state('');
-
-    function doAddClientRule() {
-        const value = clientRuleConditionValue.trim();
-        if (!value) { showToast('error', 'Condition value is required'); return; }
-        if (clientRuleActionType === 'move' && !clientRuleActionFolder.trim()) {
-            showToast('error', 'Folder is required for Move actions'); return;
-        }
-        const name = `${clientRuleConditionType.replace('-', ' ')} "${value}" → ${clientRuleActionType.replace(/-/g, ' ')}`.slice(0, 100);
-        addClientRule({
-            name,
-            condition: { type: clientRuleConditionType, value },
-            action: clientRuleActionType === 'move'
-                ? { type: 'move', folder: clientRuleActionFolder.trim() }
-                : { type: clientRuleActionType }
-        });
-        clientRuleConditionValue = '';
-        clientRuleActionFolder = '';
-        showToast('success', 'Rule added — will fire on the next inbox load.');
-    }
-
-    function doResetSeen() {
-        const user = authState.activeUser || '';
-        if (!user) return;
-        import('../lib/client-rules').then((mod) => {
-            mod.clearSeenCache(user);
-            showToast('info', 'Cleared rule-history cache. Next inbox load will re-run rules over recent messages.');
-        });
-    }
     function addTrustedFromInput() {
         const v = trustedAddInput.trim();
         if (!v) return;
@@ -2047,136 +2138,6 @@
                         </div>
                     {/if}
 
-                    <div class="filter-block" data-testid="client-rules-block">
-                        <button
-                            type="button"
-                            class="collapse-header"
-                            onclick={() => showClientRules = !showClientRules}
-                            aria-expanded={showClientRules}
-                        >
-                            <span>
-                                <Icon name="sparkles" size={13} /> Client-side rules
-                                <span class="count">{settings.clientRules.length}</span>
-                            </span>
-                            <Icon name={showClientRules ? 'chevronUp' : 'chevronDown'} size={14} />
-                        </button>
-                        {#if showClientRules}
-                            <div class="collapse-body">
-                                <p class="muted small">
-                                    Run when the inbox loads in this browser. The matching message
-                                    is moved to a folder, archived, trashed, marked read, or
-                                    handed to an AI action. Rows pop away with a shimmer once the
-                                    action finishes — async in the background. Stored locally and
-                                    synced across your devices via the hidden settings folder.
-                                </p>
-
-                                <div class="rule-form" data-testid="client-rule-form">
-                                    <label class="rule-row">
-                                        <span class="rule-label">When</span>
-                                        <select bind:value={clientRuleConditionType}>
-                                            <option value="from-contains">From contains</option>
-                                            <option value="from-domain">From domain is</option>
-                                            <option value="subject-contains">Subject contains</option>
-                                            <option value="to-contains">To contains</option>
-                                        </select>
-                                    </label>
-                                    <label class="rule-row">
-                                        <span class="rule-label">Value</span>
-                                        <input
-                                            type="text"
-                                            placeholder={clientRuleConditionType === 'from-domain' ? 'example.com' : 'newsletter'}
-                                            bind:value={clientRuleConditionValue}
-                                        />
-                                    </label>
-                                    <label class="rule-row">
-                                        <span class="rule-label">Then</span>
-                                        <select bind:value={clientRuleActionType}>
-                                            <option value="archive">Archive (move to Archive)</option>
-                                            <option value="trash">Send to Trash</option>
-                                            <option value="mark-read">Mark as read</option>
-                                            <option value="move">Move to specific folder</option>
-                                            <option value="ai-summarize-archive">AI summarize, then archive</option>
-                                            <option value="ai-brief">AI brief into AI Conversations + archive</option>
-                                        </select>
-                                    </label>
-                                    {#if clientRuleActionType === 'move'}
-                                        <label class="rule-row">
-                                            <span class="rule-label">Folder</span>
-                                            <input
-                                                type="text"
-                                                placeholder="e.g. Receipts"
-                                                bind:value={clientRuleActionFolder}
-                                            />
-                                        </label>
-                                    {/if}
-                                    <div class="rule-actions">
-                                        <button type="button" class="btn btn-primary" onclick={doAddClientRule}>Add rule</button>
-                                    </div>
-                                </div>
-
-                                {#if settings.clientRules.length}
-                                    <ul class="rule-cards" data-testid="client-rule-list">
-                                        {#each settings.clientRules as r (r.id)}
-                                            <li class="rule-card" data-testid={`client-rule-${r.id}`}>
-                                                <div class="rule-card-head">
-                                                    <span class={`rule-badge rule-${r.action.type}`}>
-                                                        {#if r.action.type === 'archive'}
-                                                            <Icon name="archive" size={11} /> Archive
-                                                        {:else if r.action.type === 'trash'}
-                                                            <Icon name="trash" size={11} /> Trash
-                                                        {:else if r.action.type === 'mark-read'}
-                                                            <Icon name="eye" size={11} /> Mark read
-                                                        {:else if r.action.type === 'move'}
-                                                            <Icon name="folder" size={11} /> Move
-                                                        {:else}
-                                                            <Icon name="sparkles" size={11} /> AI
-                                                        {/if}
-                                                    </span>
-                                                    <span class="rule-name truncate" title={r.name}>{r.name}</span>
-                                                    <label class="toggle compact" style="margin-left:auto;">
-                                                        <input
-                                                            type="checkbox"
-                                                            checked={r.enabled}
-                                                            onchange={(e) => updateClientRule(r.id, { enabled: (e.currentTarget as HTMLInputElement).checked })}
-                                                        />
-                                                        <span>{r.enabled ? 'On' : 'Off'}</span>
-                                                    </label>
-                                                    <button
-                                                        type="button"
-                                                        class="rule-remove"
-                                                        aria-label={`Remove rule ${r.name}`}
-                                                        title="Remove rule"
-                                                        onclick={() => removeClientRule(r.id)}
-                                                    ><Icon name="trash" size={12} /></button>
-                                                </div>
-                                                <div class="rule-card-body">
-                                                    <div class="rule-clause">
-                                                        <span class="rule-when">When</span>
-                                                        <span class="rule-cond">{r.condition.type.replace('-', ' ')}</span>
-                                                        <code class="rule-val">{r.condition.value}</code>
-                                                    </div>
-                                                    <div class="rule-clause">
-                                                        <span class="rule-when">Then</span>
-                                                        <span class="rule-action-text">{r.action.type.replace(/-/g, ' ')}</span>
-                                                        {#if r.action.folder}<code class="rule-val">{r.action.folder}</code>{/if}
-                                                    </div>
-                                                </div>
-                                            </li>
-                                        {/each}
-                                    </ul>
-                                {:else}
-                                    <p class="muted small">No client-side rules yet.</p>
-                                {/if}
-
-                                <div style="margin-top:12px;">
-                                    <button type="button" class="btn btn-ghost" onclick={doResetSeen}>
-                                        Re-run rules from scratch
-                                    </button>
-                                    <span class="muted small" style="margin-left:8px;">Forgets which messages have already been processed by rules in this browser.</span>
-                                </div>
-                            </div>
-                        {/if}
-                    </div>
                 </section>
 
             {:else if activeTab === 'appearance'}

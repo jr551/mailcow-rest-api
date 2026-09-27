@@ -51,6 +51,7 @@
     import { getShortcuts, blockSender as apiBlockSender, type Shortcut } from '../lib/api';
     import { shortcutsItems, embeddedShortcut, popupShortcut } from '../lib/shortcuts-store';
     import { probeCapabilities, settings, setHideSidebar } from '../lib/settings.svelte';
+    import { skinState } from '../lib/skins.svelte';
     import { initImapSync, newThread as newAiThread, appendMessage as appendAiMessage, requestAutoSend as requestAutoSendAi } from '../lib/ai-threads.svelte';
     import { toggleSelected, clearSelection, selectAllVisible } from '../lib/store.svelte';
     import * as cache from '../lib/cache';
@@ -194,6 +195,22 @@
     // Tracks which sent-row is expanded to show its DSN diagnostic.
     let sentExpanded = $state<string | null>(null);
     let myAvatar = $derived((authState.activeUser ? myAvatars.map[authState.activeUser.toLowerCase()] : null) || null);
+
+    // The Outlook skins carry no ambient top-bar chips: their extras CSS
+    // hides .weather-wrap outright. That rule can't reach the options menu,
+    // which is a sibling of the wrapper, so gating in CSS alone leaves an
+    // orphaned dropdown floating over the header. Resolve visibility in
+    // Svelte instead — the Outlook skins need their own opt-in, off unless
+    // the user asks for it.
+    //
+    // Both `outlook` and `outlook-dark` count as Outlook here. Hardcoding a
+    // single id meant the new dark skin bypassed the gate entirely and the
+    // opt-in setting silently did nothing on it.
+    const OUTLOOK_SKINS = new Set(['outlook', 'outlook-dark']);
+    let weatherChipVisible = $derived(
+        settings.weatherChip &&
+        (!OUTLOOK_SKINS.has(skinState.skinId) || settings.weatherChipOutlook)
+    );
 
     // Server health ping. Round-trip /health every 15 s and surface the
     // latency in the topbar (with a radar pulse). Slow/offline states
@@ -519,20 +536,7 @@
                     recordEnvelope(m.envelope.cc);
                 }
                 if (!ui.online) ui.online = true;
-                // Client-side rules pass: matches anything new against
-                // the user's rules and pops the row away while the
-                // action runs (move / archive / AI summarize-archive).
-                // Best-effort — never throws back into the refresh.
-                if (settings.clientRules.length > 0 && ui.selectedPath.toUpperCase() === 'INBOX') {
-                    import('../lib/client-rules').then((mod) => {
-                        return mod.runClientRules({
-                            user: currentUser(),
-                            path: ui.selectedPath,
-                            messages: r.messages,
-                            mailboxes: ui.mailboxes
-                        });
-                    }).catch(() => { /* swallow */ });
-                }
+                // (client-rules pass removed — settings.clientRules deleted by Settings refactor)
                 // On mobile, after the first page lands, drain the rest
                 // of the folder in the background so the whole inbox is
                 // available offline.
@@ -1567,11 +1571,18 @@
             {:else}
                 <LatencyChip />
             {/if}
-            {#if settings.weatherChip}
+            <!-- The Outlook skin hides the chip with its extras CSS. That
+                 * rule only covers .weather-wrap, so the chip's options
+                 * menu (a sibling of the wrapper) would survive as an
+                 * orphan floating over the OWA header. Gate the whole
+                 * gadget on a per-skin opt-in instead, so the skin's
+                 * chrome stays honest about what it carries. -->
+            {#if weatherChipVisible}
                 <WeatherChip
                     latitude={settings.weatherLatitude}
                     longitude={settings.weatherLongitude}
                     units={settings.weatherUnits}
+                    forceVisible={OUTLOOK_SKINS.has(skinState.skinId)}
                 />
             {/if}
             {#if settings.calendarTicker}

@@ -116,6 +116,11 @@ export interface Settings {
     vipAddresses: string;
     /** Show the Open-Meteo weather chip in the desktop top bar. */
     weatherChip: boolean;
+    /** The Outlook skin deliberately keeps the top bar sparse (its extras
+     *  CSS hides the chip outright), so that skin needs a separate opt-in.
+     *  Off by default: a user who never asked for the chip on OWA should
+     *  not find it silently there. */
+    weatherChipOutlook: boolean;
     /** Latitude for the weather chip. Defaults to London. */
     weatherLatitude: number;
     /** Longitude for the weather chip. */
@@ -134,34 +139,8 @@ export interface Settings {
      *  topbar panel button, remembered here so a hidden rail survives
      *  reloads. */
     hideSidebar: boolean;
-    /** Client-side rules. Run when the inbox list loads — match on
-     *  envelope fields and either move the message somewhere, archive
-     *  it, or kick off an AI action that pops the row away while it
-     *  works. Synced via settings-sync so a rule added on one device
-     *  fires on every device. Empty by default. */
-    clientRules: ClientRule[];
 }
 
-export type ClientRuleConditionType = 'from-contains' | 'subject-contains' | 'to-contains' | 'from-domain';
-export type ClientRuleActionType = 'move' | 'archive' | 'trash' | 'mark-read' | 'ai-summarize-archive' | 'ai-brief';
-
-export interface ClientRuleCondition {
-    type: ClientRuleConditionType;
-    value: string;
-}
-
-export interface ClientRuleAction {
-    type: ClientRuleActionType;
-    folder?: string; // required when type === 'move'
-}
-
-export interface ClientRule {
-    id: string;
-    enabled: boolean;
-    name: string;
-    condition: ClientRuleCondition;
-    action: ClientRuleAction;
-}
 
 const defaultLlm: LlmConfig = {
     kind: 'openai',
@@ -172,11 +151,12 @@ const defaultLlm: LlmConfig = {
 };
 
 function load(): Settings {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    let out: Settings;
     try {
-        const raw = localStorage.getItem(STORAGE_KEY);
         if (raw) {
             const parsed = JSON.parse(raw);
-            return {
+            out = {
                 llm: { ...defaultLlm, ...(parsed.llm || {}) },
                 useCustomLlm: !!parsed.useCustomLlm,
                 aiFeatures: parsed.aiFeatures !== false,
@@ -222,16 +202,18 @@ function load(): Settings {
                     ? parsed.vipAddresses
                     : 'family@delivering.email, family@rowe.net.me',
                 weatherChip: !!parsed.weatherChip,
+                weatherChipOutlook: !!parsed.weatherChipOutlook,
                 weatherLatitude: typeof parsed.weatherLatitude === 'number' ? parsed.weatherLatitude : 51.5074,
                 weatherLongitude: typeof parsed.weatherLongitude === 'number' ? parsed.weatherLongitude : -0.1278,
                 weatherUnits: parsed.weatherUnits === 'fahrenheit' ? 'fahrenheit' : 'celsius',
                 calendarTicker: !!parsed.calendarTicker,
                 calendarTickerTitles: !!parsed.calendarTickerTitles,
-                hideSidebar: parsed.hideSidebar !== false,
-                clientRules: Array.isArray(parsed.clientRules)
-                    ? parsed.clientRules.filter(isValidClientRule)
-                    : []
+                hideSidebar: parsed.hideSidebar !== false
             };
+            // Sanitise the blob on the way past, not just the object we
+            // return, so the stale field can't come back via settings-sync.
+            migrateStripClientRules(raw);
+            return out;
         }
     } catch { /* noop */ }
     return {
@@ -265,37 +247,36 @@ function load(): Settings {
         composeHistorySummary: true,
         vipAddresses: 'family@delivering.email, family@rowe.net.me',
         weatherChip: false,
+        weatherChipOutlook: false,
         weatherLatitude: 51.5074,
         weatherLongitude: -0.1278,
         weatherUnits: 'celsius',
         calendarTicker: false,
         calendarTickerTitles: false,
-        hideSidebar: true,
-        clientRules: []
+        hideSidebar: true
     };
 }
 
-const VALID_RULE_CONDITION_TYPES: ClientRuleConditionType[] = [
-    'from-contains', 'subject-contains', 'to-contains', 'from-domain'
-];
-const VALID_RULE_ACTION_TYPES: ClientRuleActionType[] = [
-    'move', 'archive', 'trash', 'mark-read', 'ai-summarize-archive', 'ai-brief'
-];
-
-function isValidClientRule(r: unknown): r is ClientRule {
-    if (!r || typeof r !== 'object') return false;
-    const rec = r as Record<string, unknown>;
-    if (typeof rec.id !== 'string' || typeof rec.name !== 'string') return false;
-    if (typeof rec.enabled !== 'boolean') return false;
-    const cond = rec.condition as Record<string, unknown> | null;
-    if (!cond || typeof cond !== 'object') return false;
-    if (!VALID_RULE_CONDITION_TYPES.includes(cond.type as ClientRuleConditionType)) return false;
-    if (typeof cond.value !== 'string') return false;
-    const act = rec.action as Record<string, unknown> | null;
-    if (!act || typeof act !== 'object') return false;
-    if (!VALID_RULE_ACTION_TYPES.includes(act.type as ClientRuleActionType)) return false;
-    if (act.type === 'move' && typeof act.folder !== 'string') return false;
-    return true;
+/* Client-side rules (the in-browser "move / archive / AI-brief" engine) were
+ * deleted wholesale: the builder UI, the runner, and the stored rules. An
+ * upgrading user still has `clientRules` sitting in their localStorage blob
+ * *and* in the newest IMAP-synced `.storage_webmailsettings` snapshot, which
+ * settings-sync would happily merge straight back in. So the blob is
+ * sanitised on the local read path here, on the synced read path in
+ * settings-sync, and rewritten to localStorage so the delete is durable.
+ *
+ * Without this the rules would linger invisibly: no UI to remove them, no
+ * runner to apply them, and a future re-add of the field would silently
+ * re-arm them years later. */
+function migrateStripClientRules(raw: string | null) {
+    if (!raw) return;
+    try {
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object') return;
+        if (!('clientRules' in parsed)) return;
+        delete parsed.clientRules;
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
+    } catch { /* not our JSON — load() falls back to defaults anyway */ }
 }
 
 function persist(s: Settings) {
@@ -378,35 +359,6 @@ export function pickFromName(fromAddr: string): string | undefined {
     return derived || undefined;
 }
 
-function newRuleId(): string {
-    if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
-        return (crypto as { randomUUID: () => string }).randomUUID();
-    }
-    return `r${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-export function addClientRule(rule: Omit<ClientRule, 'id' | 'enabled'> & { enabled?: boolean }): ClientRule {
-    const next: ClientRule = {
-        id: newRuleId(),
-        enabled: rule.enabled ?? true,
-        name: rule.name,
-        condition: { ...rule.condition },
-        action: { ...rule.action }
-    };
-    state.clientRules = [...state.clientRules, next];
-    persist(state);
-    return next;
-}
-
-export function updateClientRule(id: string, patch: Partial<Omit<ClientRule, 'id'>>): void {
-    state.clientRules = state.clientRules.map((r) => r.id === id ? { ...r, ...patch } : r);
-    persist(state);
-}
-
-export function removeClientRule(id: string): void {
-    state.clientRules = state.clientRules.filter((r) => r.id !== id);
-    persist(state);
-}
 
 export function setPageSize(size: number | 'unlimited') {
     state.pageSize = size;
@@ -537,6 +489,11 @@ export function isVipAddress(addresses: Array<string | null | undefined>): strin
 
 export function setWeatherChip(on: boolean) {
     state.weatherChip = on;
+    persist(state);
+}
+
+export function setWeatherChipOutlook(on: boolean) {
+    state.weatherChipOutlook = on;
     persist(state);
 }
 

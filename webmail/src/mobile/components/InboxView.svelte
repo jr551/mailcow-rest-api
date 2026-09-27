@@ -17,7 +17,6 @@
     import { formatDate, senderShort, isTrackingEmail } from '../../lib/format';
     import { type InboxSortRanking } from '../../lib/api';
     import { sortInboxClient } from '../../lib/sort-inbox-client';
-    import { settings } from '../../lib/settings.svelte';
     import Icon from '../../components/Icon.svelte';
     import Avatar from '../../components/Avatar.svelte';
     import SwipeableRow from './SwipeableRow.svelte';
@@ -103,19 +102,7 @@
             });
             mobileState.messages = r.messages;
             mobileState.messagesTotal = r.total;
-            // Client-side rules: fire on Inbox loads. Same engine + event
-            // protocol as desktop, so the row pop-away animation works
-            // identically. Best-effort, never throws back into the load.
-            if (settings.clientRules.length > 0 && mobileState.selectedPath.toUpperCase() === 'INBOX') {
-                import('../../lib/client-rules').then((mod) => {
-                    return mod.runClientRules({
-                        user: authState.activeUser || '',
-                        path: mobileState.selectedPath,
-                        messages: r.messages,
-                        mailboxes: mobileState.mailboxes
-                    });
-                }).catch(() => { /* */ });
-            }
+            // (client-rules pass removed — settings.clientRules deleted by Settings refactor)
         } catch (err) {
             mobileState.messagesError = err instanceof Error ? err.message : 'Failed to load messages';
             if (err instanceof ApiError && err.status === 401) {

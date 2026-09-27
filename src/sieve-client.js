@@ -7,6 +7,24 @@ const SCRIPT_NAME = 'imap-rest-rules';
 const PRESERVED_MARKER = '# --- preserved rules ---';
 const RULES_HEADER = '# mailcow-rest-api rules';
 
+// Hidden mailbox an outbound-webhook rule parks its message in.
+//
+// Sieve has no HTTP action, so a "send to webhook" rule cannot POST. It
+// redirects into this mailbox instead and the forwarder polls it. The name
+// lives here because it is part of the Sieve contract — the store imports it
+// rather than keeping a second copy that could drift.
+const WEBHOOK_MAILBOX_PREFIX = '.wh-';
+
+function webhookMailbox(id) {
+    return `${WEBHOOK_MAILBOX_PREFIX}${id}`;
+}
+
+function webhookIdFromMailbox(mailbox) {
+    if (typeof mailbox !== 'string' || !mailbox.startsWith(WEBHOOK_MAILBOX_PREFIX)) return null;
+    const id = mailbox.slice(WEBHOOK_MAILBOX_PREFIX.length);
+    return /^[a-z0-9]+$/.test(id) ? id : null;
+}
+
 function isOk(response) {
     return /(^|\r\n)OK(\s|$)/m.test(response);
 }
@@ -116,6 +134,17 @@ function compileAction(action) {
             return `    redirect "${escapeSieveString(action.to)}";\n    stop;`;
         case 'copy':
             return `    redirect :copy "${escapeSieveString(action.to)}";`;
+        case 'fileinto':
+            // Auto-move: the message is filed into a folder and stays there.
+            // No `stop`, so later rules can still see it — matching how
+            // `copy` behaves and how users expect a "move" rule to compose.
+            return `    fileinto "${escapeSieveString(action.folder)}";`;
+        case 'webhook':
+            // Not a real Sieve action: the message is parked in the
+            // webhook's hidden mailbox and the forwarder does the HTTP POST.
+            // `stop` because the message has left the delivery path — letting
+            // later rules also act on it would double-handle it.
+            return `    redirect "${escapeSieveString(webhookMailbox(action.webhookId))}";\n    stop;`;
         default:
             throw new Error(`Unknown action type: ${action.type}`);
     }
@@ -134,9 +163,13 @@ function compileRulesScript(rules, preservedContent) {
 
     const needsEnvelope = rules.some((r) => r.condition.type === 'envelope-to-is');
     const needsCopy = rules.some((r) => r.action.type === 'copy');
+    const needsFileinto = rules.some((r) => r.action.type === 'fileinto');
     const requirements = [];
     if (needsEnvelope) requirements.push('"envelope"');
     if (needsCopy) requirements.push('"copy"');
+    // `fileinto` is not in the base Sieve capability set — Dovecot rejects a
+    // script that uses it without declaring the extension.
+    if (needsFileinto) requirements.push('"fileinto"');
 
     let out = '';
     if (requirements.length) {
@@ -211,7 +244,20 @@ function parseAction(actionStr) {
     if (copyMatch) return { type: 'copy', to: unescapeSieveString(copyMatch[1]) };
 
     const redirectMatch = actionStr.match(/redirect "([^"]+)"/);
-    if (redirectMatch) return { type: 'redirect', to: unescapeSieveString(redirectMatch[1]) };
+    if (redirectMatch) {
+        const to = unescapeSieveString(redirectMatch[1]);
+        // A redirect into the webhook namespace is our own `webhook` action,
+        // not a user redirect. Without this check it would parse back as a
+        // plain redirect and the rule would lose its type on the next read —
+        // the same class of round-trip bug the id escaping above exists to
+        // avoid.
+        const webhookId = webhookIdFromMailbox(to);
+        if (webhookId) return { type: 'webhook', webhookId };
+        return { type: 'redirect', to };
+    }
+
+    const fileintoMatch = actionStr.match(/fileinto "([^"]+)"/);
+    if (fileintoMatch) return { type: 'fileinto', folder: unescapeSieveString(fileintoMatch[1]) };
 
     return null;
 }
@@ -362,5 +408,8 @@ module.exports = {
     compileRulesScript,
     parseRules,
     buildBlockedRecipientsScript,
-    parseBlockedRecipients
+    parseBlockedRecipients,
+    webhookMailbox,
+    webhookIdFromMailbox,
+    WEBHOOK_MAILBOX_PREFIX
 };

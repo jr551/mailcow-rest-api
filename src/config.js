@@ -256,6 +256,22 @@ module.exports = Object.freeze({
         maxPerUser: num(process.env.WEBHOOK_INBOXES_MAX_PER_USER, 10)
     },
 
+    outboundWebhooks: {
+        // User-minted "email → webhook" subscriptions. Same credential
+        // requirement as webhook inboxes: the forwarder has to open the
+        // owner's hidden mailbox over IMAP to read what the rule parked there.
+        enabled: bool(process.env.OUTBOUND_WEBHOOKS_ENABLED, true),
+        dbPath: dataFile(process.env.OUTBOUND_WEBHOOKS_DB_PATH, 'outbound-webhooks.db'),
+        maxPerUser: num(process.env.OUTBOUND_WEBHOOKS_MAX_PER_USER, 10),
+        pollIntervalMs: num(process.env.OUTBOUND_WEBHOOK_POLL_INTERVAL_MS, 60_000),
+        timeoutMs: num(process.env.OUTBOUND_WEBHOOK_TIMEOUT_MS, 15_000),
+        maxAttempts: num(process.env.OUTBOUND_WEBHOOK_MAX_ATTEMPTS, 14),
+        maxMessageBytes: num(process.env.OUTBOUND_WEBHOOK_MAX_MESSAGE_BYTES, 25 * 1024 * 1024),
+        includeAttachments: bool(process.env.OUTBOUND_WEBHOOK_INCLUDE_ATTACHMENTS, true),
+        maxAttachmentBytes: num(process.env.OUTBOUND_WEBHOOK_MAX_ATTACHMENT_BYTES, 10 * 1024 * 1024),
+        maxAttachmentsTotalBytes: num(process.env.OUTBOUND_WEBHOOK_MAX_ATTACHMENTS_TOTAL_BYTES, 20 * 1024 * 1024)
+    },
+
     admin: {
         // Bearer token for /v1/admin/*. Unset leaves the whole admin surface
         // unrouted (404), so a deployment that never configures one is not

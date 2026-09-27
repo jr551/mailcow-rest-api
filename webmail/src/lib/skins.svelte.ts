@@ -1221,6 +1221,178 @@ export const SKINS: Skin[] = [
         }
     },
 
+    // ─── Outlook on the web, dark mode ───────────────────────────────────
+    // The genuine counterpart of the skin above, not an inversion. OWA's
+    // dark theme keeps the *blue* command bar and swaps every neutral for
+    // the Fluent dark ramp (neutralLighter #1f1f1f family) — pure black
+    // reads as "OLED gimmick" rather than "Fluent", so the surfaces sit a
+    // hair above black and separate via the borders instead.
+    //
+    // Every non-colour decision (Segoe UI, near-square radii, the star red,
+    // the hidden voice FAB / ambient chips, the OWA structural rules) is
+    // mirrored from the light skin on purpose: the two must stay in sync
+    // as a pair or the picker starts offering two different-looking "Outlook".
+    {
+        id: 'outlook-dark',
+        label: 'Outlook Dark',
+        description: 'Microsoft Outlook on the web in dark mode — blue chrome over Fluent dark neutrals.',
+        swatch: '#1f2b3d',
+        full: true,
+        extras: {
+            css: `
+                /* Dark-mode OWA command bar. Darker and a touch deeper than
+                 * the light skin's #0078d4 so it doesn't glare against the
+                 * near-black panes below it, but still unmistakably the same
+                 * saturated OWA blue. */
+                .topbar {
+                    background: #0f6cbd !important;
+                    border-bottom: 1px solid #0a5a9e !important;
+                }
+                .topbar .brand-mark { color: #fff !important; }
+                .topbar .brand-sub { color: rgba(255,255,255,0.75) !important; }
+                .topbar .logo { background: rgba(255,255,255,0.18) !important; }
+                .topbar .btn-ghost,
+                .topbar .theme-toggle { color: #fff !important; }
+                .topbar .btn-ghost:hover,
+                .topbar .theme-toggle:hover {
+                    background: rgba(255,255,255,0.15) !important;
+                    color: #fff !important;
+                }
+                /* OWA's search field flips to the dark neutral instead of
+                 * staying white — a white box punched into a dark header is
+                 * the classic tell of a lazily inverted theme. */
+                .topbar .search-wrap {
+                    background: #1b1b1b !important;
+                    border: 1px solid #3b3a39 !important;
+                }
+                .topbar .search-wrap input { color: #f3f2f1 !important; }
+                .topbar .search-wrap input::placeholder { color: #8a8886 !important; }
+                .topbar .search-scope-btn { color: #60cdff !important; border-color: #3b3a39 !important; }
+                .topbar .muted { color: rgba(255,255,255,0.85) !important; }
+
+                /* Signed-in user next to the brand, like OWA's header. */
+                .topbar .brand-user {
+                    display: inline-flex !important;
+                    color: #fff !important;
+                    margin-left: 4px;
+                }
+                .topbar .brand-user-emoji { font-size: 14px; }
+
+                /* OWA's header is sparse — no mic FAB; the Assistant button
+                 * stays. */
+                .voice-fab { display: none !important; }
+
+                /* OWA's topbar carries no ambient chips — weather and the
+                 * calendar ticker stay hidden under this skin even when the
+                 * user has them enabled for other skins. (The Layout's
+                 * weatherChipOutlook opt-in re-asserts .weather-wrap via the
+                 * scoped -forced class; it currently only triggers for the
+                 * light 'outlook' id — see the release note in Settings.) */
+                .topbar .weather-wrap, .topbar .cal-ticker { display: none !important; }
+
+                /* OWA marks unread rows with a blue edge bar and a blue
+                 * bolded subject — no dot, no tint. */
+                .row.unread { box-shadow: inset 3px 0 0 var(--accent) !important; }
+                .row.unread .subject { color: var(--accent-text) !important; }
+                .row .unread-dot { display: none !important; }
+
+                /* OWA folder counts are plain blue numerals, not pills. */
+                .folder .count {
+                    background: transparent !important;
+                    color: var(--accent) !important;
+                    padding: 0 !important;
+                    min-width: 0 !important;
+                }
+                .folder.active .count {
+                    background: transparent !important;
+                    color: var(--accent-text) !important;
+                }
+
+                /* OWA is flat: rows, folders and buttons don't lift. */
+                .btn:hover, .row:hover, .folder:hover { transform: none !important; }
+
+                /* Dark scrollbars: Fluent's dark track/thumb, otherwise the
+                 * browser paints a bright grey gutter against the panes. */
+                * { scrollbar-color: #3b3a39 #1b1b1b; }
+                *::-webkit-scrollbar-thumb { background: #3b3a39; }
+                *::-webkit-scrollbar-track { background: #1b1b1b; }
+            `
+        },
+        themeColor: '#0f6cbd',
+        vars: {
+            // Fluent dark neutral ramp. The message list and folder pane
+            // share neutralLighter (#1f1f1f) so they read as one plane with
+            // a hairline between them; the reading pane drops a step to
+            // #1b1b1b because OWA insets it, giving the classic
+            // "list on a shelf, article in a well" depth without shadows.
+            '--bg-base': '#1f1f1f',
+            '--bg-surface': '#1f1f1f',
+            '--bg-surface-alt': '#252525',
+            '--bg-elevated': '#2b2b2b',
+            '--bg-hover': '#2a2a2a',
+            '--bg-active': '#323232',
+            '--bg-selected': '#2b579a',
+            '--bg-overlay': 'rgba(0, 0, 0, 0.6)',
+            '--bg-input': '#1b1b1b',
+            '--bg-tag': '#2d2d2d',
+
+            // Fluent's light-grey text ramp, unchanged by dark mode.
+            '--text-primary': '#f3f2f1',
+            '--text-secondary': '#c8c6c4',
+            '--text-tertiary': '#8a8886',
+            '--text-on-accent': '#ffffff',
+            '--text-link': '#60cdff',
+
+            // Dark borders have to be lighter than the surface, not darker —
+            // on a near-black pane a dark hairline is invisible.
+            '--border-subtle': '#2d2d2d',
+            '--border-soft': '#3b3a39',
+            '--border-strong': '#484644',
+            '--border-focus': '#60cdff',
+
+            // Same communication blue family as the light skin, stepped up
+            // in luminance so it holds up on #1f1f1f. accent-text is the
+            // pale cyan-blue OWA uses for links and unread subjects in dark.
+            '--accent': '#3b9eff',
+            '--accent-hover': '#62b0ff',
+            '--accent-soft': '#17253a',
+            '--accent-text': '#60cdff',
+            '--unread-dot': '#3b9eff',
+
+            // Fluent semantics, dark-background variants: the *soft* washes
+            // become translucent fills (a pale wash on a dark pane reads as
+            // a hole), the hues themselves lighten so text on them passes.
+            '--danger': '#f1707b',
+            '--danger-soft': 'rgba(255, 123, 145, 0.16)',
+            '--success': '#6ccb5f',
+            '--success-soft': 'rgba(108, 203, 95, 0.16)',
+            '--warning': '#fce100',
+            '--warning-soft': 'rgba(252, 225, 0, 0.14)',
+            // OWA's flag red is one of the few brand constants that doesn't
+            // get a dark variant — a darker red vanishes on #1f1f1f.
+            '--star': '#e74856',
+
+            '--font-sans': `'Segoe UI', 'Segoe UI Variable Text', 'Segoe UI Web (West European)',
+                -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', sans-serif`,
+
+            // Fluent shape: near-square chrome, 4px controls. Same values as
+            // the light skin — shape is theme-independent.
+            '--radius-xs': '2px',
+            '--radius-sm': '4px',
+            '--radius-md': '4px',
+            '--radius-lg': '6px',
+            '--radius-xl': '8px',
+
+            // Dark elevation: you cannot drop a black shadow onto a near-black
+            // surface, so the depth has to come from a light rim plus a soft
+            // black ambient. Same geometry as the light skin, re-expressed.
+            '--shadow-sm': '0 0 1px rgba(255, 255, 255, 0.04), 0 1px 2px rgba(0, 0, 0, 0.5)',
+            '--shadow-md': '0 0 1px rgba(255, 255, 255, 0.05), 0 3.2px 7.2px rgba(0, 0, 0, 0.55), 0 0.6px 1.8px rgba(0, 0, 0, 0.45)',
+            '--shadow-lg': '0 0 1px rgba(255, 255, 255, 0.08), 0 12px 28px rgba(0, 0, 0, 0.7), 0 2px 8px rgba(0, 0, 0, 0.5)',
+            '--pill-padding': '2px 8px'
+        }
+    },
+
     // ─── Photo themes (load real images at runtime) ───────────────────────
     // These hit third-party endpoints (cataas.com / loremflickr.com) the
     // first time the theme activates, then the browser caches them. Opt-in

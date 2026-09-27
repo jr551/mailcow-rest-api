@@ -280,10 +280,15 @@ export async function listMessages(
     );
 }
 
-export async function getMessage(path: string, uid: number): Promise<MessageDetail> {
+export async function getMessage(
+    path: string,
+    uid: number,
+    opts: { signal?: AbortSignal } = {}
+): Promise<MessageDetail> {
     return request<MessageDetail>(
         'GET',
-        `/v1/mailboxes/${encodeURIComponent(path)}/messages/${uid}`
+        `/v1/mailboxes/${encodeURIComponent(path)}/messages/${uid}`,
+        { signal: opts.signal }
     );
 }
 

@@ -15,7 +15,7 @@
 // Snapshot envelope:
 //   Subject: webmail-settings-v1
 //   Content-Type: application/json
-//   Body: { v:1, ts, settings, spamFeedback, clientRules }
+//   Body: { v:1, ts, settings, spamFeedback }
 //
 // Conflict policy: last-write-wins by `ts`. Settings are user-edited
 // (low frequency, single-author per device) so we don't bother with
@@ -156,6 +156,11 @@ export function applySnapshot(remote: SettingsSnapshot): boolean {
     // Settings: assign field-by-field so Svelte runes register the
     // change and dependents (effects, $derived) re-run.
     const incoming = remote.settings;
+    // `clientRules` used to ride along in the snapshot. The feature is gone,
+    // but snapshots already in the sync folder still carry it, and the
+    // field-by-field merge below would happily stamp it back onto state.
+    // Drop it before the loop so an upgrading device pulls a clean snapshot.
+    if ('clientRules' in incoming) delete (incoming as Record<string, unknown>).clientRules;
     for (const k of Object.keys(incoming) as (keyof Settings)[]) {
         const cur = (settings as unknown as Record<string, unknown>)[k as string];
         const next = (incoming as unknown as Record<string, unknown>)[k as string];

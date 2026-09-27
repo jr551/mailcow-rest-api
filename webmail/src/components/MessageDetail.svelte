@@ -85,10 +85,32 @@
             spamMoving = false;
         }
     }
+    // Identity of the message the last scan ran for. `ui.detail` is
+    // reassigned on every refresh of the SAME message (background sync, a
+    // flag change, a re-poll) — not just when the user opens a different
+    // one. Re-running the effect on those reassignments cleared
+    // `phishingResult`, flipped `phishingScanning` back on and re-ran the
+    // overlay animation, which — together with the `{#key d.uid}` remount
+    // below — tore down and rebuilt the whole pane. That is the "message
+    // collapses and pops back up" the user reported. Bail out when we are
+    // already showing the result for this exact message.
+    let scannedKey = '';
+
+    // What identifies "a different message": the folder plus the uid.
+    // Neither alone is sufficient — a uid is only unique within a
+    // mailbox, and the same folder can be re-listed.
+    function scanKeyFor(p: string, uid: number | string): string {
+        return `${p}::${uid}`;
+    }
+
 
     $effect(() => {
         const detail = ui.detail;
         const path = ui.selectedPath;
+        // Re-listing or re-syncing the message already on screen is not a
+        // new scan: leave its result and overlay alone.
+        const key = detail && path ? scanKeyFor(path, detail.uid) : '';
+        if (key && key === scannedKey) return;
         // Skip phishing scan on AI conversation messages — they're our own
         // chat history, not inbound mail. Pointless burn of LLM tokens
         // (and the smoke effect was scaring people).
@@ -104,6 +126,11 @@
         phishingDismissed = false;
         spamDismissed = false;
         phishingResult = null;
+        // Memoise only once we know we are really scanning. Recording it
+        // earlier would make the guard swallow a later rescan — a user
+        // turning the scan setting off and back on for this same message
+        // would never get a result again.
+        scannedKey = key;
         if (phishingAbort) { phishingAbort.abort(); }
         phishingAbort = new AbortController();
 
@@ -227,7 +254,26 @@
         const target = e.target as HTMLElement;
         if (aiToolsOpen && !target?.closest?.('.ai-tools-wrap')) closeAiTools();
         if (calOptionsOpen && !target?.closest?.('.cal-options-wrap')) closeCalOptions();
+        // The Move menu had no outside-click dismissal of its own, so it
+        // stayed open whenever focus went anywhere else in the window —
+        // including a click on the message body. Match the other two.
+        // Scoped to the detail pane because `.more` is a generic class name
+        // and a document-wide match could latch onto an unrelated element.
+        if (moveOpen && !target?.closest?.('.detail-header .more')) moveOpen = false;
     }
+
+    // Any dropdown in the header belongs to the message that was on screen
+    // when it was opened. The `{#key d.uid}` block further down remounts the
+    // whole pane when the user picks a different message, but the open flags
+    // are component-level, so they outlived the remount: opening Move on one
+    // message and clicking through to another left the new message's dropdown
+    // already open, anchored to nothing. Reset them with the message.
+    $effect(() => {
+        void ui.selectedUid;
+        moveOpen = false;
+        calOptionsOpen = false;
+        closeAiTools();
+    });
 
     function runAction(a: EmailAction, d: MessageDetail) {
         // Open a fresh AI thread seeded with the email's context + the
@@ -2827,12 +2873,12 @@
         pointer-events: none;
     }
 
-    /* Soft floating phishing warning — sits at the top of .body, fades
-       in with three rising "smoke" puffs behind it, then auto-dismisses
-       after ~8s unless the user clicks ✕ first. */
+    /* Soft floating phishing warning — hovers over the top of .body with
+       three rising "smoke" puffs behind it, then fades itself out after
+       ~8s unless the user clicks ✕ first. Overlay, not banner: no
+       margins, so it takes no space in the flow. */
     .phishing-bubble {
         position: relative;
-        margin: 8px 12px 12px;
         padding: 10px 14px;
         display: flex;
         align-items: center;
@@ -2847,29 +2893,55 @@
         color: var(--text-primary);
         font-size: 13px;
         overflow: hidden;
-        animation: phish-bubble-in 360ms ease-out, phish-bubble-out 800ms ease-in 7400ms forwards;
+        animation: phish-bubble-in 360ms ease-out;
     }
-    /* Rail of floating AI-scan bubbles: pinned just under the message
-     * toolbar, hovering over the body so the user sees the verdict
-     * without it pushing the message content down. Sticky so it stays
-     * visible while scrolling; rail itself is non-interactive — only
-     * the bubbles inside catch clicks. */
+    /* Rail of floating AI-scan bubbles — a real overlay, never a band in
+     * the layout.
+     *
+     * Two earlier shapes both failed and the failures bracket the fix:
+     *   sticky — rode along with the scroll, so an *optional* background
+     *     scan parked itself on top of the message it was commenting on.
+     *   in-flow — took its own space at the top of .body, so the message
+     *     jumped down when the scan started and popped back up when the
+     *     result replaced the scanning bubble.
+     * Absolutely positioned over the body solves both: the bubbles take
+     * no space at all (so nothing reflows, ever), and they hold still
+     * while the user reads instead of travelling with the scroll. The
+     * rail keeps a plain fade-in keyframe rather than the flow-era
+     * `translateY(-6px)`, because in a column flex box that transform is
+     * what nudged a same-height message down a few pixels mid-animation.
+     * The bubble body itself is a fixed max-width pill that fades out on
+     * its own (see the auto-dismiss timers in the script), so the overlay
+     * is transient by construction — the rail is not a permanent banner.
+     * The rail is click-through; only the bubbles catch pointer events. */
     .scan-bubble-rail {
-        /* Static, not sticky: as a sticky element it rode over the message
-           while the user scrolled, so an optional background scan ended up
-           covering the thing it is commenting on. In flow it takes its own
-           space at the top and scrolls away like any other banner. */
-        position: relative;
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
         z-index: 5;
-        margin: 8px 12px 0;
         display: flex;
         flex-direction: column;
         align-items: center;
         gap: 6px;
         pointer-events: none;
+        animation: scan-rail-in 260ms ease-out;
     }
-    .scan-bubble-rail:empty { display: none; }
-    .scan-bubble-rail > * { pointer-events: auto; }
+    @keyframes scan-rail-in {
+        from { opacity: 0; }
+        to   { opacity: 1; }
+    }
+    /* Horizontal margins came from the in-flow era, where they centred the
+       bubble in the body's content box. Absolute centering handles that. */
+    .scan-bubble-rail > * { pointer-events: auto; margin-inline: 0; }
+
+    /* Overlay-only fade-out: opacity alone. The flow-era `phish-bubble-out`
+       also translated, which on a pinned overlay reads as the bubble
+       sliding around over the message. */
+    @keyframes scan-bubble-out {
+        from { opacity: 1; }
+        to   { opacity: 0; }
+    }
 
     /* Floating bubble baseline: rounded pill, soft shadow to lift it
      * off the message content. Per-state gradients live below. */
@@ -2898,7 +2970,12 @@
             inset 0 1px 0 rgba(255, 255, 255, 0.30);
         color: #fdf4ff;
         font-size: 13.5px;
-        animation: phish-bubble-in 360ms ease-out, ghost-bob 4s ease-in-out 360ms infinite;
+        /* The fade-out has to live on the -floating variant: it is declared
+           after `.phishing-bubble`, so the duplicate keyframe list there was
+           overriding it and the warning sat on the message forever. */
+        animation: phish-bubble-in 360ms ease-out,
+                   ghost-bob 4s ease-in-out 360ms infinite,
+                   scan-bubble-out 700ms ease-in 8200ms forwards;
     }
     /* Scanning state — inviting purple gradient + spinning orb. */
     .scam-bubble-scanning {
@@ -3021,7 +3098,6 @@
        until dismissed or the user clicks Move. */
     .spam-bubble {
         position: relative;
-        margin: 6px 12px 12px;
         padding: 9px 12px;
         display: flex;
         align-items: center;

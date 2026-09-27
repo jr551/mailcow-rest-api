@@ -302,7 +302,16 @@ async function loadThreadsFromImap(): Promise<ChatThread[]> {
         const deletedIds = readDeletedIds();
         for (const msg of list.messages) {
             try {
-                const detail = await getMessage(AI_FOLDER, msg.uid);
+                // The folder is a chat history we own, not real mail, so the
+                // usual freshness guards do not apply — but a single
+                // unresponsive request must not take the whole sync with it.
+                // A bare `getMessage` had no timeout at all, so on a flaky
+                // connection one hung socket stalled this serial loop
+                // indefinitely and every later thread reported "Failed to
+                // fetch" as the connection gave up.
+                const detail = await getMessage(AI_FOLDER, msg.uid, {
+                    signal: AbortSignal.timeout(20_000)
+                });
                 if (!detail.text) continue;
                 const thread = JSON.parse(detail.text) as ChatThread;
                 if (!thread?.id || !Array.isArray(thread.messages)) continue;
@@ -311,7 +320,11 @@ async function loadThreadsFromImap(): Promise<ChatThread[]> {
                 if (!existing || thread.updatedAt > existing.updatedAt) {
                     threads.set(thread.id, thread);
                 }
-            } catch { /* skip malformed */ }
+            } catch (err) {
+                // One unreadable message is not a reason to abandon the rest
+                // of the history — log it and carry on.
+                console.warn(`[ai-threads] skipping uid ${msg.uid}:`, err);
+            }
         }
         return Array.from(threads.values());
     } catch (err) {
