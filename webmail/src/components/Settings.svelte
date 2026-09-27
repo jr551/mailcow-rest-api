@@ -3227,9 +3227,9 @@
         flex: 1;
         min-height: 0;
         display: grid;
-        // 236 px fits the longest labels ("Conditional formatting",
-        // "Outbound webhooks") at 13 px without clipping — 200 px truncated
-        // them mid-word.
+        /* 236 px fits the longest labels ("Conditional formatting",
+           "Outbound webhooks") at 13 px without clipping — 200 px truncated
+           them mid-word. */
         grid-template-columns: 236px 1fr;
         overflow: hidden;
     }
