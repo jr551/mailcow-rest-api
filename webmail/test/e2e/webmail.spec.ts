@@ -459,8 +459,8 @@ test('Settings shows Install + Notification + Sounds controls', async ({ page })
     const onBtn = page.getByTestId('settings-notifications-on');
     const offBtn = page.getByTestId('settings-notifications-off');
     expect(await onBtn.count() + await offBtn.count()).toBeGreaterThan(0);
-    // Sounds moved under Appearance.
-    await page.click('[data-testid=settings-tab-appearance]');
+    // Sounds moved under the Sounds tab.
+    await page.click('[data-testid=settings-tab-sounds]');
     await expect(page.getByTestId('settings-sound-toggle')).toBeVisible();
     await expect(page.getByTestId('settings-sound-preview')).toBeVisible();
     // Toggle sound off, then back on, and confirm localStorage tracks it.
@@ -596,7 +596,7 @@ test('Settings: Block recipient adds an entry to the recipient blocklist', async
     await page.addInitScript(() => localStorage.setItem('webmail.theme', 'dark'));
     await login(page);
     await page.click('[data-testid=settings-btn]');
-    await page.click('[data-testid=settings-tab-privacy]');
+    await page.click('[data-testid=settings-tab-filters]');
     await page.fill('[data-testid=block-recipient-input]', 'leak@test.local');
     await page.click('[data-testid=block-recipient-add]');
     await expect(page.getByTestId('blocked-recipients-list')).toContainText('leak@test.local');
@@ -608,7 +608,7 @@ test('Settings: Mail rules supports discard, redirect, and copy actions', async 
     await page.addInitScript(() => localStorage.setItem('webmail.theme', 'dark'));
     await login(page);
     await page.click('[data-testid=settings-btn]');
-    await page.click('[data-testid=settings-tab-privacy]');
+    await page.click('[data-testid=settings-tab-mail-rules]');
     await page.locator('[data-testid=mail-rules-block]').scrollIntoViewIfNeeded();
 
     // Discard rule — no target field.
@@ -649,7 +649,7 @@ test('Settings: Mail rules header conditions reveal the header field', async ({ 
     await page.addInitScript(() => localStorage.setItem('webmail.theme', 'dark'));
     await login(page);
     await page.click('[data-testid=settings-btn]');
-    await page.click('[data-testid=settings-tab-privacy]');
+    await page.click('[data-testid=settings-tab-mail-rules]');
     await page.locator('[data-testid=mail-rules-block]').scrollIntoViewIfNeeded();
     await expect(page.getByTestId('rule-condition-header')).toHaveCount(0);
     await page.selectOption('[data-testid=rule-condition-type]', 'header-contains');
@@ -878,8 +878,8 @@ test('Settings: Filters section lists blocked + allowed senders + temp aliases',
     await page.addInitScript(() => localStorage.setItem('webmail.theme', 'dark'));
     await login(page);
     await page.click('[data-testid=settings-btn]');
-    await page.click('[data-testid=settings-tab-privacy]');
-    await expect(page.getByTestId('settings-privacy')).toBeVisible();
+    await page.click('[data-testid=settings-tab-filters]');
+    await expect(page.getByTestId('settings-filters')).toBeVisible();
     await page.fill('[data-testid=block-input]', 'spam@example.com');
     page.once('dialog', (dialog) => dialog.accept());
     await page.click('[data-testid=block-add]');
@@ -1028,7 +1028,7 @@ test('density toggle switches between compact and comfortable', async ({ page })
     await login(page);
     await page.click('[data-testid=settings-btn]');
     await expect(page.getByTestId('settings-modal')).toBeVisible();
-    await page.click('[data-testid=settings-tab-appearance]');
+    await page.click('[data-testid=settings-tab-message-list]');
     await page.click('[data-testid=settings-density-compact]');
     await page.click('[data-testid=settings-done]');
     const density = await page.getAttribute('[data-testid=shell]', 'data-density');

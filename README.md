@@ -35,6 +35,7 @@ docker run --rm -p 3001:3001 \
 - 📬 **Mail** — read, search, move, flag, delete, send, attachments, raw source
 - 🤖 **AI** — inbox sort, summarize, draft reply, phishing scan, translate (server-proxied, key never reaches the browser)
 - 🔗 **Webhook inboxes** — give a service a URL, its POSTs land in your INBOX
+- 📤 **Outbound webhooks** — a mail-rule action POSTs matching mail (headers, body, attachments) to your URL
 - 🔑 **Agent links** — one click → a 24 h pasteable credential for MCP/scripts
 - 📅 **Calendar** — SOGo CalDAV events, iCal publishing, public edit links
 - 🚫 **Rules & policies** — Sieve mail rules, sender allow/block, blocked recipients
@@ -339,6 +340,26 @@ alongside the timestamped signature would let an attacker strip the two
 headers above and replay the request anyway.
 
 </details>
+<details>
+<summary><b>📤 Outbound webhooks</b> — email → your URL, driven by a mail rule</summary>
+
+Create one under **Settings → Outbound webhooks**, then point a mail rule's
+"Send to external webhook" action at it (optionally keeping the message in the
+mailbox). Each delivery POSTs the envelope, parsed headers, text/HTML bodies, a
+prepend note you can set per webhook, and gzip+base64 attachments with decode
+instructions for the receiver. A Sent-folder receipt records the outcome.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `OUTBOUND_WEBHOOKS_ENABLED` | `true` | Master switch for `/v1/me/outbound-webhooks` |
+| `OUTBOUND_WEBHOOKS_MAX_PER_USER` | `10` | Per-mailbox cap |
+| `OUTBOUND_WEBHOOK_POLL_INTERVAL_MS` | `60000` | How often hidden `.wh-*` mailboxes are drained |
+| `OUTBOUND_WEBHOOK_MAX_ATTEMPTS` | `14` | Retry budget with backoff |
+| `OUTBOUND_WEBHOOK_MAX_MESSAGE_BYTES` | `26214400` | Skip forwarding past this |
+
+</details>
+
+
 
 <details>
 <summary><b>📦 Mailcow setup details</b></summary>

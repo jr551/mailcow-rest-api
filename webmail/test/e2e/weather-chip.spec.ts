@@ -120,28 +120,25 @@ test.describe('Weather chip', () => {
         await seed(page, { skinId: 'default', weatherChip: true });
         await login(page);
         await expect(page.getByTestId('weather-chip')).toBeVisible();
-        // The caret path anchors the menu to the chip's own left edge. At the
-        // 950px viewport the chip sat far enough from the right edge that the
-        // 220px menu still fit, so the horizontal clamp below had nothing to
-        // do and its "both axes moved" assertion could not hold. Narrowing
-        // the window is what actually pushes the chip's left edge far enough
-        // right for the naive placement to overflow. The right-click test
-        // below covers the same clamp from the cursor-anchored path.
-        await page.setViewportSize({ width: 640, height: 200 });
+        // The caret path anchors the menu to the chip's own left edge. The
+        // chip never gets close enough to the right edge for that naive
+        // placement to overflow horizontally — when the window narrows, the
+        // topbar wraps and the chip lands back near the left edge — so this
+        // test proves the vertical clamp only. The right-click test below
+        // covers horizontal clamping from the cursor-anchored path.
+        // 200px-tall window: the ~236px menu cannot fit below the chip.
+        await page.setViewportSize({ width: 950, height: 200 });
         await page.locator('.weather-caret').click();
         await expect(page.locator('.weather-menu')).toBeVisible();
         const m = await measure(page);
         expect(m.menu).not.toBeNull();
         expect(m.chip).not.toBeNull();
 
-        // The unclamped spot the component asked for really was off-screen
-        // in both directions — otherwise this proves nothing. Derived from the
-        // real measurements rather than assumed, because whether the naive
-        // placement overflows depends on the chip's rendered width and the
-        // menu's own height, both of which move as the content changes.
-        const naiveRight = m.chip!.x + m.menu!.width;
+        // The unclamped spot the component asked for really was off-screen —
+        // otherwise this proves nothing. Derived from the real measurement
+        // rather than assumed, because whether the naive placement overflows
+        // depends on the menu's rendered height.
         const naiveBottom = m.chip!.y + m.chip!.height + 6 + m.menu!.height;
-        expect(naiveRight).toBeGreaterThan(m.innerWidth);
         expect(naiveBottom).toBeGreaterThan(m.innerHeight);
 
         // And the rendered menu is fully inside the viewport.
@@ -150,8 +147,7 @@ test.describe('Weather chip', () => {
         expect(m.menu!.x + m.menu!.width).toBeLessThanOrEqual(m.innerWidth);
         expect(m.menu!.y + m.menu!.height).toBeLessThanOrEqual(m.innerHeight);
 
-        // Both axes actually moved off the requested position.
-        expect(m.menu!.x).toBeLessThan(m.chip!.x);
+        // The menu actually moved up off the requested position.
         expect(m.menu!.y).toBeLessThan(m.chip!.y + m.chip!.height + 6);
     });
 

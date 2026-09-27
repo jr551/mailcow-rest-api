@@ -31,7 +31,7 @@
         setTesseractOcrInstalled, setPhishingScanOcrInline,
         setSpamSuggest, setSpamSuggestConfidenceFloor, setSpamSweepBatchSize, setAiSortSweepSpam,
         setVipAddresses, setPreSendCheck, setComposeHistorySummary,
-        setCalendarTicker, setCalendarTickerTitles
+        setCalendarTicker, setCalendarTickerTitles, setWeatherChipOutlook
     } from '../lib/settings.svelte';
     import { runSpamSweep, bulkMove, type SweepCandidate } from '../lib/spam-sweep';
     import { warmupTesseract, teardownTesseract } from '../lib/tesseract-ocr';
@@ -580,6 +580,20 @@
     let ruleActionType = $state<MailRuleActionType>('discard');
     let ruleActionTo = $state('');
     let ruleSaving = $state(false);
+    let ruleActionFolder = $state('');
+    let ruleActionWebhookId = $state('');
+
+    // Outbound webhooks — the targets rules' "send to webhook" action points
+    // at. Loaded with the rest of the account data; a 404/501 means the
+    // server predates the feature, so the panel hides instead of erroring.
+    let outboundHooks = $state<OutboundWebhook[]>([]);
+    let outboundLimit = $state(0);
+    let outboundUnavailable = $state(false);
+    let owUrl = $state('');
+    let owLabel = $state('');
+    let owKeep = $state(true);
+    let owPrepend = $state('');
+    let owSaving = $state(false);
 
     const RULE_CONDITION_LABELS: Record<MailRuleConditionType, string> = {
         'from-contains': 'From contains',
@@ -592,7 +606,9 @@
     const RULE_ACTION_LABELS: Record<MailRuleActionType, string> = {
         discard: 'Block (discard)',
         redirect: 'Redirect (forward, no copy)',
-        copy: 'Copy (forward + keep)'
+        copy: 'Copy (forward + keep)',
+        fileinto: 'Move to folder (auto-move)',
+        webhook: 'Send to external webhook'
     };
 
     async function loadAccountData() {
@@ -605,6 +621,7 @@
         try { const r = await getLogins(10); logins = r.logins; } catch { /* skip */ }
         await loadAppPasswords();
         await loadWebhookInboxes();
+        await loadOutboundWebhooks();
         try { const r = await getAliases(); aliases = r.aliases; } catch { /* skip */ }
         try { const r = await getTempAliases(); tempAliases = r.aliases; } catch { /* skip */ }
         try { const r = await listBlockedSenders(); blocked = r.list; } catch { /* skip */ }
@@ -687,6 +704,14 @@
         return t === 'redirect' || t === 'copy';
     }
 
+    function ruleNeedsFolder(t: MailRuleActionType): boolean {
+        return t === 'fileinto';
+    }
+
+    function ruleNeedsWebhook(t: MailRuleActionType): boolean {
+        return t === 'webhook';
+    }
+
     function ruleHasHeader(t: MailRuleConditionType): boolean {
         return t === 'header-contains' || t === 'header-is';
     }
@@ -699,7 +724,11 @@
             : `${RULE_CONDITION_LABELS[c.type] || c.type} "${c.value}"`;
         const aTxt = a.type === 'discard'
             ? 'block'
-            : `${a.type} → ${a.to || ''}`;
+            : a.type === 'fileinto'
+                ? `move → ${a.folder || ''}`
+                : a.type === 'webhook'
+                    ? `webhook → ${outboundHooks.find((w) => w.id === a.webhookId)?.label || a.webhookId || ''}`
+                    : `${a.type} → ${a.to || ''}`;
         return `${cTxt} → ${aTxt}`;
     }
 
@@ -708,6 +737,12 @@
         if (!value) { showToast('error', 'Condition value is required'); return; }
         if (ruleHasTarget(ruleActionType) && !ruleActionTo.trim()) {
             showToast('error', 'Forward address is required'); return;
+        }
+        if (ruleNeedsFolder(ruleActionType) && !ruleActionFolder.trim()) {
+            showToast('error', 'Destination folder is required'); return;
+        }
+        if (ruleNeedsWebhook(ruleActionType) && !ruleActionWebhookId) {
+            showToast('error', 'Pick an outbound webhook'); return;
         }
         if (ruleHasHeader(ruleConditionType) && !ruleConditionHeader.trim()) {
             showToast('error', 'Header name is required'); return;
@@ -718,6 +753,8 @@
             if (ruleHasHeader(ruleConditionType)) condition.header = ruleConditionHeader.trim();
             const action: MailRule['action'] = { type: ruleActionType };
             if (ruleHasTarget(ruleActionType)) action.to = ruleActionTo.trim();
+            if (ruleNeedsFolder(ruleActionType)) action.folder = ruleActionFolder.trim();
+            if (ruleNeedsWebhook(ruleActionType)) action.webhookId = ruleActionWebhookId;
             const name = `${ruleActionType} ${value}`.slice(0, 80);
             const r = await addMailRule({ name, condition, action });
             mailRules = [...mailRules, r];
@@ -738,6 +775,61 @@
             await removeMailRule(id);
             mailRules = mailRules.filter((r) => r.id !== id);
         } catch (err) { showToast('error', (err as Error).message); }
+    }
+
+    async function loadOutboundWebhooks() {
+        try {
+            const r = await listOutboundWebhooks();
+            outboundHooks = r.webhooks;
+            outboundLimit = r.limit;
+            if (!ruleActionWebhookId && r.webhooks.length) ruleActionWebhookId = r.webhooks[0].id;
+        } catch (err) {
+            if (isOutboundWebhooksUnavailable(err)) outboundUnavailable = true;
+        }
+    }
+
+    async function doCreateOutboundWebhook() {
+        const url = owUrl.trim();
+        if (!url) { showToast('error', 'Webhook URL is required'); return; }
+        owSaving = true;
+        try {
+            const w = await createOutboundWebhook({
+                url,
+                label: owLabel.trim() || url,
+                keep: owKeep,
+                prepend: owPrepend.trim()
+            });
+            outboundHooks = [...outboundHooks, w];
+            owUrl = ''; owLabel = ''; owPrepend = '';
+            if (!ruleActionWebhookId) ruleActionWebhookId = w.id;
+            showToast('success', 'Webhook added');
+        } catch (err) {
+            const msg = err instanceof ApiError ? (err.detail || err.title) : (err as Error).message;
+            showToast('error', msg);
+        } finally {
+            owSaving = false;
+        }
+    }
+
+    async function doUpdateOutboundWebhook(w: OutboundWebhook, patch: { keep?: boolean; prepend?: string }) {
+        try {
+            const u = await updateOutboundWebhook(w.id, patch);
+            outboundHooks = outboundHooks.map((x) => (x.id === w.id ? u : x));
+        } catch (err) {
+            const msg = err instanceof ApiError ? (err.detail || err.title) : (err as Error).message;
+            showToast('error', msg);
+        }
+    }
+
+    async function doDeleteOutboundWebhook(w: OutboundWebhook) {
+        if (!confirm(`Remove webhook "${w.label}"? Rules pointing at it will stop delivering.`)) return;
+        try {
+            await deleteOutboundWebhook(w.id);
+            outboundHooks = outboundHooks.filter((x) => x.id !== w.id);
+        } catch (err) {
+            const msg = err instanceof ApiError ? (err.detail || err.title) : (err as Error).message;
+            showToast('error', msg);
+        }
     }
 
     async function newTempAlias(permanent: boolean, validityHours = 720) {
@@ -932,25 +1024,65 @@
         </header>
 
         <div class="body">
-            <aside class="tabs" role="tablist" aria-label="Settings sections">
-                {#each TABS as t (t.id)}
-                    <button
-                        type="button"
-                        role="tab"
-                        class="tab"
-                        class:active={activeTab === t.id}
-                        aria-selected={activeTab === t.id}
-                        onclick={() => (activeTab = t.id)}
-                        data-testid={`settings-tab-${t.id}`}
-                    >
-                        <Icon name={t.icon} size={15} />
-                        <span>{t.label}</span>
-                    </button>
-                {/each}
+            <aside class="tabs settings-rail" role="tablist" aria-label="Settings sections">
+                <div class="rail-search">
+                    <input
+                        type="search"
+                        placeholder="Search settings"
+                        bind:value={settingsSearch}
+                        data-testid="settings-search"
+                        aria-label="Search settings"
+                    />
+                </div>
+                {#if searchHits}
+                    {#each searchHits as r (r.cat.id)}
+                        <div class="rail-group">
+                            <div class="rail-cat muted">{r.cat.label}</div>
+                            {#each r.sections as s (s.id)}
+                                <button
+                                    type="button"
+                                    role="tab"
+                                    class="tab"
+                                    class:active={activeSection === s.id}
+                                    aria-selected={activeSection === s.id}
+                                    onclick={() => selectSection(s)}
+                                    data-testid={`settings-tab-${s.id}`}
+                                >
+                                    <Icon name={s.icon} size={15} />
+                                    <span>{s.label}</span>
+                                </button>
+                            {/each}
+                        </div>
+                    {/each}
+                {:else}
+                    {#each CATEGORIES as cat (cat.id)}
+                        <div class="rail-group">
+                            <div class="rail-cat muted">{cat.label}</div>
+                            {#if cat.sections.length === 0}
+                                <div class="rail-cat-note muted small">{CATEGORY_PLACEHOLDERS[cat.id]?.note}</div>
+                            {:else}
+                                {#each cat.sections as s (s.id)}
+                                    <button
+                                        type="button"
+                                        role="tab"
+                                        class="tab"
+                                        class:active={activeSection === s.id}
+                                        aria-selected={activeSection === s.id}
+                                        onclick={() => selectSection(s)}
+                                        data-testid={`settings-tab-${s.id}`}
+                                    >
+                                        <Icon name={s.icon} size={15} />
+                                        <span>{s.label}</span>
+                                    </button>
+                                {/each}
+                            {/if}
+                        </div>
+                    {/each}
+                {/if}
             </aside>
 
             <div class="panel">
-            {#if activeTab === 'account'}
+            {#if activeSection === 'account'}
                 <section class="tab-section" data-testid="settings-account">
                     <div class="profile-card">
                         <button
@@ -1105,7 +1237,7 @@
                     {/if}
                 </section>
 
-            {:else if activeTab === 'security'}
+            {:else if activeSection === 'security'}
                 <section class="tab-section" data-testid="settings-security">
                     <div class="card">
                         <h4><Icon name="key" size={13} /> This device</h4>
@@ -1155,45 +1287,6 @@
                                 <span>{settings.permanentSignIn ? 'On' : 'Off'}</span>
                             </label>
                         </div>
-                    </div>
-
-                    <div class="card">
-                        <h4><Icon name="wifi" size={13} /> Connect a device</h4>
-                        <p class="muted small">
-                            Use these settings to add this account to Apple Mail, Outlook, Thunderbird, or any IMAP client.
-                        </p>
-                        {#if true}
-                            {@const deviceEmail = authState.activeUser || 'you@example.com'}
-                            {@const deviceDomain = deviceEmail.split('@')[1] || 'example.com'}
-                            <div class="device-config">
-                            <div class="config-block">
-                                <strong>Incoming (IMAP)</strong>
-                                <div class="config-row"><span>Server</span><code>mail.{deviceDomain}</code></div>
-                                <div class="config-row"><span>Port</span><code>993</code></div>
-                                <div class="config-row"><span>Security</span><code>SSL/TLS</code></div>
-                                <div class="config-row"><span>Username</span><code>{deviceEmail}</code></div>
-                            </div>
-                            <div class="config-block">
-                                <strong>Outgoing (SMTP)</strong>
-                                <div class="config-row"><span>Server</span><code>mail.{deviceDomain}</code></div>
-                                <div class="config-row"><span>Port</span><code>587</code></div>
-                                <div class="config-row"><span>Security</span><code>STARTTLS</code></div>
-                                <div class="config-row"><span>Username</span><code>{deviceEmail}</code></div>
-                            </div>
-                        </div>
-                        <div class="card-actions">
-                            <button
-                                type="button"
-                                class="btn btn-ghost small"
-                                onclick={() => {
-                                    const text = `IMAP: mail.${deviceDomain}:993 SSL/TLS\nSMTP: mail.${deviceDomain}:587 STARTTLS\nUsername: ${deviceEmail}`;
-                                    navigator.clipboard.writeText(text).then(() => showToast('success', 'Settings copied to clipboard'));
-                                }}
-                            >
-                                <Icon name="copy" size={11} /> Copy all
-                            </button>
-                        </div>
-                        {/if}
                     </div>
 
                     {#if authState.sessions.length}
@@ -1405,7 +1498,7 @@
                     {/if}
                 </section>
 
-            {:else if activeTab === 'privacy'}
+            {:else if activeSection === 'privacy'}
                 <section class="tab-section" data-testid="settings-privacy">
                     <h3>Privacy</h3>
                     <p class="muted small">Image loading and tracker behaviour. AI scam scan &amp; spam settings live in their own tab.</p>
@@ -1454,7 +1547,7 @@
 
                 </section>
 
-            {:else if activeTab === 'phishing'}
+            {:else if activeSection === 'junk'}
                 <section class="tab-section" data-testid="settings-phishing">
                     <h3>AI scam scan &amp; spam</h3>
                     <p class="muted small">Pre-flight AI scans that flag scams and junk mail when you open a message.</p>
@@ -1591,44 +1684,6 @@
 
                                 {/if}
 
-                                <div class="form-row" style="padding:0;border:none;background:none;margin-top:10px;">
-                                    <div class="row-text">
-                                        <strong>Sweep alongside AI sort</strong>
-                                        <span class="muted">
-                                            When you click the AI sort button on the inbox, also
-                                            sweep the same list for spam &amp; phishing. Surfaces
-                                            a "Move N to Spam / Trash" banner so you can clean
-                                            up in one click. Reuses the cached scan results, so
-                                            no extra LLM cost beyond the sort itself.
-                                        </span>
-                                    </div>
-                                    <label class="toggle compact">
-                                        <input
-                                            type="checkbox"
-                                            checked={settings.aiSortSweepSpam}
-                                            onchange={(e) => setAiSortSweepSpam((e.currentTarget as HTMLInputElement).checked)}
-                                            data-testid="settings-ai-sort-sweep"
-                                        />
-                                        <span>{settings.aiSortSweepSpam ? 'On' : 'Off'}</span>
-                                    </label>
-                                </div>
-
-                                {#if settings.aiSortSweepSpam}
-                                    <label class="field">
-                                        <span class="lbl">
-                                            Sweep batch size
-                                            <strong class="lbl-val">{settings.spamSweepBatchSize} msg</strong>
-                                        </span>
-                                        <input
-                                            type="range"
-                                            min="10" max="200" step="10"
-                                            value={settings.spamSweepBatchSize}
-                                            oninput={(e) => setSpamSweepBatchSize(Number((e.currentTarget as HTMLInputElement).value))}
-                                            data-testid="settings-sweep-batch"
-                                        />
-                                        <span class="muted small">How many recent INBOX messages to scan per sweep. Larger = catches older spam, slower the first time.</span>
-                                    </label>
-                                {/if}
                             </div>
                         {/if}
                     </div>
@@ -1733,7 +1788,7 @@
                     </div>
                 </section>
 
-            {:else if activeTab === 'compose'}
+            {:else if activeSection === 'compose'}
                 <section class="tab-section" data-testid="settings-compose">
                     <h3>Compose</h3>
                     <p class="muted small">Defaults applied to every new message you send.</p>
@@ -1785,30 +1840,6 @@
                     </div>
 
                     <div class="card">
-                        <h4><Icon name="sparkles" size={13} /> AI subject suggestion</h4>
-                        <div class="form-row" style="padding:0;border:none;background:none;">
-                            <div class="row-text">
-                                <strong>Suggest a subject as I leave the body</strong>
-                                <span class="muted">
-                                    When the body has content and the subject is empty, ask the AI
-                                    for one and offer it inline (purple chip with Use / Decline).
-                                    When off, the suggestion only fires if you click Send with no
-                                    subject. Each suggestion costs LLM tokens.
-                                </span>
-                            </div>
-                            <label class="toggle compact">
-                                <input
-                                    type="checkbox"
-                                    checked={settings.aiSuggestSubjectOnBlur}
-                                    onchange={(e) => setAiSuggestSubjectOnBlur((e.currentTarget as HTMLInputElement).checked)}
-                                    data-testid="settings-ai-subject-blur"
-                                />
-                                <span>{settings.aiSuggestSubjectOnBlur ? 'On' : 'Off'}</span>
-                            </label>
-                        </div>
-                    </div>
-
-                    <div class="card">
                         <h4><Icon name="at" size={13} /> Default From address</h4>
                         <div class="form-row" style="padding:0;border:none;background:none;">
                             <div class="row-text">
@@ -1855,7 +1886,7 @@
                     </div>
                 </section>
 
-            {:else if activeTab === 'filters'}
+            {:else if activeSection === 'filters'}
                 <section class="tab-section" data-testid="settings-filters">
                     <h3>Filters &amp; blocks</h3>
                     <p class="muted small">Block / allow specific senders + recipients, manage server-side Sieve rules.</p>
@@ -1991,12 +2022,12 @@
 
                 </section>
 
-            {:else if activeTab === 'mail-rules'}
+            {:else if activeSection === 'mail-rules'}
                 <section class="tab-section" data-testid="settings-mail-rules">
                     <h3>Mail rules</h3>
                     <p class="muted small">
-                        Server-side Sieve rules — unified blocks, redirects, and copies, plus
-                        client-side rules for moving messages and assigning AI actions.
+                        Server-side Sieve rules — blocks, redirects, copies, auto-move into a
+                        folder, and delivery to an outbound webhook.
                     </p>
 
                     {#if !mailRulesUnavailable}
@@ -2070,6 +2101,34 @@
                                                 />
                                             </label>
                                         {/if}
+                                        {#if ruleNeedsFolder(ruleActionType)}
+                                            <label class="rule-row">
+                                                <span class="rule-label">Folder</span>
+                                                <input
+                                                    type="text"
+                                                    placeholder="Archive"
+                                                    bind:value={ruleActionFolder}
+                                                    data-testid="rule-action-folder"
+                                                />
+                                            </label>
+                                        {/if}
+                                        {#if ruleNeedsWebhook(ruleActionType)}
+                                            {#if outboundHooks.length === 0}
+                                                <p class="muted small">
+                                                    No outbound webhooks yet — create one under
+                                                    <em>Outbound webhooks</em> first.
+                                                </p>
+                                            {:else}
+                                                <label class="rule-row">
+                                                    <span class="rule-label">Webhook</span>
+                                                    <select bind:value={ruleActionWebhookId} data-testid="rule-action-webhook">
+                                                        {#each outboundHooks as w (w.id)}
+                                                            <option value={w.id}>{w.label} — {w.url}</option>
+                                                        {/each}
+                                                    </select>
+                                                </label>
+                                            {/if}
+                                        {/if}
                                         <div class="rule-actions">
                                             <button
                                                 type="button"
@@ -2094,6 +2153,10 @@
                                                                 <Icon name="trash" size={11} /> Block
                                                             {:else if r.action.type === 'redirect'}
                                                                 <Icon name="send" size={11} /> Redirect
+                                                            {:else if r.action.type === 'fileinto'}
+                                                                <Icon name="inbox" size={11} /> Move
+                                                            {:else if r.action.type === 'webhook'}
+                                                                <Icon name="globe" size={11} /> Webhook
                                                             {:else}
                                                                 <Icon name="reply" size={11} /> Copy
                                                             {/if}
@@ -2122,6 +2185,12 @@
                                                                 <span class="rule-action-text">forward to</span>
                                                                 <code class="rule-val">{r.action.to}</code>
                                                                 <span class="rule-action-text muted">— no copy kept</span>
+                                                            {:else if r.action.type === 'fileinto'}
+                                                                <span class="rule-action-text">move to folder</span>
+                                                                <code class="rule-val">{r.action.folder}</code>
+                                                            {:else if r.action.type === 'webhook'}
+                                                                <span class="rule-action-text">send to webhook</span>
+                                                                <code class="rule-val">{outboundHooks.find((w) => w.id === r.action.webhookId)?.label || r.action.webhookId}</code>
                                                             {:else}
                                                                 <span class="rule-action-text">forward a copy to</span>
                                                                 <code class="rule-val">{r.action.to}</code>
@@ -2140,10 +2209,10 @@
 
                 </section>
 
-            {:else if activeTab === 'appearance'}
+            {:else if activeSection === 'appearance'}
                 <section class="tab-section">
-                    <h3>Appearance &amp; behaviour</h3>
-                    <p class="muted small">Layout, density, sounds, sender avatars, and the accent palette.</p>
+                    <h3>Appearance</h3>
+                    <p class="muted small">Window chrome, colour skin, and the accent palette.</p>
 
                 <h4 class="section-head"><Icon name="monitor" size={13} /> Layout</h4>
 
@@ -2177,144 +2246,22 @@
 
                 <div class="form-row">
                     <div class="row-text">
-                        <strong>Page size</strong>
+                        <strong>Weather chip on Outlook themes</strong>
                         <span class="muted">
-                            How many messages the inbox loads at once. Unlimited fetches up to
-                            1000 in one shot — fine for short folders, slow for huge archives.
-                        </span>
-                    </div>
-                    <div class="seg seg-narrow" role="radiogroup" aria-label="Page size">
-                        {#each [25, 50, 100, 250] as n (n)}
-                            <button
-                                type="button"
-                                role="radio"
-                                aria-checked={settings.pageSize === n}
-                                class:active={settings.pageSize === n}
-                                onclick={() => setPageSize(n)}
-                                data-testid={`settings-page-${n}`}
-                            >{n}</button>
-                        {/each}
-                        <button
-                            type="button"
-                            role="radio"
-                            aria-checked={settings.pageSize === 'unlimited'}
-                            class:active={settings.pageSize === 'unlimited'}
-                            onclick={() => setPageSize('unlimited')}
-                            data-testid="settings-page-unlimited"
-                        >∞</button>
-                    </div>
-                </div>
-
-                <h4 class="section-head"><Icon name="key" size={13} /> Input</h4>
-
-
-                <h4 class="section-head" data-testid="settings-privacy-heading"><Icon name="shield" size={13} /> Reading</h4>
-
-                <div class="form-row">
-                    <div class="row-text">
-                        <strong>Group messages by thread</strong>
-                        <span class="muted">
-                            Conversations collapse into one row showing the latest reply and a count.
-                            Off shows every message as its own row, gmail's "newest first, no grouping" view.
+                            The Outlook skins hide the weather chip to match the real client's
+                            chrome. Turn this on to keep it in the top bar anyway. Other themes
+                            follow the general weather setting.
                         </span>
                     </div>
                     <label class="toggle compact">
                         <input
                             type="checkbox"
-                            checked={settings.groupThreads}
-                            onchange={(e) => setGroupThreads((e.currentTarget as HTMLInputElement).checked)}
-                            data-testid="settings-group-threads"
+                            checked={settings.weatherChipOutlook}
+                            onchange={(e) => setWeatherChipOutlook((e.currentTarget as HTMLInputElement).checked)}
+                            data-testid="settings-weather-outlook"
                         />
-                        <span>{settings.groupThreads ? 'On' : 'Off'}</span>
+                        <span>{settings.weatherChipOutlook ? 'On' : 'Off'}</span>
                     </label>
-                </div>
-
-                <h4 class="section-head"><Icon name="eye" size={13} /> Display</h4>
-
-                <div class="form-row">
-                    <div class="row-text">
-                        <strong>List density</strong>
-                        <span class="muted">Comfortable shows avatars + subjects on two lines. Compact packs ~2× more rows in the same height.</span>
-                    </div>
-                    <div class="seg" role="radiogroup" aria-label="Density">
-                        <button
-                            type="button"
-                            role="radio"
-                            aria-checked={settings.density === 'comfortable'}
-                            class:active={settings.density === 'comfortable'}
-                            onclick={() => setDensity('comfortable')}
-                            data-testid="settings-density-comfortable"
-                        >Comfortable</button>
-                        <button
-                            type="button"
-                            role="radio"
-                            aria-checked={settings.density === 'compact'}
-                            class:active={settings.density === 'compact'}
-                            onclick={() => setDensity('compact')}
-                            data-testid="settings-density-compact"
-                        >Compact</button>
-                    </div>
-                </div>
-
-                <h4 class="section-head"><Icon name="bell" size={13} /> Sounds &amp; avatars</h4>
-
-                <div class="form-row">
-                    <div class="row-text">
-                        <strong>Sounds</strong>
-                        <span class="muted">
-                            Soft chime on new mail in the foreground, and a swoosh when a message sends.
-                        </span>
-                    </div>
-                    <div class="sound-controls">
-                        <button
-                            type="button"
-                            class="btn btn-ghost"
-                            onclick={() => playNotify()}
-                            disabled={sounds.muted}
-                            title="Play sample"
-                            data-testid="settings-sound-preview"
-                        >
-                            <Icon name="info" size={13} /> Test
-                        </button>
-                        <label class="toggle compact">
-                            <input
-                                type="checkbox"
-                                checked={!sounds.muted}
-                                onchange={(e) => setMuted(!(e.currentTarget as HTMLInputElement).checked)}
-                                data-testid="settings-sound-toggle"
-                            />
-                            <span>{sounds.muted ? 'Off' : 'On'}</span>
-                        </label>
-                    </div>
-                </div>
-
-                <div class="form-row">
-                    <div class="row-text">
-                        <strong>Gravatar avatars</strong>
-                        <span class="muted">
-                            Look up sender avatars from Gravatar (a SHA-256 of each sender's
-                            email is sent to gravatar.com). Falls back to the sender domain's
-                            favicon, then a coloured initial.
-                        </span>
-                    </div>
-                    <div class="sound-controls">
-                        <button
-                            type="button"
-                            class="btn btn-ghost"
-                            onclick={() => clearAvatarCache()}
-                            title="Clear cached avatars"
-                            data-testid="settings-avatars-clear"
-                        >Clear cache</button>
-                        <label class="toggle compact">
-                            <input
-                                type="checkbox"
-                                checked={gravatarPref.on}
-                                onchange={(e) => setGravatarEnabled((e.currentTarget as HTMLInputElement).checked)}
-                                data-testid="settings-avatars-toggle"
-                            />
-                            <span>{gravatarPref.on ? 'On' : 'Off'}</span>
-                        </label>
-                    </div>
                 </div>
 
                 <h4 class="appearance-skin-title" data-testid="settings-skins">Accent &amp; skin</h4>
@@ -2444,28 +2391,40 @@
                 </div>
                 </section>
 
-            {:else if activeTab === 'sounds'}
+            {:else if activeSection === 'sounds'}
                 <section class="tab-section" data-testid="settings-sounds">
                     <h3>Sounds</h3>
                     <p class="muted small">Per-event audio cues. Pick a preset for each, or set "Silent" to leave it off.</p>
 
-                    <div class="card">
-                        <div class="form-row" style="padding:0;border:none;background:none;">
-                            <div class="row-text">
-                                <strong>Master mute</strong>
-                                <span class="muted">Overrides every event below.</span>
-                            </div>
-                            <label class="toggle compact">
-                                <input
-                                    type="checkbox"
-                                    checked={!sounds.muted}
-                                    onchange={(e) => setMuted(!(e.currentTarget as HTMLInputElement).checked)}
-                                    data-testid="settings-sounds-master"
-                                />
-                                <span>{sounds.muted ? 'Muted' : 'On'}</span>
-                            </label>
-                        </div>
+                <div class="form-row">
+                    <div class="row-text">
+                        <strong>Sounds</strong>
+                        <span class="muted">
+                            Soft chime on new mail in the foreground, and a swoosh when a message sends.
+                        </span>
                     </div>
+                    <div class="sound-controls">
+                        <button
+                            type="button"
+                            class="btn btn-ghost"
+                            onclick={() => playNotify()}
+                            disabled={sounds.muted}
+                            title="Play sample"
+                            data-testid="settings-sound-preview"
+                        >
+                            <Icon name="info" size={13} /> Test
+                        </button>
+                        <label class="toggle compact">
+                            <input
+                                type="checkbox"
+                                checked={!sounds.muted}
+                                onchange={(e) => setMuted(!(e.currentTarget as HTMLInputElement).checked)}
+                                data-testid="settings-sound-toggle"
+                            />
+                            <span>{sounds.muted ? 'Off' : 'On'}</span>
+                        </label>
+                    </div>
+                </div>
 
                     <div class="card">
                         <h4><Icon name="bell" size={13} /> Per-event sounds</h4>
@@ -2499,7 +2458,7 @@
                     </div>
                 </section>
 
-            {:else if activeTab === 'ai'}
+            {:else if activeSection === 'ai'}
                 <section class="tab-section">
                     <h3>AI provider</h3>
                     <p class="muted small">
@@ -2754,7 +2713,7 @@
                 </div>
                 </section>
 
-            {:else if activeTab === 'notifications'}
+            {:else if activeSection === 'notifications'}
                 <section class="tab-section">
                     <h3>App &amp; notifications</h3>
                     <p class="muted small">Install Webmail as a desktop app and turn on push notifications for new mail.</p>
@@ -2867,6 +2826,358 @@
                     </ul>
                 {/if}
                 </section>
+
+            {:else if activeSection === 'message-list'}
+                <section class="tab-section" data-testid="settings-message-list">
+                    <h3>Message list</h3>
+                    <p class="muted small">How many messages load at once, whether they group into threads, and how dense each row is.</p>
+                    <h4 class="section-head"><Icon name="inbox" size={13} /> List</h4>
+                <div class="form-row">
+                    <div class="row-text">
+                        <strong>Page size</strong>
+                        <span class="muted">
+                            How many messages the inbox loads at once. Unlimited fetches up to
+                            1000 in one shot — fine for short folders, slow for huge archives.
+                        </span>
+                    </div>
+                    <div class="seg seg-narrow" role="radiogroup" aria-label="Page size">
+                        {#each [25, 50, 100, 250] as n (n)}
+                            <button
+                                type="button"
+                                role="radio"
+                                aria-checked={settings.pageSize === n}
+                                class:active={settings.pageSize === n}
+                                onclick={() => setPageSize(n)}
+                                data-testid={`settings-page-${n}`}
+                            >{n}</button>
+                        {/each}
+                        <button
+                            type="button"
+                            role="radio"
+                            aria-checked={settings.pageSize === 'unlimited'}
+                            class:active={settings.pageSize === 'unlimited'}
+                            onclick={() => setPageSize('unlimited')}
+                            data-testid="settings-page-unlimited"
+                        >∞</button>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="row-text">
+                        <strong>Group messages by thread</strong>
+                        <span class="muted">
+                            Conversations collapse into one row showing the latest reply and a count.
+                            Off shows every message as its own row, gmail's "newest first, no grouping" view.
+                        </span>
+                    </div>
+                    <label class="toggle compact">
+                        <input
+                            type="checkbox"
+                            checked={settings.groupThreads}
+                            onchange={(e) => setGroupThreads((e.currentTarget as HTMLInputElement).checked)}
+                            data-testid="settings-group-threads"
+                        />
+                        <span>{settings.groupThreads ? 'On' : 'Off'}</span>
+                    </label>
+                </div>
+                <div class="form-row">
+                    <div class="row-text">
+                        <strong>List density</strong>
+                        <span class="muted">Comfortable shows avatars + subjects on two lines. Compact packs ~2× more rows in the same height.</span>
+                    </div>
+                    <div class="seg" role="radiogroup" aria-label="Density">
+                        <button
+                            type="button"
+                            role="radio"
+                            aria-checked={settings.density === 'comfortable'}
+                            class:active={settings.density === 'comfortable'}
+                            onclick={() => setDensity('comfortable')}
+                            data-testid="settings-density-comfortable"
+                        >Comfortable</button>
+                        <button
+                            type="button"
+                            role="radio"
+                            aria-checked={settings.density === 'compact'}
+                            class:active={settings.density === 'compact'}
+                            onclick={() => setDensity('compact')}
+                            data-testid="settings-density-compact"
+                        >Compact</button>
+                    </div>
+                </div>
+                </section>
+            {:else if activeSection === 'reading-pane'}
+                <section class="tab-section" data-testid="settings-reading-pane">
+                    <h3>Reading pane</h3>
+                    <p class="muted small">Sender avatars and how the opened message looks.</p>
+                    <h4 class="section-head"><Icon name="eye" size={13} /> Avatars</h4>
+                <div class="form-row">
+                    <div class="row-text">
+                        <strong>Gravatar avatars</strong>
+                        <span class="muted">
+                            Look up sender avatars from Gravatar (a SHA-256 of each sender's
+                            email is sent to gravatar.com). Falls back to the sender domain's
+                            favicon, then a coloured initial.
+                        </span>
+                    </div>
+                    <div class="sound-controls">
+                        <button
+                            type="button"
+                            class="btn btn-ghost"
+                            onclick={() => clearAvatarCache()}
+                            title="Clear cached avatars"
+                            data-testid="settings-avatars-clear"
+                        >Clear cache</button>
+                        <label class="toggle compact">
+                            <input
+                                type="checkbox"
+                                checked={gravatarPref.on}
+                                onchange={(e) => setGravatarEnabled((e.currentTarget as HTMLInputElement).checked)}
+                                data-testid="settings-avatars-toggle"
+                            />
+                            <span>{gravatarPref.on ? 'On' : 'Off'}</span>
+                        </label>
+                    </div>
+                </div>
+                </section>
+            {:else if activeSection === 'attachments'}
+                <section class="tab-section" data-testid="settings-attachments">
+                    <h3>Attachments</h3>
+                    <p class="muted small">
+                        Downloads, inline previews, and image handling use their defaults —
+                        remote-image blocking lives under <em>Images &amp; privacy</em>. Nothing to
+                        configure here yet.
+                    </p>
+                </section>
+            {:else if activeSection === 'conditional-formatting'}
+                <section class="tab-section" data-testid="settings-conditional-formatting">
+                    <h3>Conditional formatting</h3>
+                    <p class="muted small">
+                        Outlook-style colour rules for list rows (e.g. "make mail from my boss
+                        purple") aren't implemented yet — this space is reserved for them.
+                    </p>
+                </section>
+            {:else if activeSection === 'forwarding'}
+                <section class="tab-section" data-testid="settings-forwarding">
+                    <h3>Forwarding and IMAP</h3>
+                    <p class="muted small">Add this mailbox to a mail client, or hand its mail on to other systems.</p>
+                    <div class="card">
+                        <h4><Icon name="wifi" size={13} /> Connect a device</h4>
+                        <p class="muted small">
+                            Use these settings to add this account to Apple Mail, Outlook, Thunderbird, or any IMAP client.
+                        </p>
+                        {#if true}
+                            {@const deviceEmail = authState.activeUser || 'you@example.com'}
+                            {@const deviceDomain = deviceEmail.split('@')[1] || 'example.com'}
+                            <div class="device-config">
+                            <div class="config-block">
+                                <strong>Incoming (IMAP)</strong>
+                                <div class="config-row"><span>Server</span><code>mail.{deviceDomain}</code></div>
+                                <div class="config-row"><span>Port</span><code>993</code></div>
+                                <div class="config-row"><span>Security</span><code>SSL/TLS</code></div>
+                                <div class="config-row"><span>Username</span><code>{deviceEmail}</code></div>
+                            </div>
+                            <div class="config-block">
+                                <strong>Outgoing (SMTP)</strong>
+                                <div class="config-row"><span>Server</span><code>mail.{deviceDomain}</code></div>
+                                <div class="config-row"><span>Port</span><code>587</code></div>
+                                <div class="config-row"><span>Security</span><code>STARTTLS</code></div>
+                                <div class="config-row"><span>Username</span><code>{deviceEmail}</code></div>
+                            </div>
+                        </div>
+                        <div class="card-actions">
+                            <button
+                                type="button"
+                                class="btn btn-ghost small"
+                                onclick={() => {
+                                    const text = `IMAP: mail.${deviceDomain}:993 SSL/TLS\nSMTP: mail.${deviceDomain}:587 STARTTLS\nUsername: ${deviceEmail}`;
+                                    navigator.clipboard.writeText(text).then(() => showToast('success', 'Settings copied to clipboard'));
+                                }}
+                            >
+                                <Icon name="copy" size={11} /> Copy all
+                            </button>
+                        </div>
+                        {/if}
+                    </div>
+
+                </section>
+            {:else if activeSection === 'sweep'}
+                <section class="tab-section" data-testid="settings-sweep">
+                    <h3>Sweep</h3>
+                    <p class="muted small">Bulk spam &amp; phishing classification alongside AI sort.</p>
+                                <div class="form-row" style="padding:0;border:none;background:none;margin-top:10px;">
+                                    <div class="row-text">
+                                        <strong>Sweep alongside AI sort</strong>
+                                        <span class="muted">
+                                            When you click the AI sort button on the inbox, also
+                                            sweep the same list for spam &amp; phishing. Surfaces
+                                            a "Move N to Spam / Trash" banner so you can clean
+                                            up in one click. Reuses the cached scan results, so
+                                            no extra LLM cost beyond the sort itself.
+                                        </span>
+                                    </div>
+                                    <label class="toggle compact">
+                                        <input
+                                            type="checkbox"
+                                            checked={settings.aiSortSweepSpam}
+                                            onchange={(e) => setAiSortSweepSpam((e.currentTarget as HTMLInputElement).checked)}
+                                            data-testid="settings-ai-sort-sweep"
+                                        />
+                                        <span>{settings.aiSortSweepSpam ? 'On' : 'Off'}</span>
+                                    </label>
+                                </div>
+
+                                {#if settings.aiSortSweepSpam}
+                                    <label class="field">
+                                        <span class="lbl">
+                                            Sweep batch size
+                                            <strong class="lbl-val">{settings.spamSweepBatchSize} msg</strong>
+                                        </span>
+                                        <input
+                                            type="range"
+                                            min="10" max="200" step="10"
+                                            value={settings.spamSweepBatchSize}
+                                            oninput={(e) => setSpamSweepBatchSize(Number((e.currentTarget as HTMLInputElement).value))}
+                                            data-testid="settings-sweep-batch"
+                                        />
+                                        <span class="muted small">How many recent INBOX messages to scan per sweep. Larger = catches older spam, slower the first time.</span>
+                                    </label>
+                                {/if}
+                </section>
+            {:else if activeSection === 'smart-suggestions'}
+                <section class="tab-section" data-testid="settings-smart-suggestions">
+                    <h3>Smart suggestions</h3>
+                    <p class="muted small">Client-side AI helpers — subject suggestions and the pre-send sanity check.</p>
+                    <div class="card">
+                        <h4><Icon name="sparkles" size={13} /> AI subject suggestion</h4>
+                        <div class="form-row" style="padding:0;border:none;background:none;">
+                            <div class="row-text">
+                                <strong>Suggest a subject as I leave the body</strong>
+                                <span class="muted">
+                                    When the body has content and the subject is empty, ask the AI
+                                    for one and offer it inline (purple chip with Use / Decline).
+                                    When off, the suggestion only fires if you click Send with no
+                                    subject. Each suggestion costs LLM tokens.
+                                </span>
+                            </div>
+                            <label class="toggle compact">
+                                <input
+                                    type="checkbox"
+                                    checked={settings.aiSuggestSubjectOnBlur}
+                                    onchange={(e) => setAiSuggestSubjectOnBlur((e.currentTarget as HTMLInputElement).checked)}
+                                    data-testid="settings-ai-subject-blur"
+                                />
+                                <span>{settings.aiSuggestSubjectOnBlur ? 'On' : 'Off'}</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="row-text">
+                            <strong>Pre-send check</strong>
+                            <span class="muted">
+                                Before send, scan the draft for empty subjects, missing attachments
+                                ("attached" with no file), and leftover placeholders.
+                            </span>
+                        </div>
+                        <label class="toggle compact">
+                            <input
+                                type="checkbox"
+                                checked={settings.preSendCheck}
+                                onchange={(e) => setPreSendCheck((e.currentTarget as HTMLInputElement).checked)}
+                                data-testid="settings-pre-send-check"
+                            />
+                            <span>{settings.preSendCheck ? 'On' : 'Off'}</span>
+                        </label>
+                    </div>
+                    <div class="form-row">
+                        <div class="row-text">
+                            <strong>Compose history summary</strong>
+                            <span class="muted">
+                                When replying, summarize the thread above the compose box so the AI
+                                has context.
+                            </span>
+                        </div>
+                        <label class="toggle compact">
+                            <input
+                                type="checkbox"
+                                checked={settings.composeHistorySummary}
+                                onchange={(e) => setComposeHistorySummary((e.currentTarget as HTMLInputElement).checked)}
+                                data-testid="settings-history-summary"
+                            />
+                            <span>{settings.composeHistorySummary ? 'On' : 'Off'}</span>
+                        </label>
+                    </div>
+                </section>
+            {:else if activeSection === 'outbound-hooks'}
+                <section class="tab-section" data-testid="settings-outbound-hooks">
+                    <h3>Outbound webhooks</h3>
+                    <p class="muted small">
+                        Hand matching mail to an external service — the inverse of webhook inboxes.
+                        Point a mail rule's "Send to external webhook" action at one of these; the
+                        payload carries the parsed headers, the body, and gzip+base64 attachments.
+                        {#if outboundLimit}(limit {outboundLimit}){/if}
+                    </p>
+                    {#if !outboundUnavailable}
+                        <div class="filter-block">
+                            <div class="rule-form">
+                                <label class="rule-row">
+                                    <span class="rule-label">URL</span>
+                                    <input type="url" placeholder="https://agent.example/hook" bind:value={owUrl} data-testid="ow-url" />
+                                </label>
+                                <label class="rule-row">
+                                    <span class="rule-label">Name</span>
+                                    <input type="text" placeholder="My agent" bind:value={owLabel} data-testid="ow-label" />
+                                </label>
+                                <label class="rule-row">
+                                    <span class="rule-label">Prepend</span>
+                                    <input type="text" placeholder="Context for the receiver (optional)" bind:value={owPrepend} data-testid="ow-prepend" />
+                                </label>
+                                <label class="rule-row">
+                                    <span class="rule-label">Keep</span>
+                                    <span class="muted small"><input type="checkbox" bind:checked={owKeep} data-testid="ow-keep" /> keep the message in the mailbox after sending</span>
+                                </label>
+                                <div class="rule-actions">
+                                    <button type="button" class="btn btn-primary" disabled={owSaving} onclick={doCreateOutboundWebhook} data-testid="ow-create">
+                                        {owSaving ? 'Creating…' : 'Add webhook'}
+                                    </button>
+                                </div>
+                            </div>
+                            {#if outboundHooks.length}
+                                <ul class="rule-cards" data-testid="ow-list">
+                                    {#each outboundHooks as w (w.id)}
+                                        <li class="rule-card" data-testid={`ow-item-${w.id}`}>
+                                            <div class="rule-card-head">
+                                                <span class="rule-badge"><Icon name="globe" size={11} /> Webhook</span>
+                                                <span class="rule-name truncate" title={w.url}>{w.label}</span>
+                                                <button type="button" class="rule-remove" aria-label={`Remove webhook ${w.label}`} title="Remove webhook" onclick={() => doDeleteOutboundWebhook(w)} data-testid={`ow-remove-${w.id}`}><Icon name="trash" size={12} /></button>
+                                            </div>
+                                            <div class="rule-card-body">
+                                                <div class="rule-clause"><code class="rule-val truncate">{w.url}</code></div>
+                                                <div class="rule-clause">
+                                                    <label class="muted small">
+                                                        <input type="checkbox" checked={w.keep} onchange={(e) => doUpdateOutboundWebhook(w, { keep: (e.currentTarget as HTMLInputElement).checked })} />
+                                                        keep message in mailbox
+                                                    </label>
+                                                </div>
+                                                <div class="rule-clause">
+                                                    <input
+                                                        type="text"
+                                                        class="ow-prepend-edit"
+                                                        value={w.prepend}
+                                                        placeholder="Prepend text (optional)"
+                                                        onchange={(e) => doUpdateOutboundWebhook(w, { prepend: (e.currentTarget as HTMLInputElement).value })}
+                                                        data-testid={`ow-prepend-${w.id}`}
+                                                    />
+                                                </div>
+                                            </div>
+                                        </li>
+                                    {/each}
+                                </ul>
+                            {:else}
+                                <p class="muted small">No outbound webhooks yet.</p>
+                            {/if}
+                        </div>
+                    {/if}
+                </section>
             {/if}
             </div>
         </div>
@@ -2928,6 +3239,26 @@
         border-right: 1px solid var(--border-subtle);
         overflow-y: auto;
     }
+    .rail-search { padding: 4px 4px 10px; }
+    .rail-search input {
+        width: 100%;
+        padding: 7px 10px;
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-sm);
+        background: var(--bg-canvas);
+        color: var(--text-primary);
+        font: inherit;
+        font-size: 12.5px;
+    }
+    .rail-group { display: flex; flex-direction: column; gap: 2px; }
+    .rail-cat {
+        font-size: 10.5px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.07em;
+        padding: 12px 12px 4px;
+    }
+    .rail-cat-note { padding: 2px 12px 6px; font-size: 11.5px; }
     .tab {
         display: flex;
         align-items: center;

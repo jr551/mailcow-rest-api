@@ -53,7 +53,7 @@
     const MENU_MARGIN = 8;
     /** The menu is position: fixed with inline left/top, so keeping it on
      *  screen means clamping those numbers — nothing in CSS can do it. */
-    function clampMenu() {
+    async function clampMenu() {
         const el = menuEl;
         if (!el) return;
         // A menu taller than the window cannot be clamped into it: the maths
@@ -62,12 +62,16 @@
         // viewport the options list genuinely is taller than the space
         // available, so cap the rendered box to what fits and let the list
         // scroll inside it. Measured before clamping, because capping is
-        // what makes the height known.
-        el.style.maxHeight = '';
+        // what makes the height known. NOTE the cap lives in `menuMaxHeight`
+        // state — the reactive style= attribute below rewrites the whole
+        // style string whenever menuX/menuY change, so an imperative
+        // el.style.maxHeight would be wiped before it ever painted.
+        menuMaxHeight = null;
+        await tick();
         const avail = window.innerHeight - MENU_MARGIN * 2;
-        if (el.offsetHeight > avail) el.style.maxHeight = `${avail}px`;
+        menuMaxHeight = el.offsetHeight > avail ? `${avail}px` : null;
         const w = el.offsetWidth;
-        const h = el.offsetHeight;
+        const h = Math.min(el.offsetHeight, avail);
         menuX = Math.min(menuX, Math.max(MENU_MARGIN, window.innerWidth - w - MENU_MARGIN));
         menuY = Math.min(menuY, Math.max(MENU_MARGIN, window.innerHeight - h - MENU_MARGIN));
     }
@@ -75,6 +79,7 @@
     let menuOpen = $state(false);
     let menuX = $state(0);
     let menuY = $state(0);
+    let menuMaxHeight = $state<string | null>(null);
     let editingLocation = $state(false);
     let locInput = $state('');
 
@@ -247,7 +252,7 @@
             // location editor swaps in a different one) until it is in the
             // DOM and laid out.
             await tick();
-            clampMenu();
+            await clampMenu();
         });
     }
 
@@ -422,7 +427,7 @@
 </span>
 
 {#if menuOpen}
-    <div class="weather-menu" role="menu" bind:this={menuEl} style="left:{menuX}px; top:{menuY}px;">
+    <div class="weather-menu" role="menu" bind:this={menuEl} style="left:{menuX}px; top:{menuY}px;{menuMaxHeight ? ` max-height:${menuMaxHeight};` : ''}">
         {#if editingLocation}
             <div class="menu-section">Location</div>
             <input

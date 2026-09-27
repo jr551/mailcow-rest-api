@@ -25,3 +25,4 @@ webmail/playwright-report/
 test-results/
 playwright-report/
 .claude/
+webmail/test/screenshots/

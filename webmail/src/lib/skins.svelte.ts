@@ -1284,10 +1284,10 @@ export const SKINS: Skin[] = [
 
                 /* OWA's topbar carries no ambient chips — weather and the
                  * calendar ticker stay hidden under this skin even when the
-                 * user has them enabled for other skins. (The Layout's
+                 * user has them enabled for other skins. The Layout's
                  * weatherChipOutlook opt-in re-asserts .weather-wrap via the
-                 * scoped -forced class; it currently only triggers for the
-                 * light 'outlook' id — see the release note in Settings.) */
+                 * scoped -forced class on every outlook-family skin
+                 * (light and dark alike). */
                 .topbar .weather-wrap, .topbar .cal-ticker { display: none !important; }
 
                 /* OWA marks unread rows with a blue edge bar and a blue

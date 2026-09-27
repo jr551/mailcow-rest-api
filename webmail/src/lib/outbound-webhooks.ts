@@ -51,7 +51,7 @@ export interface OutboundWebhookInput {
 async function request<T>(method: string, url: string, body?: unknown, retried = false): Promise<T> {
     const headers: Record<string, string> = {};
     const s = getSession();
-    if (s) Object.assign(headers, bearerHeader(s) as Record<string, string>);
+    if (s) headers['authorization'] = bearerHeader(s);
     if (body !== undefined) headers['content-type'] = 'application/json';
     const res = await fetch(apiUrl(url), {
         method,
@@ -69,7 +69,7 @@ async function request<T>(method: string, url: string, body?: unknown, retried =
             const j = await res.json();
             detail = j?.detail || j?.title || j?.message || detail;
         } catch { /* not JSON */ }
-        throw new ApiError({ status: res.status, title: 'Outbound webhook request failed', detail });
+        throw new ApiError({ type: 'about:blank', status: res.status, title: 'Outbound webhook request failed', detail });
     }
     if (res.status === 204) return undefined as T;
     const ct = res.headers.get('content-type') || '';
