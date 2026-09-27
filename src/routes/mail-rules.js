@@ -29,16 +29,28 @@ function validateRuleBody(body) {
     if (!body.condition.value || typeof body.condition.value !== 'string') {
         throw badRequest('Condition value is required');
     }
-    const validActions = ['discard', 'redirect', 'copy'];
+    const validActions = ['discard', 'redirect', 'copy', 'fileinto', 'webhook'];
     if (!validActions.includes(body.action.type)) {
         throw badRequest(`Invalid action type. Must be one of: ${validActions.join(', ')}`);
     }
     if ((body.action.type === 'redirect' || body.action.type === 'copy') && !body.action.to) {
         throw badRequest('Action "to" is required for redirect and copy actions');
     }
+    // Auto-move needs a destination folder. The folder is created on demand
+    // by the Sieve script itself, so there is nothing to pre-validate beyond
+    // its presence.
+    if (body.action.type === 'fileinto' && !body.action.folder) {
+        throw badRequest('Action "folder" is required for a move-to-folder action');
+    }
+    // The webhook id is checked against the caller's own webhooks in the
+    // route, where the store is available — here we only require that one was
+    // named at all.
+    if (body.action.type === 'webhook' && !body.action.webhookId) {
+        throw badRequest('Action "webhookId" is required for a webhook action');
+    }
 }
 
-module.exports = async function mailRulesRoutes(app, { sieveManager }) {
+module.exports = async function mailRulesRoutes(app, { sieveManager, outboundWebhooks } = {}) {
     // ========== BLOCKED RECIPIENTS (backward compat) ==========
 
     app.get('/v1/me/blocked-recipients', {
@@ -188,8 +200,10 @@ module.exports = async function mailRulesRoutes(app, { sieveManager }) {
                         type: 'object',
                         required: ['type'],
                         properties: {
-                            type: { type: 'string', enum: ['discard', 'redirect', 'copy'] },
-                            to: { type: 'string', format: 'email' }
+                            type: { type: 'string', enum: ['discard', 'redirect', 'copy', 'fileinto', 'webhook'] },
+                            to: { type: 'string', format: 'email' },
+                            folder: { type: 'string', maxLength: 200 },
+                            webhookId: { type: 'string', maxLength: 64 }
                         }
                     }
                 }
@@ -214,6 +228,14 @@ module.exports = async function mailRulesRoutes(app, { sieveManager }) {
         if (!sieveManager) throw badRequest('ManageSieve not configured');
         const pass = req.creds.pass;
         validateRuleBody(req.body);
+        // A webhook rule points at a webhook the caller owns. Checking here
+        // (rather than in validateRuleBody) because it needs the store, and
+        // without it a user could aim a rule at someone else's webhook id and
+        // have their mail delivered to a stranger's endpoint.
+        if (req.body.action.type === 'webhook' && outboundWebhooks) {
+            const owned = outboundWebhooks.get({ id: req.body.action.webhookId, user });
+            if (!owned) throw badRequest('No such outbound webhook');
+        }
         try {
             const rule = await sieveManager.addRule(user, pass, req.body);
             reply.code(201);

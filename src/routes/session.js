@@ -4,7 +4,7 @@ const { parseBasicAuth, verifyWithDovecot } = require('../auth');
 const { unauthorized, problem } = require('../errors');
 const { problemSchema } = require('../schemas');
 
-module.exports = async function sessionRoutes(app, { cache, imap, sessionTtlMs, appPasswords = null, webhookInboxes = null }) {
+module.exports = async function sessionRoutes(app, { cache, imap, sessionTtlMs, appPasswords = null, webhookInboxes = null, outboundWebhooks = null }) {
     app.post('/v1/auth/session', {
         config: { public: false },
         schema: {
@@ -52,8 +52,9 @@ module.exports = async function sessionRoutes(app, { cache, imap, sessionTtlMs, 
         // Existing app passwords hold an encrypted copy of the mailbox
         // password so they can reach IMAP. A password change would leave every
         // one of them pointing at the old value and silently break every
-        // configured client, so a successful sign-in re-keys them.
-        for (const store of [appPasswords, webhookInboxes]) {
+        // configured client, so a successful sign-in re-keys them. Outbound
+        // webhooks keep the same kind of copy for the same reason.
+        for (const store of [appPasswords, webhookInboxes, outboundWebhooks]) {
             if (!store) continue;
             try {
                 store.refreshSecrets({ user: creds.user, password: creds.pass });

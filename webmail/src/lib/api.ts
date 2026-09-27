@@ -280,10 +280,15 @@ export async function listMessages(
     );
 }
 
-export async function getMessage(path: string, uid: number): Promise<MessageDetail> {
+export async function getMessage(
+    path: string,
+    uid: number,
+    opts: { signal?: AbortSignal } = {}
+): Promise<MessageDetail> {
     return request<MessageDetail>(
         'GET',
-        `/v1/mailboxes/${encodeURIComponent(path)}/messages/${uid}`
+        `/v1/mailboxes/${encodeURIComponent(path)}/messages/${uid}`,
+        { signal: opts.signal }
     );
 }
 
@@ -637,7 +642,7 @@ export type MailRuleConditionType =
     | 'to-contains'
     | 'subject-contains';
 
-export type MailRuleActionType = 'discard' | 'redirect' | 'copy';
+export type MailRuleActionType = 'discard' | 'redirect' | 'copy' | 'fileinto' | 'webhook';
 
 export interface MailRuleCondition {
     type: MailRuleConditionType;
@@ -650,6 +655,10 @@ export interface MailRuleAction {
     type: MailRuleActionType;
     /** Required for `redirect` and `copy`. */
     to?: string;
+    /** Required for `fileinto` — destination mailbox path. */
+    folder?: string;
+    /** Required for `webhook` — id of an outbound webhook the caller owns. */
+    webhookId?: string;
 }
 
 export interface MailRule {

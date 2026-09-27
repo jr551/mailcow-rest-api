@@ -19,6 +19,8 @@ const { createPushStore } = require('./push-store');
 const { createPushSender } = require('./push-sender');
 const { createWebhookStore } = require('./webhook-store');
 const { createWebhookForwarder } = require('./webhook-forwarder');
+const { createOutboundWebhookStore } = require('./outbound-webhook-store');
+const { createOutboundWebhookForwarder } = require('./outbound-webhook-forwarder');
 const { createTrackingStore } = require('./tracking-store');
 const { createImageProxyCache } = require('./image-proxy-cache');
 const { createAiCache } = require('./ai-cache');
@@ -50,6 +52,7 @@ const trackingRoutes = require('./routes/tracking');
 const imageProxyRoutes = require('./routes/image-proxy');
 const telemetryRoutes = require('./routes/telemetry');
 const webhookInboxRoutes = require('./routes/webhook-inbox');
+const outboundWebhookRoutes = require('./routes/outbound-webhooks');
 const { createWebhookInboxStore } = require('./webhook-inbox-store');
 const { createMailcowDb } = require('./mailcow-db');
 const { createSieveManager } = require('./sieve-manager');
@@ -418,6 +421,34 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         app.log.warn('webhook inboxes disabled — no credential encryption key available');
     }
 
+    // Outbound webhooks ("email → webhook"). Same credential requirement as
+    // webhook inboxes: the forwarder opens the owner's hidden mailbox over
+    // IMAP, so it needs the mailbox password and therefore the secret box.
+    const outboundWebhookStore = config.outboundWebhooks.enabled && secretBox.enabled
+        ? createOutboundWebhookStore({
+            filePath: config.outboundWebhooks.dbPath,
+            secretBox,
+            maxPerUser: config.outboundWebhooks.maxPerUser
+        })
+        : null;
+    if (config.outboundWebhooks.enabled && !secretBox.enabled) {
+        app.log.warn('outbound webhooks disabled — no credential encryption key available');
+    }
+    // Delivery state is shared with the operator forwarder's queue shape: both
+    // are keyed by (address, uidvalidity, uid) and both need the same
+    // attempts/backoff/delivered bookkeeping.
+    const outboundWebhookQueue = outboundWebhookStore
+        ? createWebhookStore({ filePath: config.outboundWebhooks.dbPath.replace(/\.db$/, '-queue.db') })
+        : null;
+    const outboundWebhookForwarder = outboundWebhookStore
+        ? createOutboundWebhookForwarder({
+            config,
+            store: outboundWebhookStore,
+            queue: outboundWebhookQueue,
+            logger: app.log
+        })
+        : null;
+
     app.decorate('adminSettings', adminSettings);
     if (appPasswordStore) app.decorate('appPasswordStore', appPasswordStore);
     app.decorate('cache', cache);
@@ -614,7 +645,7 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         }
     }));
 
-    await app.register(sessionRoutes, { cache, imap: imapCfg, sessionTtlMs: config.session.ttlMs, appPasswords: appPasswordStore, webhookInboxes: webhookInboxStore });
+    await app.register(sessionRoutes, { cache, imap: imapCfg, sessionTtlMs: config.session.ttlMs, appPasswords: appPasswordStore, webhookInboxes: webhookInboxStore, outboundWebhooks: outboundWebhookStore });
     await app.register(mailboxRoutes, { pool, imapCache });
     await app.register(messageRoutes, { pool, ocrCache, imapCache });
     await app.register(aiRoutes, { aiCache });
@@ -631,6 +662,9 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
     if (webhookForwarder) {
         webhookForwarder.start();
     }
+    if (outboundWebhookForwarder) {
+        outboundWebhookForwarder.start();
+    }
     await app.register(senderPolicyRoutes, { db: mailcowDb });
     await app.register(mailboxInfoRoutes, { db: mailcowDb });
     await app.register(shortcutsRoutes);
@@ -644,7 +678,7 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         // cert (delivering.email) instead of the internal docker host.
         tlsServername: imapCfg.tlsServername
     }) : null;
-    await app.register(mailRulesRoutes, { sieveManager });
+    await app.register(mailRulesRoutes, { sieveManager, outboundWebhooks: outboundWebhookStore });
     await app.register(calendarRoutes, {
         sogoUrl: config.sogoUrl,
         rejectUnauthorized: config.caldav.rejectUnauthorized,
@@ -660,6 +694,7 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
     await app.register(adminRoutes, { adminSettings, appPasswordStore });
     await app.register(appPasswordRoutes, { store: appPasswordStore });
     await app.register(webhookInboxRoutes, { store: webhookInboxStore, pool, getPublicBaseUrl });
+    await app.register(outboundWebhookRoutes, { store: outboundWebhookStore });
     await app.register(iconProxyRoutes);
     await app.register(trackingRoutes, { store: trackingStore, smtp: config.smtp });
     await app.register(imageProxyRoutes, { cache: imageProxyCache, maxBytesPerDay: config.imageProxy.maxBytesPerDay });
@@ -681,6 +716,9 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         if (adminSettings) adminSettings.close();
         if (appPasswordStore) appPasswordStore.close();
         if (webhookInboxStore) webhookInboxStore.close();
+        if (outboundWebhookForwarder) outboundWebhookForwarder.stop();
+        if (outboundWebhookQueue) outboundWebhookQueue.close();
+        if (outboundWebhookStore) outboundWebhookStore.close();
         if (mailcowDb) await mailcowDb.close();
     });
 

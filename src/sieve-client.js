@@ -7,6 +7,24 @@ const SCRIPT_NAME = 'imap-rest-rules';
 const PRESERVED_MARKER = '# --- preserved rules ---';
 const RULES_HEADER = '# mailcow-rest-api rules';
 
+// Hidden mailbox an outbound-webhook rule parks its message in.
+//
+// Sieve has no HTTP action, so a "send to webhook" rule cannot POST. It
+// redirects into this mailbox instead and the forwarder polls it. The name
+// lives here because it is part of the Sieve contract — the store imports it
+// rather than keeping a second copy that could drift.
+const WEBHOOK_MAILBOX_PREFIX = '.wh-';
+
+function webhookMailbox(id) {
+    return `${WEBHOOK_MAILBOX_PREFIX}${id}`;
+}
+
+function webhookIdFromMailbox(mailbox) {
+    if (typeof mailbox !== 'string' || !mailbox.startsWith(WEBHOOK_MAILBOX_PREFIX)) return null;
+    const id = mailbox.slice(WEBHOOK_MAILBOX_PREFIX.length);
+    return /^[a-z0-9]+$/.test(id) ? id : null;
+}
+
 function isOk(response) {
     return /(^|\r\n)OK(\s|$)/m.test(response);
 }
@@ -116,6 +134,24 @@ function compileAction(action) {
             return `    redirect "${escapeSieveString(action.to)}";\n    stop;`;
         case 'copy':
             return `    redirect :copy "${escapeSieveString(action.to)}";`;
+        case 'fileinto':
+            // Auto-move: the message is filed into a folder and stays there.
+            // No `stop`, so later rules can still see it — matching how
+            // `copy` behaves and how users expect a "move" rule to compose.
+            // `:create` so a rule targeting a folder that does not exist yet
+            // still delivers instead of failing LDA on
+            // lda_mailbox_autocreate=no hosts (mailcow's default).
+            return `    fileinto :create "${escapeSieveString(action.folder)}";`;
+        case 'webhook':
+            // Not a real Sieve action: the message is filed into the
+            // webhook's hidden mailbox and the forwarder does the HTTP POST,
+            // then moves it back to INBOX when `keep` is set. `redirect`
+            // can't stand in here — it takes an email address, so Dovecot
+            // rejects the script at PUTSCRIPT; `:create` because the
+            // `.wh-*` mailbox does not exist until the first delivery and
+            // lda_mailbox_autocreate is off on mailcow. `stop` because the
+            // mailbox move already removed it from the delivery path.
+            return `    fileinto :create "${escapeSieveString(webhookMailbox(action.webhookId))}";\n    stop;`;
         default:
             throw new Error(`Unknown action type: ${action.type}`);
     }
@@ -134,9 +170,17 @@ function compileRulesScript(rules, preservedContent) {
 
     const needsEnvelope = rules.some((r) => r.condition.type === 'envelope-to-is');
     const needsCopy = rules.some((r) => r.action.type === 'copy');
+    // `fileinto` is not in the base Sieve capability set — Dovecot rejects a
+    // script that uses it without declaring the extension. Webhook rules
+    // count too: parking in `.wh-*` is a fileinto, not a redirect.
+    const needsFileinto = rules.some((r) => r.action.type === 'fileinto' || r.action.type === 'webhook');
     const requirements = [];
     if (needsEnvelope) requirements.push('"envelope"');
     if (needsCopy) requirements.push('"copy"');
+    if (needsFileinto) requirements.push('"fileinto"');
+    // `fileinto :create` is the mailbox extension — required whenever we emit
+    // `:create`, which is every fileinto and webhook rule.
+    if (needsFileinto) requirements.push('"mailbox"');
 
     let out = '';
     if (requirements.length) {
@@ -211,7 +255,20 @@ function parseAction(actionStr) {
     if (copyMatch) return { type: 'copy', to: unescapeSieveString(copyMatch[1]) };
 
     const redirectMatch = actionStr.match(/redirect "([^"]+)"/);
-    if (redirectMatch) return { type: 'redirect', to: unescapeSieveString(redirectMatch[1]) };
+    if (redirectMatch) {
+        return { type: 'redirect', to: unescapeSieveString(redirectMatch[1]) };
+    }
+
+    const fileintoMatch = actionStr.match(/fileinto(?: :create)? "([^"]+)"/);
+    if (fileintoMatch) {
+        const folder = unescapeSieveString(fileintoMatch[1]);
+        // A fileinto into the `.wh-*` namespace is our own `webhook` action —
+        // parsing it back as a plain fileinto would lose the type and orphan
+        // the rule on the next read.
+        const webhookId = webhookIdFromMailbox(folder);
+        if (webhookId) return { type: 'webhook', webhookId };
+        return { type: 'fileinto', folder };
+    }
 
     return null;
 }
@@ -362,5 +419,8 @@ module.exports = {
     compileRulesScript,
     parseRules,
     buildBlockedRecipientsScript,
-    parseBlockedRecipients
+    parseBlockedRecipients,
+    webhookMailbox,
+    webhookIdFromMailbox,
+    WEBHOOK_MAILBOX_PREFIX
 };

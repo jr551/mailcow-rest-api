@@ -96,6 +96,60 @@
     let to = $state(buildTo());
     let cc = $state(buildCc());
     let bcc = $state('');
+
+    // ─── Recipient pills ─────────────────────────────────────────────────
+    // To/Cc/Bcc read like Outlook's token fields: a recipient turns into a
+    // pill the moment the user finishes it (Enter, comma, semicolon, or
+    // simply leaving the field) and the input then carries only the
+    // half-typed tail. The field value itself stays the canonical
+    // comma-joined string that doSend() parses, so the pills are purely a
+    // view over it — nothing downstream needs to know they exist.
+    type RecipField = 'to' | 'cc' | 'bcc';
+    // Text already turned into pills, always a whole number of "addr, "
+    // entries so the input's value is simply `value.slice(prefix.length)`.
+    let recipPrefix = $state<Record<RecipField, string>>({ to: '', cc: '', bcc: '' });
+    let activeField = $state<RecipField | null>(null);
+
+    function recipValue(f: RecipField): string {
+        return f === 'to' ? to : f === 'cc' ? cc : bcc;
+    }
+    function setRecipValue(f: RecipField, v: string) {
+        if (f === 'to') to = v;
+        else if (f === 'cc') cc = v;
+        else bcc = v;
+    }
+    function recipChips(f: RecipField): string[] {
+        return recipPrefix[f].split(/[,;]/).map((s) => s.trim()).filter(Boolean);
+    }
+    function recipLive(f: RecipField): string {
+        return recipValue(f).slice(recipPrefix[f].length);
+    }
+    function setRecipChips(f: RecipField, addrs: string[]) {
+        const prefix = addrs.map((a) => `${a}, `).join('');
+        recipPrefix[f] = prefix;
+        setRecipValue(f, prefix);
+    }
+    /** Promote whatever is being typed into a pill. */
+    function commitRecip(f: RecipField) {
+        const live = recipLive(f).replace(/[,;]\s*$/, '').trim();
+        if (!live) return;
+        setRecipChips(f, [...recipChips(f), live]);
+    }
+    function removeRecip(f: RecipField, addr: string) {
+        setRecipChips(f, recipChips(f).filter((a) => a !== addr));
+    }
+    /** Backspace in an empty field pops the last pill, as in Outlook. */
+    function popRecip(f: RecipField) {
+        const addrs = recipChips(f);
+        if (!addrs.length) return;
+        addrs.pop();
+        setRecipChips(f, addrs);
+    }
+    /** Show a contact's friendly name on its pill when we know one. */
+    function contactName(addr: string): string {
+        return addressBook.contacts.find((c) => c.address.toLowerCase() === addr.toLowerCase())?.name || '';
+    }
+
     let subject = $state(buildSubject());
     let body = $state(buildBodyHtml());
 
@@ -465,10 +519,10 @@
 <FloatingPanel
     title={title + (subject ? ` — ${subject}` : '')}
     storageKey={`compose.${replyMode}`}
-    defaultWidth={640}
-    defaultHeight={520}
-    minWidth={380}
-    minHeight={320}
+    defaultWidth={980}
+    defaultHeight={720}
+    minWidth={420}
+    minHeight={420}
     onClose={onClose}
     testId="compose-modal"
     overlayVisible={sending}
@@ -487,8 +541,11 @@
         data-bwignore="true"
         data-form-type="other"
     >
-        <label class="row">
-            <span class="lbl">From</span>
+        <!-- From is a single address line in OWA. The display name and the
+             catch-all domain chips are secondary controls, so they moved
+             into the Advanced popover rather than sitting on this row. -->
+        <div class="hdr-row from-row">
+            <span class="hdr-lbl">From</span>
             <div class="from-pair">
                 <input
                     type="email"
@@ -501,76 +558,72 @@
                     data-bwignore="true"
                     data-testid="compose-from"
                 />
-                <input
-                    type="text"
-                    class="display-name-inline"
-                    value={settings.displayName}
-                    oninput={(e) => setDisplayName((e.currentTarget as HTMLInputElement).value)}
-                    placeholder="Display name (optional)"
-                    title="Friendly name shown next to your address — saved across sends"
-                    autocomplete="off"
-                    data-1p-ignore="true"
-                    data-lpignore="true"
-                    data-bwignore="true"
-                    data-testid="compose-from-name"
-                />
             </div>
-            <datalist id="compose-from-options">
-                {#if authState.activeUser && !sendFromOptions.includes(authState.activeUser)}
-                    <option value={authState.activeUser}></option>
-                {/if}
-                {#each sendFromOptions as addr (addr)}
-                    <option value={addr}></option>
-                {/each}
-                {#each wildcardDomains as d (d)}
-                    <!-- Catch-all stub: the type-anything+@domain hint, lets
-                         the browser autocomplete after the local part. -->
-                    <option value={`anything@${d}`}></option>
-                    <option value={`hello@${d}`}></option>
-                    <option value={`signup-${Math.random().toString(36).slice(2,7)}@${d}`}></option>
-                {/each}
-                <!-- Plus-addressed suggestions: postfix-style sub-tags route
-                     back to the user's mailbox without needing a real alias. -->
-                {#if authState.activeUser}
-                    {@const at = authState.activeUser.indexOf('@')}
-                    {#if at > 0}
-                        {@const local = authState.activeUser.slice(0, at)}
-                        {@const domain = authState.activeUser.slice(at + 1)}
-                        <option value={`${local}+work@${domain}`}></option>
-                        <option value={`${local}+personal@${domain}`}></option>
-                        <option value={`${local}+newsletter@${domain}`}></option>
-                    {/if}
-                {/if}
-            </datalist>
-            {#if wildcardDomains.length > 0}
-                <div class="from-wildcard-hint" data-testid="compose-from-wildcard">
-                    <Icon name="sparkles" size={11} />
-                    <span>Catch-all on
-                        {#each wildcardDomains as d, i (d)}
-                            <button
-                                type="button"
-                                class="domain-chip"
-                                title={`Insert @${d} into the From field`}
-                                onclick={() => {
-                                    const at = from.indexOf('@');
-                                    const local = at > 0 ? from.slice(0, at) : (from || 'me');
-                                    from = `${local}@${d}`;
-                                }}
-                            >@{d}</button>{i < wildcardDomains.length - 1 ? ' ' : ''}
-                        {/each}
-                        — type anything before the @
-                    </span>
-                </div>
+        </div>
+        <datalist id="compose-from-options">
+            {#if authState.activeUser && !sendFromOptions.includes(authState.activeUser)}
+                <option value={authState.activeUser}></option>
             {/if}
-        </label>
-        <label class="row" class:to-glow={toGlow}>
-            <span class="lbl">To</span>
-            <div class="row-input">
+            {#each sendFromOptions as addr (addr)}
+                <option value={addr}></option>
+            {/each}
+            {#each wildcardDomains as d (d)}
+                <!-- Catch-all stub: the type-anything+@domain hint, lets
+                     the browser autocomplete after the local part. -->
+                <option value={`anything@${d}`}></option>
+                <option value={`hello@${d}`}></option>
+                <option value={`signup-${Math.random().toString(36).slice(2,7)}@${d}`}></option>
+            {/each}
+            <!-- Plus-addressed suggestions: postfix-style sub-tags route
+                 back to the user's mailbox without needing a real alias. -->
+            {#if authState.activeUser}
+                {@const at = authState.activeUser.indexOf('@')}
+                {#if at > 0}
+                    {@const local = authState.activeUser.slice(0, at)}
+                    {@const domain = authState.activeUser.slice(at + 1)}
+                    <option value={`${local}+work@${domain}`}></option>
+                    <option value={`${local}+personal@${domain}`}></option>
+                    <option value={`${local}+newsletter@${domain}`}></option>
+                {/if}
+            {/if}
+        </datalist>
+        <!-- To row. The chips and the input are one wrapping token field,
+             as in OWA — recipients become pills, the input keeps carrying
+             whatever is half-typed. -->
+        <div class="hdr-row" class:to-glow={toGlow}>
+            <span class="hdr-lbl">To</span>
+            <div class="token-field" class:filled={recipChips('to').length > 0}>
+                {#each recipChips('to') as addr (addr)}
+                    <span class="recip-chip" data-testid="compose-to-chip">
+                        {#if contactName(addr)}<span class="recip-name">{contactName(addr)}</span>{/if}
+                        <span class="recip-addr">{addr}</span>
+                        <button
+                            type="button"
+                            class="recip-x"
+                            aria-label={`Remove ${addr}`}
+                            title={`Remove ${addr}`}
+                            onclick={() => removeRecip('to', addr)}
+                            data-testid="compose-to-chip-remove"
+                        ><Icon name="close" size={9} /></button>
+                    </span>
+                {/each}
                 <input
                     type="text"
-                    bind:value={to}
+                    value={recipLive('to')}
+                    oninput={(e) => setRecipValue('to', recipPrefix.to + (e.currentTarget as HTMLInputElement).value)}
+                    onkeydown={(e) => {
+                        const el = e.currentTarget as HTMLInputElement;
+                        if (e.key === 'Enter' || e.key === ',' || e.key === ';') {
+                            e.preventDefault();
+                            commitRecip('to');
+                        } else if (e.key === 'Backspace' && !el.value) {
+                            popRecip('to');
+                        }
+                    }}
+                    onfocus={() => (activeField = 'to')}
+                    onblur={() => { commitRecip('to'); if (activeField === 'to') activeField = null; }}
                     list="compose-contacts"
-                    placeholder="someone@example.com, …"
+                    placeholder={recipChips('to').length ? '' : 'Type a name or address'}
                     autocomplete="off"
                     data-1p-ignore="true"
                     data-lpignore="true"
@@ -587,37 +640,53 @@
                     >Cc / Bcc</button>
                 {/if}
             </div>
-        </label>
+        </div>
 
         {#if showCcBcc}
-            <label class="row">
-                <span class="lbl">Cc</span>
-                <input
-                    type="text"
-                    bind:value={cc}
-                    list="compose-contacts"
-                    placeholder="optional"
-                    autocomplete="off"
-                    data-1p-ignore="true"
-                    data-lpignore="true"
-                    data-bwignore="true"
-                    data-testid="compose-cc"
-                />
-            </label>
-            <label class="row">
-                <span class="lbl">Bcc</span>
-                <input
-                    type="text"
-                    bind:value={bcc}
-                    list="compose-contacts"
-                    placeholder="optional"
-                    autocomplete="off"
-                    data-1p-ignore="true"
-                    data-lpignore="true"
-                    data-bwignore="true"
-                    data-testid="compose-bcc"
-                />
-            </label>
+            {#each [{ f: 'cc' as RecipField, label: 'Cc' }, { f: 'bcc' as RecipField, label: 'Bcc' }] as row (row.f)}
+                <div class="hdr-row">
+                    <span class="hdr-lbl">{row.label}</span>
+                    <div class="token-field" class:filled={recipChips(row.f).length > 0}>
+                        {#each recipChips(row.f) as addr (addr)}
+                            <span class="recip-chip" data-testid={`compose-${row.f}-chip`}>
+                                {#if contactName(addr)}<span class="recip-name">{contactName(addr)}</span>{/if}
+                                <span class="recip-addr">{addr}</span>
+                                <button
+                                    type="button"
+                                    class="recip-x"
+                                    aria-label={`Remove ${addr}`}
+                                    title={`Remove ${addr}`}
+                                    onclick={() => removeRecip(row.f, addr)}
+                                    data-testid={`compose-${row.f}-chip-remove`}
+                                ><Icon name="close" size={9} /></button>
+                            </span>
+                        {/each}
+                        <input
+                            type="text"
+                            value={recipLive(row.f)}
+                            oninput={(e) => setRecipValue(row.f, recipPrefix[row.f] + (e.currentTarget as HTMLInputElement).value)}
+                            onkeydown={(e) => {
+                                const el = e.currentTarget as HTMLInputElement;
+                                if (e.key === 'Enter' || e.key === ',' || e.key === ';') {
+                                    e.preventDefault();
+                                    commitRecip(row.f);
+                                } else if (e.key === 'Backspace' && !el.value) {
+                                    popRecip(row.f);
+                                }
+                            }}
+                            onfocus={() => (activeField = row.f)}
+                            onblur={() => { commitRecip(row.f); if (activeField === row.f) activeField = null; }}
+                            list="compose-contacts"
+                            placeholder={recipChips(row.f).length ? '' : row.label}
+                            autocomplete="off"
+                            data-1p-ignore="true"
+                            data-lpignore="true"
+                            data-bwignore="true"
+                            data-testid={`compose-${row.f}`}
+                        />
+                    </div>
+                </div>
+            {/each}
         {/if}
 
         <!-- Address-book autocomplete shared by To/Cc/Bcc. Population is
@@ -632,8 +701,10 @@
             {/each}
         </datalist>
 
-        <label class="row">
-            <span class="lbl">Subject</span>
+        <!-- Subject: a full-width line under the recipients, the way OWA
+             lays it out. The AI wand sits at the far end of the row. -->
+        <div class="hdr-row subject-row">
+            <span class="hdr-lbl">Subject</span>
             <div class="subject-wrap">
                 <input
                     type="text"
@@ -643,7 +714,7 @@
                     data-lpignore="true"
                     data-bwignore="true"
                     data-testid="compose-subject"
-                    placeholder={subjectSuggesting ? 'Drafting subject…' : 'Subject (tap the wand for an AI suggestion)'}
+                    placeholder={subjectSuggesting ? 'Drafting subject…' : 'Add a subject'}
                 />
                 <button
                     type="button"
@@ -657,7 +728,7 @@
                     {#if subjectSuggesting}<span class="spinner"></span>{:else}<Icon name="wand" size={14} />{/if}
                 </button>
             </div>
-        </label>
+        </div>
         {#if subjectSuggestion}
             <div class="subj-sugg" role="status" aria-live="polite" data-testid="compose-subject-sugg">
                 <Icon name="sparkles" size={12} />
@@ -813,66 +884,113 @@
                 {/each}
             </ul>
         {/if}
-        <div class="foot-bar">
-            <div class="foot-left">
+        <!-- Action bar. Left side holds the composer's switches (attach,
+             tracking, advanced); right side holds the primary pair. The
+             layout mirrors OWA's, which keeps Send visually dominant. -->
+        <div class="action-bar">
+            <div class="action-left">
                 <button
                     type="button"
-                    class="btn btn-ghost"
+                    class="bar-btn"
                     title="Attach files"
                     aria-label="Attach files"
                     onclick={pickFiles}
                     data-testid="compose-attach-btn"
                 >
                     <Icon name="paperclip" size={15} />
+                    <span>Attach</span>
                 </button>
+
+                <!-- Tracking lives here rather than behind "Advanced": it's a
+                     per-message switch the user should be able to see and
+                     flip at a glance, and an icon that merely looks active
+                     is too easy to leave on without noticing. -->
                 <button
                     type="button"
-                    class="btn btn-ghost"
+                    class="bar-btn spy-btn"
+                    class:on={trackOpens}
+                    title={trackOpens
+                        ? 'Invisible Tracker is ON — you\'ll get an email when this message is opened. Click to disable.'
+                        : 'Invisible Tracker — get an email when the recipient opens this message.'}
+                    aria-label={trackOpens ? 'Disable invisible tracker' : 'Enable invisible tracker'}
+                    aria-pressed={trackOpens}
+                    onclick={() => { trackOpens = !trackOpens; }}
+                    data-testid="compose-spy-btn"
+                >
+                    <Icon name="spy" size={15} />
+                    <span class="tracking-note" data-testid="compose-tracking-note">
+                        Tracking {trackOpens ? 'on' : 'off'}
+                    </span>
+                </button>
+
+                <button
+                    type="button"
+                    class="bar-btn"
                     title="Advanced options"
                     aria-expanded={advancedOpen}
                     onclick={() => { advancedOpen = !advancedOpen; }}
                     data-testid="compose-advanced-btn"
                 >
                     <Icon name={advancedOpen ? 'chevronUp' : 'chevronDown'} size={14} />
-                    <span class="muted small">Advanced</span>
+                    <span>Advanced</span>
                 </button>
+
                 {#if advancedOpen}
-                    <button
-                        type="button"
-                        class={`btn btn-ghost spy-btn icon-only ${trackOpens ? 'on' : ''}`}
-                        title={trackOpens
-                            ? 'Invisible Tracker is ON — you\'ll get an email when this message is opened. Click to disable.'
-                            : 'Invisible Tracker — get an email when the recipient opens this message.'}
-                        aria-label={trackOpens ? 'Disable invisible tracker' : 'Enable invisible tracker'}
-                        aria-pressed={trackOpens}
-                        onclick={() => { trackOpens = !trackOpens; }}
-                        data-testid="compose-spy-btn"
-                    >
-                        <Icon name="spy" size={16} />
-                    </button>
+                    <!-- Advanced holds the From-adjacent controls that would
+                         otherwise crowd the address line: the friendly name
+                         and the catch-all domain shortcuts. -->
+                    <div class="adv-pop" data-testid="compose-advanced-panel">
+                        <label class="adv-field">
+                            <span class="adv-lbl">Display name</span>
+                            <input
+                                type="text"
+                                class="display-name-inline"
+                                value={settings.displayName}
+                                oninput={(e) => setDisplayName((e.currentTarget as HTMLInputElement).value)}
+                                placeholder="Shown next to your address"
+                                title="Friendly name shown next to your address — saved across sends"
+                                autocomplete="off"
+                                data-1p-ignore="true"
+                                data-lpignore="true"
+                                data-bwignore="true"
+                                data-testid="compose-from-name"
+                            />
+                        </label>
+                        {#if wildcardDomains.length > 0}
+                            <div class="adv-field" data-testid="compose-from-wildcard">
+                                <span class="adv-lbl">Catch-all domains</span>
+                                <div class="adv-doms">
+                                    {#each wildcardDomains as d (d)}
+                                        <button
+                                            type="button"
+                                            class="domain-chip"
+                                            title={`Insert @${d} into the From field`}
+                                            onclick={() => {
+                                                const at = from.indexOf('@');
+                                                const local = at > 0 ? from.slice(0, at) : (from || 'me');
+                                                from = `${local}@${d}`;
+                                            }}
+                                        >@{d}</button>
+                                    {/each}
+                                </div>
+                            </div>
+                        {/if}
+                    </div>
                 {/if}
-                {#if trackOpens}
-                    <!-- Tracking is invisible to the recipient, so it must be
-                         plainly visible to the sender for as long as it is on
-                         — an icon that merely looks "active" is too easy to
-                         leave enabled without noticing. -->
-                    <span class="tracking-note" data-testid="compose-tracking-note">
-                        Tracking on — you'll be told when this is opened.
-                        <button
-                            type="button"
-                            class="tracking-off"
-                            onclick={() => { trackOpens = false; }}
-                        >Turn off</button>
-                    </span>
-                {/if}
+
                 {#if !smtpAvailable()}
                     <span class="hint" data-testid="compose-status">
                         Sending isn't enabled — your text will be saved as a draft.
                     </span>
                 {/if}
             </div>
-            <div class="foot-right">
-                <button type="button" class="btn btn-ghost" onclick={onClose}>Cancel</button>
+            <div class="action-right">
+                <button
+                    type="button"
+                    class="btn btn-secondary"
+                    data-testid="compose-discard"
+                    onclick={onClose}
+                >Discard</button>
                 <button
                     type="submit"
                     class="btn btn-primary"
@@ -911,19 +1029,39 @@
         flex: 1;
         min-height: 0;
     }
-    .row {
-        display: grid;
-        grid-template-columns: 80px 1fr;
-        align-items: center;
-        gap: 8px;
-        padding: 8px 18px;
+    /* Header block. OWA stacks From / To / Cc / Bcc / Subject as full-width
+     * lines separated by hairlines, with the label sitting inline at the
+     * left rather than in its own column. */
+    .hdr-row {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        padding: 7px 16px;
         border-bottom: 1px solid var(--border-subtle);
         transition: background-color var(--transition-fast), box-shadow var(--transition-fast);
     }
+    .hdr-lbl {
+        flex: 0 0 62px;
+        padding-top: 6px;
+        font-size: 12px;
+        color: var(--text-tertiary);
+        user-select: none;
+    }
+    .from-row { align-items: center; }
+    .from-pair { flex: 1; min-width: 0; display: flex; }
+    .from-pair input {
+        flex: 1;
+        min-width: 0;
+        border: none;
+        background: transparent;
+        padding: 4px 2px;
+        font-size: 13.5px;
+    }
+    .from-pair input:focus { outline: none; box-shadow: none; }
     /* Glow when the From auto-matched the address the original message
      * was sent to — signals to the user that the reply is going out from
      * the same alias that received it. */
-    .row.to-glow {
+    .hdr-row.to-glow {
         background: color-mix(in srgb, var(--accent) 8%, transparent);
         box-shadow: inset 4px 0 0 var(--accent);
         animation: to-glow-pulse 2.4s ease-out;
@@ -932,13 +1070,73 @@
         0%   { background: color-mix(in srgb, var(--accent) 22%, transparent); box-shadow: inset 4px 0 0 var(--accent), 0 0 18px color-mix(in srgb, var(--accent) 30%, transparent); }
         100% { background: transparent; box-shadow: inset 0 0 0 var(--accent); }
     }
-    .lbl {
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-        color: var(--text-tertiary);
-        font-weight: 600;
+    /* The token field: chips and the live input share one wrapping line so
+     * the field grows downward as recipients are added, like OWA. */
+    .token-field {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 4px;
+        padding: 3px 6px;
+        border: 1px solid transparent;
+        border-radius: var(--radius-xs);
+        transition: border-color var(--transition-fast), background-color var(--transition-fast);
     }
+    .token-field:focus-within {
+        border-color: var(--border-focus);
+        background: var(--bg-input);
+    }
+    .token-field input {
+        flex: 1 1 140px;
+        min-width: 100px;
+        border: none;
+        background: transparent;
+        padding: 3px 2px;
+        font-size: 13.5px;
+    }
+    .token-field input:focus { outline: none; box-shadow: none; }
+    .recip-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        max-width: 260px;
+        padding: 2px 3px 2px 9px;
+        border-radius: var(--radius-xs);
+        background: var(--bg-surface-alt);
+        border: 1px solid var(--border-soft);
+        font-size: 12.5px;
+        line-height: 1.5;
+    }
+    .recip-chip:hover { background: var(--bg-hover); }
+    .recip-name { font-weight: 600; color: var(--text-primary); }
+    .recip-addr {
+        color: var(--text-secondary);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .recip-x {
+        flex-shrink: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 17px;
+        height: 17px;
+        border-radius: var(--radius-xs);
+        color: var(--text-tertiary);
+    }
+    .recip-x:hover { background: var(--bg-active); color: var(--text-primary); }
+    .subject-row { align-items: center; }
+    .ccbcc-toggle {
+        flex-shrink: 0;
+        font-size: 12px;
+        color: var(--text-tertiary);
+        padding: 3px 7px;
+        border-radius: var(--radius-xs);
+    }
+    .ccbcc-toggle:hover { background: var(--bg-hover); color: var(--text-primary); }
     .subj-sugg {
         display: flex;
         align-items: center;
@@ -1085,10 +1283,20 @@
     .presend-rationale-box { margin-top: 6px; }
     .subject-wrap {
         display: flex;
-        align-items: stretch;
+        align-items: center;
         gap: 6px;
+        flex: 1;
+        min-width: 0;
     }
-    .subject-wrap input { flex: 1; min-width: 0; }
+    .subject-wrap input {
+        flex: 1;
+        min-width: 0;
+        border: none;
+        background: transparent;
+        padding: 4px 2px;
+        font-size: 13.5px;
+    }
+    .subject-wrap input:focus { outline: none; box-shadow: none; }
     .wand-btn {
         flex: 0 0 auto;
         display: inline-flex;
@@ -1116,21 +1324,33 @@
         animation: spin 0.8s linear infinite;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
-    .from-wildcard-hint {
-        grid-column: 2;
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        margin-top: 4px;
-        font-size: 11.5px;
-        color: var(--text-secondary);
+    .adv-pop {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 10px 12px;
+        background: var(--bg-surface);
+        border: 1px solid var(--border-soft);
+        border-radius: var(--radius-sm);
+        box-shadow: var(--shadow-md);
     }
-    .from-pair {
-        display: grid;
-        grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
-        gap: 6px;
-        align-items: center;
+    .adv-field { display: flex; flex-direction: column; gap: 4px; }
+    .adv-lbl {
+        font-size: 11px;
+        color: var(--text-tertiary);
+        font-weight: 600;
     }
+    .adv-field input {
+        border: 1px solid var(--border-soft);
+        border-radius: var(--radius-xs);
+        background: var(--bg-input);
+        color: var(--text-primary);
+        font-size: 13px;
+        padding: 5px 8px;
+        width: 100%;
+    }
+    .adv-field input:focus { outline: none; border-color: var(--border-focus); }
+    .adv-doms { display: flex; flex-wrap: wrap; gap: 4px; }
     .display-name-inline {
         font-style: italic;
         color: var(--text-secondary);
@@ -1154,45 +1374,6 @@
     }
     .domain-chip:hover {
         background: color-mix(in srgb, var(--accent) 22%, var(--bg-surface-alt));
-    }
-    .row-input { display: flex; align-items: center; gap: 8px; }
-    .row-input input { flex: 1; }
-    .ccbcc-toggle {
-        font-size: 12px;
-        color: var(--text-tertiary);
-        padding: 4px 8px;
-        border-radius: var(--radius-xs);
-    }
-    .ccbcc-toggle:hover { background: var(--bg-hover); color: var(--text-primary); }
-    .row input,
-    .row select {
-        border: none;
-        background: transparent;
-        padding: 6px 4px;
-        font-size: 14px;
-        width: 100%;
-    }
-    .row select {
-        /* Strip the default OS chevron / border without losing the click area */
-        appearance: none;
-        -webkit-appearance: none;
-        background-image: linear-gradient(45deg, transparent 50%, var(--text-tertiary) 50%),
-                          linear-gradient(135deg, var(--text-tertiary) 50%, transparent 50%);
-        background-position: calc(100% - 14px) center, calc(100% - 9px) center;
-        background-size: 5px 5px, 5px 5px;
-        background-repeat: no-repeat;
-        padding-right: 24px;
-        cursor: pointer;
-    }
-    .row select option {
-        color: var(--text-primary);
-        background: var(--bg-surface);
-    }
-    .row input:focus,
-    .row select:focus {
-        outline: none;
-        border-color: transparent;
-        box-shadow: none;
     }
     .body {
         flex: 1;
@@ -1234,21 +1415,52 @@
         border-color: var(--border-focus);
         box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
     }
-    .foot-bar {
+    /* Action bar. OWA separates the composer's switches from its primary
+     * pair with a rule and a lot of space, so Send keeps the eye. */
+    .action-bar {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 12px;
-        padding: 10px 16px;
+        gap: 14px;
+        padding: 9px 14px;
     }
+    .action-left {
+        position: relative;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        min-width: 0;
+    }
+    .action-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+    .bar-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 5px 9px;
+        border-radius: var(--radius-xs);
+        color: var(--text-secondary);
+        font-size: 12.5px;
+        font-weight: 500;
+        transition: color var(--transition-fast), background-color var(--transition-fast),
+                    box-shadow var(--transition-fast);
+    }
+    .bar-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+    /* Tracking sits in the action bar as a labelled switch, not as a
+     * paragraph wedged under the buttons. Red rather than the accent —
+     * it's a "watch out" signal, not a positive one. */
+    .spy-btn.on {
+        color: var(--danger);
+        background: var(--danger-soft);
+        box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 45%, transparent);
+    }
+    .tracking-note { font-weight: 600; }
     .attach-tray {
         list-style: none;
         margin: 0;
-        padding: 6px 14px;
+        padding: 8px 14px 0;
         display: flex;
         flex-wrap: wrap;
         gap: 6px;
-        border-top: 1px solid var(--border-subtle);
     }
     .attach-chip {
         display: inline-flex;
@@ -1272,87 +1484,27 @@
         color: var(--text-tertiary);
     }
     .attach-rm:hover { background: var(--bg-hover); color: var(--danger); }
-    .foot-left {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        min-width: 0;
-    }
-    .foot-right { display: flex; align-items: center; gap: 8px; }
     .hint {
         font-size: 12px;
         color: var(--text-tertiary);
         font-style: italic;
         max-width: 320px;
     }
-    /* Spy / read-tracker toggle. Off state shows text label so it's
-     * unmistakeable; on state glows red so you can't forget it's active. */
-    .tracking-note {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
+    .hint {
         font-size: 12px;
-        color: var(--text-secondary);
-        background: var(--bg-hover);
-        border-radius: 999px;
-        padding: 3px 6px 3px 10px;
+        color: var(--text-tertiary);
+        max-width: 300px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
-    .tracking-off {
-        border: 0;
-        background: transparent;
-        color: var(--accent);
-        font: inherit;
-        font-weight: 600;
-        cursor: pointer;
-        padding: 2px 6px;
-        border-radius: 999px;
-    }
-    .tracking-off:hover { background: var(--bg-surface); }
 
-    .spy-btn {
-        display: inline-flex;
-        align-items: center;
-        gap: 5px;
-        position: relative;
-        color: var(--text-secondary);
-        font-weight: 600;
-        font-size: 12.5px;
-        padding: 5px 10px;
-        border-radius: var(--radius-sm);
-        transition: color var(--transition-fast), background var(--transition-fast),
-                    box-shadow var(--transition-fast);
-    }
-    .spy-btn:hover {
-        color: var(--text-primary);
-        background: var(--bg-hover);
-    }
-    .spy-label { letter-spacing: 0.01em; }
     /* Red glow rather than the user's accent — tracking is a "watch out"
      * signal, not a positive one, so it should pop regardless of skin. */
     .spy-btn.on {
-        color: #ff5b6b;
-        background: rgba(255, 80, 96, 0.14);
-        box-shadow: 0 0 0 1px rgba(255, 80, 96, 0.45),
-                    0 0 12px rgba(255, 80, 96, 0.5);
-        animation: spy-pulse 2.6s ease-in-out infinite;
-    }
-    @keyframes spy-pulse {
-        0%, 100% { box-shadow: 0 0 0 1px rgba(255, 80, 96, 0.40),
-                              0 0 8px rgba(255, 80, 96, 0.40); }
-        50%      { box-shadow: 0 0 0 1px rgba(255, 80, 96, 0.65),
-                              0 0 18px rgba(255, 80, 96, 0.70); }
-    }
-    @media (prefers-reduced-motion: reduce) {
-        .spy-btn.on { animation: none; }
-    }
-    .spy-hint {
-        font-size: 11px;
-        font-weight: 600;
-        letter-spacing: 0.02em;
-        color: #ff5b6b;
-        background: rgba(255, 80, 96, 0.12);
-        padding: 2px 8px;
-        border-radius: 999px;
+        color: var(--danger);
+        background: var(--danger-soft);
+        box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 45%, transparent);
     }
     .send-overlay {
         display: flex;

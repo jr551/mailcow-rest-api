@@ -67,8 +67,15 @@ function rootOf(
 }
 
 export function buildThreads(messages: MessageListItem[]): Thread[] {
+    // `ui.messages` is reassigned wholesale by every list fetch, and a
+    // concurrent load can leave a null hole in the array for a frame. A
+    // single null reached `m.envelope` below and threw
+    // "Cannot read properties of null (reading 'envelope')" out of the
+    // derived, which took down the whole message list rather than skipping
+    // one row. Drop the holes instead.
+    const present = messages.filter((m): m is MessageListItem => !!m && !!m.envelope);
     const byId = new Map<string, MessageListItem>();
-    for (const m of messages) {
+    for (const m of present) {
         if (m.envelope.messageId) byId.set(m.envelope.messageId, m);
     }
 
@@ -78,7 +85,7 @@ export function buildThreads(messages: MessageListItem[]): Thread[] {
     // headers would land in two buckets if they share a subject with a
     // header-rooted thread).
     const subjectFallback = new Map<string, string>(); // normSubject → first thread root
-    for (const m of messages) {
+    for (const m of present) {
         let key: string;
         if (m.envelope.inReplyTo || m.envelope.messageId) {
             key = rootOf(m, byId, new Set());

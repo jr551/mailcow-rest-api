@@ -4,7 +4,7 @@
     // layers, pouring rain, lightning flash). Click to advance,
     // caret or right-click for the options menu (units, location,
     // GPS, refresh). Refreshes every 30 minutes.
-    import { onMount, onDestroy } from 'svelte';
+    import { onMount, onDestroy, tick } from 'svelte';
     import { setWeatherLatLon, setWeatherUnits } from '../lib/settings.svelte';
 
     interface Props {
@@ -12,12 +12,16 @@
         longitude?: number;
         units?: 'celsius' | 'fahrenheit';
         rotateMs?: number;
+        /** Render the chip even under a skin whose extras CSS would hide
+         *  it — the user's explicit opt-in beats the skin's chrome. */
+        forceVisible?: boolean;
     }
     let {
         latitude = 51.5074,
         longitude = -0.1278,
         units = 'celsius',
-        rotateMs = 5000
+        rotateMs = 5000,
+        forceVisible = false
     }: Props = $props();
 
     interface Daily {
@@ -42,10 +46,40 @@
     let timer: ReturnType<typeof setInterval> | null = null;
     let rotateTimer: ReturnType<typeof setInterval> | null = null;
     let triggerEl: HTMLButtonElement | null = $state(null);
+    let menuEl: HTMLDivElement | null = $state(null);
+
+    // Gap left between the menu and the window edge so the rounded corner and
+    // its shadow are never clipped by the viewport.
+    const MENU_MARGIN = 8;
+    /** The menu is position: fixed with inline left/top, so keeping it on
+     *  screen means clamping those numbers — nothing in CSS can do it. */
+    async function clampMenu() {
+        const el = menuEl;
+        if (!el) return;
+        // A menu taller than the window cannot be clamped into it: the maths
+        // below floors at the margin, so the bottom still hangs off screen
+        // and the last items (GPS, refresh) are unreachable. On a short
+        // viewport the options list genuinely is taller than the space
+        // available, so cap the rendered box to what fits and let the list
+        // scroll inside it. Measured before clamping, because capping is
+        // what makes the height known. NOTE the cap lives in `menuMaxHeight`
+        // state — the reactive style= attribute below rewrites the whole
+        // style string whenever menuX/menuY change, so an imperative
+        // el.style.maxHeight would be wiped before it ever painted.
+        menuMaxHeight = null;
+        await tick();
+        const avail = window.innerHeight - MENU_MARGIN * 2;
+        menuMaxHeight = el.offsetHeight > avail ? `${avail}px` : null;
+        const w = el.offsetWidth;
+        const h = Math.min(el.offsetHeight, avail);
+        menuX = Math.min(menuX, Math.max(MENU_MARGIN, window.innerWidth - w - MENU_MARGIN));
+        menuY = Math.min(menuY, Math.max(MENU_MARGIN, window.innerHeight - h - MENU_MARGIN));
+    }
 
     let menuOpen = $state(false);
     let menuX = $state(0);
     let menuY = $state(0);
+    let menuMaxHeight = $state<string | null>(null);
     let editingLocation = $state(false);
     let locInput = $state('');
 
@@ -212,7 +246,14 @@
         editingLocation = false;
         // Defer so the right-click that triggered us doesn't immediately
         // close via the document listener registered in the $effect.
-        requestAnimationFrame(() => { menuOpen = true; });
+        requestAnimationFrame(async () => {
+            menuOpen = true;
+            // Clamp only once the menu exists: its size is unknown (and the
+            // location editor swaps in a different one) until it is in the
+            // DOM and laid out.
+            await tick();
+            await clampMenu();
+        });
     }
 
     function commitLocation() {
@@ -270,7 +311,7 @@
     });
 </script>
 
-<span class="weather-wrap">
+<span class="weather-wrap" class:weather-wrap-forced={forceVisible}>
     <button
         type="button"
         class={`weather-chip scene-${scene}`}
@@ -386,7 +427,7 @@
 </span>
 
 {#if menuOpen}
-    <div class="weather-menu" role="menu" style="left:{menuX}px; top:{menuY}px;">
+    <div class="weather-menu" role="menu" bind:this={menuEl} style="left:{menuX}px; top:{menuY}px;{menuMaxHeight ? ` max-height:${menuMaxHeight};` : ''}">
         {#if editingLocation}
             <div class="menu-section">Location</div>
             <input
@@ -423,6 +464,14 @@
         position: relative;
         display: inline-flex;
         align-items: stretch;
+    }
+
+    /* The Outlook skin's extras CSS hides .weather-wrap !important to keep
+     * the OWA command bar sparse. When the user explicitly opts in we
+     * re-assert visibility here — same specificity, scoped to the
+     * opt-in class, so the chip actually appears on that skin. */
+    .weather-wrap.weather-wrap-forced {
+        display: inline-flex !important;
     }
     .weather-chip {
         position: relative;
@@ -817,6 +866,10 @@
         font-size: 13px;
         display: flex;
         flex-direction: column;
+        /* maxHeight is set from script (clampMenu) when the viewport is too
+           short to hold the whole list; the box then scrolls so every option
+           stays reachable instead of the last ones hanging off the bottom. */
+        overflow-y: auto;
     }
     .menu-section {
         font-size: 10px;
