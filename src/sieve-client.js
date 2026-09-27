@@ -140,11 +140,14 @@ function compileAction(action) {
             // `copy` behaves and how users expect a "move" rule to compose.
             return `    fileinto "${escapeSieveString(action.folder)}";`;
         case 'webhook':
-            // Not a real Sieve action: the message is parked in the
-            // webhook's hidden mailbox and the forwarder does the HTTP POST.
-            // `stop` because the message has left the delivery path — letting
-            // later rules also act on it would double-handle it.
-            return `    redirect "${escapeSieveString(webhookMailbox(action.webhookId))}";\n    stop;`;
+            // Not a real Sieve action: the message is filed into the
+            // webhook's hidden mailbox and the forwarder does the HTTP POST,
+            // then moves it back to INBOX when `keep` is set. `redirect`
+            // can't stand in here — it takes an email address, so Dovecot
+            // rejects the script at PUTSCRIPT. `stop` because the mailbox
+            // move already removed it from the delivery path; letting later
+            // rules act would double-handle it.
+            return `    fileinto "${escapeSieveString(webhookMailbox(action.webhookId))}";\n    stop;`;
         default:
             throw new Error(`Unknown action type: ${action.type}`);
     }
@@ -163,12 +166,13 @@ function compileRulesScript(rules, preservedContent) {
 
     const needsEnvelope = rules.some((r) => r.condition.type === 'envelope-to-is');
     const needsCopy = rules.some((r) => r.action.type === 'copy');
-    const needsFileinto = rules.some((r) => r.action.type === 'fileinto');
+    // `fileinto` is not in the base Sieve capability set — Dovecot rejects a
+    // script that uses it without declaring the extension. Webhook rules
+    // count too: parking in `.wh-*` is a fileinto, not a redirect.
+    const needsFileinto = rules.some((r) => r.action.type === 'fileinto' || r.action.type === 'webhook');
     const requirements = [];
     if (needsEnvelope) requirements.push('"envelope"');
     if (needsCopy) requirements.push('"copy"');
-    // `fileinto` is not in the base Sieve capability set — Dovecot rejects a
-    // script that uses it without declaring the extension.
     if (needsFileinto) requirements.push('"fileinto"');
 
     let out = '';
@@ -245,19 +249,19 @@ function parseAction(actionStr) {
 
     const redirectMatch = actionStr.match(/redirect "([^"]+)"/);
     if (redirectMatch) {
-        const to = unescapeSieveString(redirectMatch[1]);
-        // A redirect into the webhook namespace is our own `webhook` action,
-        // not a user redirect. Without this check it would parse back as a
-        // plain redirect and the rule would lose its type on the next read —
-        // the same class of round-trip bug the id escaping above exists to
-        // avoid.
-        const webhookId = webhookIdFromMailbox(to);
-        if (webhookId) return { type: 'webhook', webhookId };
-        return { type: 'redirect', to };
+        return { type: 'redirect', to: unescapeSieveString(redirectMatch[1]) };
     }
 
     const fileintoMatch = actionStr.match(/fileinto "([^"]+)"/);
-    if (fileintoMatch) return { type: 'fileinto', folder: unescapeSieveString(fileintoMatch[1]) };
+    if (fileintoMatch) {
+        const folder = unescapeSieveString(fileintoMatch[1]);
+        // A fileinto into the `.wh-*` namespace is our own `webhook` action —
+        // parsing it back as a plain fileinto would lose the type and orphan
+        // the rule on the next read.
+        const webhookId = webhookIdFromMailbox(folder);
+        if (webhookId) return { type: 'webhook', webhookId };
+        return { type: 'fileinto', folder };
+    }
 
     return null;
 }

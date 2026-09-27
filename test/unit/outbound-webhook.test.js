@@ -26,12 +26,15 @@ test('sieve: webhook action round-trips through compile and parse', () => {
         action: { type: 'webhook', webhookId: 'deadbeefcafe' }
     }];
     const script = compileRulesScript(rules, '');
-    assert.match(script, /redirect "\.wh-deadbeefcafe";/);
+    // Parking is fileinto, not redirect — Dovecot needs the extension declared
+    // and rejects a `redirect` whose argument isn't an address.
+    assert.match(script, /require \[.*"fileinto".*\];/);
+    assert.match(script, /fileinto "\.wh-deadbeefcafe";/);
 
     const parsed = parseRules(script);
     assert.strictEqual(parsed.rules.length, 1);
     // The whole point: it must come back as a webhook, not as a plain
-    // redirect into a folder that happens to be named .wh-*.
+    // fileinto into a folder that happens to be named .wh-*.
     assert.deepStrictEqual(parsed.rules[0].action, { type: 'webhook', webhookId: 'deadbeefcafe' });
     assert.strictEqual(parsed.rules[0].id, 'rule-abc123');
 });

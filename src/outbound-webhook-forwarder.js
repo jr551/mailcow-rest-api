@@ -18,7 +18,7 @@ const { backoffFor } = require('./webhook-forwarder');
 // Per-user outbound webhooks: mail that matched a rule is POSTed to a URL the
 // user named.
 //
-// The rule cannot do this itself — Sieve has no HTTP action — so it redirects
+// The rule cannot do this itself — Sieve has no HTTP action — so it files
 // the message into a hidden mailbox (`.wh-<id>`) and this worker polls it.
 // That is why the mailbox exists at all, and why the delivery state is keyed
 // by (user, uidvalidity, uid): the message is a real IMAP message sitting in a
@@ -298,7 +298,7 @@ function createOutboundWebhookForwarder({
         }
 
         try {
-            // The hidden folder is created by the Sieve `redirect` on first
+            // The hidden folder is created by the Sieve `fileinto` on first
             // delivery, so it may not exist yet — that is not an error.
             let lock;
             try {
