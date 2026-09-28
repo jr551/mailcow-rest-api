@@ -1,5 +1,6 @@
 <script lang="ts">
     import { fade } from 'svelte/transition';
+    import { onDestroy } from 'svelte';
     import { ui, showToast } from '../lib/store.svelte';
     import { markSpam, markTrusted, isTrustedSender } from '../lib/spam-feedback.svelte';
     import { themeState } from '../lib/theme.svelte';
@@ -111,6 +112,12 @@
         // new scan: leave its result and overlay alone.
         const key = detail && path ? scanKeyFor(path, detail.uid) : '';
         if (key && key === scannedKey) return;
+        // A different message (or none): drop any scan still in flight for
+        // the old one. This must NOT be an effect teardown — Svelte runs the
+        // previous teardown *before* this body, so a teardown that aborted
+        // would kill the in-flight scan and then the guard above would
+        // decline to restart it, leaving the message permanently unscanned.
+        if (phishingAbort) { phishingAbort.abort(); phishingAbort = null; }
         // Skip phishing scan on AI conversation messages — they're our own
         // chat history, not inbound mail. Pointless burn of LLM tokens
         // (and the smoke effect was scaring people).
@@ -120,18 +127,17 @@
             phishingDismissed = false;
             spamDismissed = false;
             phishingScanning = false;
-            if (phishingAbort) { phishingAbort.abort(); phishingAbort = null; }
+            // Clear the memo too: leaving it set means turning the setting
+            // back on for this same open message hits the guard above and
+            // never rescans.
+            scannedKey = '';
             return;
         }
         phishingDismissed = false;
         spamDismissed = false;
         phishingResult = null;
-        // Memoise only once we know we are really scanning. Recording it
-        // earlier would make the guard swallow a later rescan — a user
-        // turning the scan setting off and back on for this same message
-        // would never get a result again.
+        // Memoise only once we know we are really scanning.
         scannedKey = key;
-        if (phishingAbort) { phishingAbort.abort(); }
         phishingAbort = new AbortController();
 
         const cached = getCachedScan(path, detail.uid);
@@ -189,10 +195,12 @@
         }).finally(() => {
             phishingScanning = false;
         });
+    });
 
-        return () => {
-            if (phishingAbort) { phishingAbort.abort(); phishingAbort = null; }
-        };
+    // The effect no longer returns a teardown (see above), so the in-flight
+    // scan is cancelled here instead.
+    onDestroy(() => {
+        if (phishingAbort) { phishingAbort.abort(); phishingAbort = null; }
     });
 
     // Auto-allow if the user previously chose "remember for a month" for
@@ -3022,6 +3030,10 @@
         border: 1px solid color-mix(in srgb, #4338ca 60%, transparent);
         color: #eef2ff;
         box-shadow: 0 6px 18px rgba(67, 56, 202, 0.26);
+        /* The rail is absolutely positioned over the body, so a bubble that
+           never leaves covers the opening lines and swallows clicks. */
+        animation: phish-bubble-in 360ms ease-out,
+                   scan-bubble-out 700ms ease-in 8200ms forwards;
     }
     .scam-bubble-borderline :global(svg) { color: #eef2ff; flex-shrink: 0; }
     .scam-shimmer {
@@ -3068,6 +3080,9 @@
         margin: 12px auto 6px;
         max-width: 560px;
         border-radius: 999px;
+        /* Same reason as the borderline bubble: it sits over the message. */
+        animation: phish-bubble-in 360ms ease-out,
+                   scan-bubble-out 700ms ease-in 8200ms forwards;
         /* Spam wears amber/orange so it never gets confused with the
          * purple AI-scam-scan bubble. Different problem, different
          * shelf. */

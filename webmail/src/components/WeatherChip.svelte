@@ -302,11 +302,18 @@
             if (!tgt.closest('.weather-menu') && !tgt.closest('.weather-chip') && !tgt.closest('.weather-caret')) menuOpen = false;
         };
         const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') menuOpen = false; };
+        // The menu is position: fixed with inline left/top, so nothing in CSS
+        // re-fits it. Without this, shrinking the window with the menu open
+        // leaves the trailing items (GPS, refresh) off screen until it is
+        // closed and reopened.
+        const onResize = () => { if (menuOpen) void clampMenu(); };
         document.addEventListener('mousedown', onDoc);
         document.addEventListener('keydown', onKey);
+        window.addEventListener('resize', onResize);
         return () => {
             document.removeEventListener('mousedown', onDoc);
             document.removeEventListener('keydown', onKey);
+            window.removeEventListener('resize', onResize);
         };
     });
 </script>

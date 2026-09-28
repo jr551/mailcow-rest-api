@@ -133,7 +133,15 @@
     function commitRecip(f: RecipField) {
         const live = recipLive(f).replace(/[,;]\s*$/, '').trim();
         if (!live) return;
-        setRecipChips(f, [...recipChips(f), live]);
+        const existing = recipChips(f);
+        // The address is the {#each} key, so a duplicate is a duplicate key:
+        // Svelte throws on that in dev, and in prod the keyed map collapses
+        // it while the send still goes out twice. Drop the repeat instead.
+        if (existing.some((a) => a.toLowerCase() === live.toLowerCase())) {
+            setRecipChips(f, existing);
+            return;
+        }
+        setRecipChips(f, [...existing, live]);
     }
     function removeRecip(f: RecipField, addr: string) {
         setRecipChips(f, recipChips(f).filter((a) => a !== addr));
