@@ -243,6 +243,20 @@ function createSieveManager({ db, imapHost, rejectUnauthorized = true, tlsServer
             rules.splice(idx, 1);
             await syncRules(email, pass, rules, preservedContent);
             return { removed: true, id };
+        },
+
+        // Revoking a webhook has to drop the rules that file into its hidden
+        // mailbox. The action is `fileinto ".wh-<id>"; stop;`, so leaving the
+        // rule behind means matching mail stops reaching INBOX and piles up
+        // in a folder nothing polls — it just disappears from the user's view.
+        async removeRulesByWebhook(email, pass, webhookId) {
+            const { rules, preservedContent } = await getCurrentRulesAndPreserved(email, pass);
+            const kept = rules.filter(
+                (r) => !(r.action.type === 'webhook' && r.action.webhookId === webhookId)
+            );
+            if (kept.length === rules.length) return { removed: 0 };
+            await syncRules(email, pass, kept, preservedContent);
+            return { removed: rules.length - kept.length };
         }
     };
 }

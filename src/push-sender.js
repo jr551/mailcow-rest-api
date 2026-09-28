@@ -1,6 +1,7 @@
 'use strict';
 
 const webpush = require('web-push');
+const { createPinnedHttpsAgent } = require('./utils/ssrf-guard');
 const Database = require('better-sqlite3');
 const { withClient } = require('./imap');
 
@@ -66,9 +67,20 @@ function createPushSender({ config, pushStore, pool, cache, logger }) {
 
             for (const sub of subs) {
                 try {
+                    // Pin the connection to the address we checked. The
+                    // endpoint was validated at subscribe time, but the name
+                    // can be re-pointed at an internal address afterwards.
+                    let agent;
+                    try {
+                        agent = await createPinnedHttpsAgent(sub.endpoint);
+                    } catch (err) {
+                        if (logger) logger.warn({ err: err.message, user }, 'push endpoint blocked');
+                        continue;
+                    }
                     await webpush.sendNotification(
                         { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth_key } },
-                        payload
+                        payload,
+                        agent ? { agent } : undefined
                     );
                 } catch (err) {
                     if (err.statusCode === 410 || err.statusCode === 404) {

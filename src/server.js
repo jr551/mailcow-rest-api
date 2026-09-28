@@ -237,7 +237,7 @@ function isCorsOriginAllowed(origin) {
     return wildcardApex.some(apex => origin.startsWith('https://') && origin.endsWith(`.${apex}`));
 }
 
-async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap } = {}) {
+async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap, pushLookup } = {}) {
     const app = Fastify({
         serverFactory: createServer,
         logger: logger ?? createLogger(),
@@ -650,7 +650,7 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
     await app.register(messageRoutes, { pool, ocrCache, imapCache });
     await app.register(aiRoutes, { aiCache });
     await app.register(sendRoutes, { db: mailcowDb, smtp: config.smtp, pool, trackingStore, getPublicBaseUrl, imapCache });
-    await app.register(pushRoutes, { pushStore });
+    await app.register(pushRoutes, { pushStore, lookup: pushLookup });
 
     if (pushSender.enabled) {
         pushSender.start();
@@ -694,7 +694,7 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
     await app.register(adminRoutes, { adminSettings, appPasswordStore });
     await app.register(appPasswordRoutes, { store: appPasswordStore });
     await app.register(webhookInboxRoutes, { store: webhookInboxStore, pool, getPublicBaseUrl });
-    await app.register(outboundWebhookRoutes, { store: outboundWebhookStore });
+    await app.register(outboundWebhookRoutes, { store: outboundWebhookStore, sieveManager });
     await app.register(iconProxyRoutes);
     await app.register(trackingRoutes, { store: trackingStore, smtp: config.smtp });
     await app.register(imageProxyRoutes, { cache: imageProxyCache, maxBytesPerDay: config.imageProxy.maxBytesPerDay });

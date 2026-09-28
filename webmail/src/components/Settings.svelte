@@ -114,9 +114,7 @@
                 { id: 'notifications', label: 'Notifications', icon: 'bell', keywords: 'push install pwa desktop alert' },
                 { id: 'ai', label: 'AI', icon: 'sparkles', keywords: 'llm openai anthropic model provider prompt voice chat' },
                 { id: 'sounds', label: 'Sounds', icon: 'bell', keywords: 'audio chime event pack mute' },
-                { id: 'appearance', label: 'Appearance', icon: 'palette', keywords: 'skin accent colour theme density layout sidebar' },
-                { id: 'calendar', label: 'Calendar', icon: 'calendar', keywords: 'ticker event header caldav' },
-                { id: 'people', label: 'People', icon: 'user', keywords: 'vip contact family badge avatar address' }
+                { id: 'appearance', label: 'Appearance', icon: 'palette', keywords: 'skin accent colour theme density layout sidebar' }
             ]
         },
         {
@@ -139,25 +137,17 @@
         },
         {
             id: 'calendar', label: 'Calendar', icon: 'calendar',
-            sections: []
+            sections: [
+                { id: 'calendar', label: 'Calendar', icon: 'calendar', keywords: 'ticker event header caldav' }
+            ]
         },
         {
             id: 'people', label: 'People', icon: 'user',
-            sections: []
+            sections: [
+                { id: 'people', label: 'People', icon: 'user', keywords: 'vip contact family badge avatar address' }
+            ]
         }
     ];
-
-    // Calendar and People are Outlook categories with nothing to show yet —
-    // their live sections live under General so they're not duplicated, and
-    // the rail entry explains where the controls actually are rather than
-    // opening an empty pane.
-    const CATEGORY_PLACEHOLDERS: Record<CategoryId, { note: string; goto: CategoryId; gotoLabel: string } | null> = {
-        account: null,
-        general: null,
-        email: null,
-        calendar: { note: 'Calendar settings currently live under General.', goto: 'general', gotoLabel: 'Go to General' },
-        people: { note: 'People settings currently live under General.', goto: 'general', gotoLabel: 'Go to General' }
-    };
 
     let activeCategory = $state<CategoryId>('account');
     let activeSection = $state<SectionId>('account');
@@ -180,7 +170,6 @@
     });
 
     const activeCategoryDef = $derived(CATEGORIES.find((c) => c.id === activeCategory)!);
-    const activeCategoryPlaceholder = $derived(CATEGORY_PLACEHOLDERS[activeCategory]);
     const visibleSections = $derived(
         searchHits
             ? searchHits.flatMap((r) => r.sections)
@@ -1058,24 +1047,20 @@
                     {#each CATEGORIES as cat (cat.id)}
                         <div class="rail-group">
                             <div class="rail-cat muted">{cat.label}</div>
-                            {#if cat.sections.length === 0}
-                                <div class="rail-cat-note muted small">{CATEGORY_PLACEHOLDERS[cat.id]?.note}</div>
-                            {:else}
-                                {#each cat.sections as s (s.id)}
-                                    <button
-                                        type="button"
-                                        role="tab"
-                                        class="tab"
-                                        class:active={activeSection === s.id}
-                                        aria-selected={activeSection === s.id}
-                                        onclick={() => selectSection(s)}
-                                        data-testid={`settings-tab-${s.id}`}
-                                    >
-                                        <Icon name={s.icon} size={15} />
-                                        <span>{s.label}</span>
-                                    </button>
-                                {/each}
-                            {/if}
+                            {#each cat.sections as s (s.id)}
+                                <button
+                                    type="button"
+                                    role="tab"
+                                    class="tab"
+                                    class:active={activeSection === s.id}
+                                    aria-selected={activeSection === s.id}
+                                    onclick={() => selectSection(s)}
+                                    data-testid={`settings-tab-${s.id}`}
+                                >
+                                    <Icon name={s.icon} size={15} />
+                                    <span>{s.label}</span>
+                                </button>
+                            {/each}
                         </div>
                     {/each}
                 {/if}
@@ -3261,7 +3246,6 @@
         letter-spacing: 0.07em;
         padding: 12px 12px 4px;
     }
-    .rail-cat-note { padding: 2px 12px 6px; font-size: 11.5px; }
     .tab {
         display: flex;
         align-items: center;

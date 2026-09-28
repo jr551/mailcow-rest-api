@@ -29,7 +29,7 @@ const webhookPublic = {
     }
 };
 
-module.exports = async function outboundWebhookRoutes(app, { store } = {}) {
+module.exports = async function outboundWebhookRoutes(app, { store, sieveManager } = {}) {
     if (!store) {
         app.log.info('outbound webhooks disabled — needs CREDENTIAL_ENCRYPTION_KEY');
         return;
@@ -89,7 +89,10 @@ module.exports = async function outboundWebhookRoutes(app, { store } = {}) {
         // a public http(s) destination, including a name that resolves to a
         // private address.
         try {
-            await assertPublicDestination(req.body.url);
+            // https only: the POST carries the message body, headers,
+            // attachments and the raw RFC822 source, so a plaintext URL
+            // would put mailbox contents on the wire in the clear.
+            await assertPublicDestination(req.body.url, { schemes: ['https:'] });
         } catch (err) {
             throw badRequest(`Webhook URL is not allowed: ${err.message}`);
         }
@@ -160,6 +163,24 @@ module.exports = async function outboundWebhookRoutes(app, { store } = {}) {
     }, async (req, reply) => {
         const changed = store.revoke({ id: req.params.id, user: req.creds.user });
         if (!changed) throw notFound('No such outbound webhook');
+        // Drop the rules that file into this webhook's hidden mailbox. The
+        // action is `fileinto ".wh-<id>"; stop;`, so a surviving rule would
+        // keep mail out of INBOX and park it in a folder nothing polls.
+        if (sieveManager) {
+            try {
+                const { removed } = await sieveManager.removeRulesByWebhook(
+                    req.creds.user,
+                    req.creds.pass,
+                    req.params.id
+                );
+                if (removed) {
+                    req.log.info({ id: req.params.id, removed }, 'outbound webhook rules removed on revoke');
+                }
+            } catch (err) {
+                // The revoke itself succeeded; a Sieve hiccup must not undo it.
+                req.log.warn({ err: err.message, id: req.params.id }, 'could not remove webhook rules on revoke');
+            }
+        }
         req.log.info({ id: req.params.id }, 'outbound webhook revoked');
         reply.code(204);
         return null;

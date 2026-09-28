@@ -86,21 +86,56 @@ test('createPinnedDispatcher refuses a public name that resolves privately', asy
     );
 });
 
-test('createPinnedDispatcher pins the connection to the address it checked', async () => {
+test('createPinnedDispatcher answers in whichever lookup shape was asked for', async () => {
     const lookup = async () => [{ address: '93.184.216.34', family: 4 }];
-    let pinned = null;
+    let arrayForm = null;
+    let scalarForm = null;
     class FakeAgent {
         constructor(opts) {
-            // Capture what undici would use to connect.
-            opts.connect.lookup('rebind.example', {}, (_e, addr) => { pinned = addr; });
+            // Node asks for the array form when autoSelectFamily is on and
+            // the scalar form otherwise. Answering with the wrong one kills
+            // the socket with ERR_INVALID_IP_ADDRESS — which is what broke
+            // the image proxy, calendar feeds and webhook delivery.
+            opts.connect.lookup('ok.example', { all: true }, (_e, addr) => { arrayForm = addr; });
+            opts.connect.lookup('ok.example', {}, (_e, addr, family) => { scalarForm = [addr, family]; });
         }
     }
     const d = await createPinnedDispatcher('https://ok.example/x', { lookup, AgentCtor: FakeAgent });
     assert.ok(d instanceof FakeAgent);
-    // undici calls lookup with { all: true } and reads the ARRAY form; the
-    // scalar (address, family) form makes it throw "Invalid IP address:
-    // undefined", which broke every hostname-pinned caller.
-    assert.deepEqual(pinned, [{ address: '93.184.216.34', family: 4 }]);
+    assert.deepEqual(arrayForm, [{ address: '93.184.216.34', family: 4 }]);
+    assert.deepEqual(scalarForm, ['93.184.216.34', 4]);
+});
+
+test('createPinnedDispatcher pins every checked address, not just the first', async () => {
+    // Pinning only addresses[0] drops happy-eyeballs, so a dual-stack host
+    // whose AAAA comes first fails on a box with no IPv6 route.
+    const lookup = async () => [
+        { address: '2606:2800:220:1:248:1893:25c8:1946', family: 6 },
+        { address: '93.184.216.34', family: 4 }
+    ];
+    let pinned = null;
+    class FakeAgent {
+        constructor(opts) {
+            opts.connect.lookup('ok.example', { all: true }, (_e, addrs) => { pinned = addrs; });
+        }
+    }
+    await createPinnedDispatcher('https://ok.example/x', { lookup, AgentCtor: FakeAgent });
+    assert.equal(pinned.length, 2);
+    assert.deepEqual(pinned[1], { address: '93.184.216.34', family: 4 });
+});
+
+test('a private destination is marked permanent, a resolution failure is not', async () => {
+    // The forwarder fails fast on permanent and retries the rest. Marking a
+    // transient resolver blip permanent abandoned mail after one attempt.
+    const priv = await assertPublicDestination('https://rebind.example/x', {
+        lookup: async () => [{ address: '10.0.0.1', family: 4 }]
+    }).catch((e) => e);
+    assert.equal(priv.permanent, true);
+
+    const blip = await assertPublicDestination('https://flaky.example/x', {
+        lookup: async () => { throw new Error('EAI_AGAIN'); }
+    }).catch((e) => e);
+    assert.notEqual(blip.permanent, true);
 });
 
 test('createPinnedDispatcher refuses a literal private IP', async () => {

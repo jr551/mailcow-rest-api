@@ -14,12 +14,17 @@ function makeCache() {
     return c;
 }
 
+// The route resolves the endpoint and rejects a private answer, so the test
+// supplies the resolution instead of depending on real DNS.
+const publicLookup = async () => [{ address: '93.184.216.34', family: 4 }];
+
 async function makeApp() {
     return build({
         cache: makeCache(),
         ocrCache: null,
         pool: { count: () => 0, closeAll: async () => {} },
-        pushStore: createPushStore({ filePath: ':memory:' })
+        pushStore: createPushStore({ filePath: ':memory:' }),
+        pushLookup: publicLookup
     });
 }
 
@@ -187,4 +192,31 @@ test('PushStore.delete is user-scoped (IDOR guard)', () => {
     // user must be passed.
     assert.throws(() => store.delete({ endpoint: 'https://e/eve' }), /user required/);
     store.close();
+});
+
+test('POST /v1/push/subscribe rejects an endpoint that resolves privately', async () => {
+    // The string check alone passes for a name the attacker owns; only the
+    // resolution catches it.
+    const app = await build({
+        cache: makeCache(),
+        ocrCache: null,
+        pool: { count: () => 0, closeAll: async () => {} },
+        pushStore: createPushStore({ filePath: ':memory:' }),
+        pushLookup: async () => [{ address: '10.0.0.5', family: 4 }]
+    });
+    try {
+        const res = await app.inject({
+            method: 'POST',
+            url: '/v1/push/subscribe',
+            headers: { authorization: BASIC, 'content-type': 'application/json' },
+            payload: {
+                subscription: {
+                    endpoint: 'https://rebind.example/abc',
+                    keys: { p256dh: 'p'.repeat(20), auth: 'a'.repeat(20) }
+                }
+            }
+        });
+        assert.equal(res.statusCode, 400);
+        assert.match(JSON.parse(res.body).detail, /private/i);
+    } finally { await app.close(); }
 });

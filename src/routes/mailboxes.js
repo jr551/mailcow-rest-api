@@ -9,6 +9,15 @@ const {
 } = require('../schemas');
 const { badRequest, notFound, conflict } = require('../errors');
 
+// `.wh-<id>` is the outbound-webhook parking namespace — internal plumbing
+// the forwarder polls, not the user's mail. It must not appear in their
+// folder tree. Matched on the whole path because the prefix itself contains
+// the hierarchy separator, so splitting on '.' would eat it.
+const WEBHOOK_MAILBOX_RE = /(^|[./])\.wh-[a-z0-9]+$/;
+function isWebhookMailbox(path) {
+    return WEBHOOK_MAILBOX_RE.test(String(path));
+}
+
 function decodeMailboxPathParam(req) {
     return decodeURIComponent(req.params['*'] || req.params.path || '');
 }
@@ -42,6 +51,11 @@ module.exports = async function mailboxRoutes(app, { pool, imapCache }) {
                 out = list.map(serializeMailbox);
                 cache?.setTree(userHash, out);
             }
+
+            // `.wh-*` is the outbound-webhook namespace — internal plumbing
+            // the forwarder polls. It is not the user's mail and has no
+            // business in their folder tree.
+            out = out.filter((mb) => !isWebhookMailbox(mb.path));
 
             if (!includeCounts) return out;
 

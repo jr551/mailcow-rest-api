@@ -42,6 +42,12 @@ function validateRuleBody(body) {
     if (body.action.type === 'fileinto' && !body.action.folder) {
         throw badRequest('Action "folder" is required for a move-to-folder action');
     }
+    // `.wh-*` is the outbound-webhook namespace. A user folder that happens to
+    // match it parses back as a webhook action on the next read, which adds a
+    // `stop` the user never asked for and shows the wrong action in the UI.
+    if (body.action.type === 'fileinto' && String(body.action.folder).startsWith('.wh-')) {
+        throw badRequest('Folder names starting with ".wh-" are reserved');
+    }
     // The webhook id is checked against the caller's own webhooks in the
     // route, where the store is available — here we only require that one was
     // named at all.

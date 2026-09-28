@@ -35,6 +35,16 @@ const { createPinnedDispatcher } = require('./utils/ssrf-guard');
 
 const SENT_FOLDER = 'Sent';
 
+// imapflow hands back the raw header text when it cannot parse a Date, and
+// `new Date(<garbage>).toISOString()` throws RangeError. That throw happens
+// while building the payload — before the POST — so it would abort delivery
+// and strand the message for a reason the operator cannot see.
+function toIsoOrNull(value) {
+    if (!value) return null;
+    const d = new Date(value);
+    return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
 function createOutboundWebhookForwarder({
     config,
     store,
@@ -113,40 +123,51 @@ function createOutboundWebhookForwarder({
             try {
                 dispatcher = (await createPinnedDispatcher(webhook.url)) || undefined;
             } catch (err) {
-                // A destination that is not allowed will never become
-                // allowed — retrying it to the attempt cap just delays the
-                // inevitable and keeps the message parked.
+                // Only a genuinely disallowed destination is permanent. A
+                // resolver blip (EAI_AGAIN, SERVFAIL) throws here too, and
+                // treating that as permanent abandoned mail after a single
+                // attempt — so propagate the guard's own verdict instead of
+                // assuming.
                 const blocked = new Error(`Webhook URL is not allowed: ${err.message}`);
-                blocked.permanent = true;
+                blocked.permanent = err.permanent === true;
                 throw blocked;
             }
         }
-        const res = await doRequest(webhook.url, {
-            method: 'POST',
-            headers,
-            body,
-            headersTimeout: timeoutMs,
-            bodyTimeout: timeoutMs,
-            dispatcher
-        });
-        // Cap the reply capture — a hostile or broken endpoint could stream
-        // an unbounded body and `res.body.text()` buffers all of it.
-        let text = '';
         try {
-            for await (const chunk of res.body) {
-                if (text.length >= 300) break;
-                text += chunk.toString('utf8');
+            const res = await doRequest(webhook.url, {
+                method: 'POST',
+                headers,
+                body,
+                headersTimeout: timeoutMs,
+                bodyTimeout: timeoutMs,
+                dispatcher
+            });
+            // Cap the reply capture — a hostile or broken endpoint could
+            // stream an unbounded body and `res.body.text()` buffers it all.
+            let text = '';
+            try {
+                for await (const chunk of res.body) {
+                    if (text.length >= 300) break;
+                    text += chunk.toString('utf8');
+                }
+                text = text.slice(0, 300);
+            } catch { /* a truncated reply is still a reply */ }
+            const elapsedMs = now() - started;
+            if (res.statusCode < 200 || res.statusCode >= 300) {
+                const err = new Error(`Webhook returned ${res.statusCode}: ${text}`);
+                err.statusCode = res.statusCode;
+                err.elapsedMs = elapsedMs;
+                throw err;
             }
-            text = text.slice(0, 300);
-        } catch { /* a truncated reply is still a reply */ }
-        const elapsedMs = now() - started;
-        if (res.statusCode < 200 || res.statusCode >= 300) {
-            const err = new Error(`Webhook returned ${res.statusCode}: ${text}`);
-            err.statusCode = res.statusCode;
-            err.elapsedMs = elapsedMs;
-            throw err;
+            return { status: res.statusCode, elapsedMs, reply: text };
+        } finally {
+            // Each delivery builds its own Agent, which owns a connection
+            // pool and keep-alive timers. Without this, a busy webhook
+            // accumulates one pool per message.
+            if (dispatcher && typeof dispatcher.close === 'function') {
+                await dispatcher.close().catch(() => {});
+            }
         }
-        return { status: res.statusCode, elapsedMs, reply: text };
     }
 
     async function buildPayload(client, webhook, uid, uidvalidity) {
@@ -235,13 +256,13 @@ function createOutboundWebhookForwarder({
             mailbox: webhook.mailbox,
             uid,
             uidvalidity,
-            internalDate: msg.internalDate ? new Date(msg.internalDate).toISOString() : null,
+            internalDate: toIsoOrNull(msg.internalDate),
             size: msg.size ?? source.length,
             flags: msg.flags ? [...msg.flags] : [],
             envelope: {
                 messageId: env.messageId || null,
                 inReplyTo: env.inReplyTo || null,
-                date: env.date ? new Date(env.date).toISOString() : null,
+                date: toIsoOrNull(env.date),
                 subject: env.subject || null,
                 from: addressList(env.from),
                 sender: addressList(env.sender),
@@ -444,17 +465,28 @@ function createOutboundWebhookForwarder({
         running = true;
         try {
             const webhooks = store.listAllLive();
-            for (const webhook of webhooks) {
-                if (stopped) break;
+            const pollable = webhooks.filter((webhook) => {
                 // A webhook whose password could not be decrypted (key
                 // rotated, or the user changed their password and the refresh
                 // never ran) cannot be polled — skip it rather than throwing
                 // an auth error on every tick.
                 if (!webhook.password) {
                     logger?.warn({ id: webhook.id }, 'outbound webhook has no usable credential; skipping');
-                    continue;
+                    return false;
                 }
-                await processWebhook(webhook);
+                return true;
+            });
+            // Process a few at a time. Sequentially, one user with ten
+            // black-holed endpoints could spend the whole interval in
+            // connect timeouts and every other user's parked mail would wait
+            // for the next tick. Each webhook has its own IMAP connection, so
+            // overlapping them is safe.
+            const POLL_CONCURRENCY = 4;
+            for (let i = 0; i < pollable.length; i += POLL_CONCURRENCY) {
+                if (stopped) break;
+                await Promise.all(
+                    pollable.slice(i, i + POLL_CONCURRENCY).map((webhook) => processWebhook(webhook))
+                );
             }
         } catch (err) {
             // setInterval doesn't await us: an escaping rejection would be an

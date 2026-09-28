@@ -140,67 +140,83 @@ function validateTargetUrl(raw, { schemes = ['http:', 'https:'] } = {}) {
     return { ok: true, url: parsed };
 }
 
-// Resolve, reject if any answer is private, then pin the connection to the
-// address we checked so the name can't resolve elsewhere on the second
-// lookup. Returns null for a literal-IP host (already validated, nothing to
-// pin) so callers can pass the result straight to fetch/undici.
-async function createPinnedDispatcher(rawUrl, { lookup = dns.lookup, AgentCtor = Agent } = {}) {
+// A destination that can never become allowed (a private address) is marked
+// permanent so callers can fail fast. A resolution failure is transient and
+// must stay retryable — conflating the two made one DNS blip abandon mail.
+function blockedDestination(message) {
+    const err = new Error(message);
+    err.permanent = true;
+    return err;
+}
+
+// Resolve a URL's host and reject it if any answer is private. Returns the
+// checked addresses, or an empty array for a literal IP (already validated,
+// nothing to pin).
+async function resolvePublicAddresses(rawUrl, lookup = dns.lookup) {
     const hostname = new URL(rawUrl).hostname;
     const bare = normalizeHost(hostname);
     if (isIP(bare)) {
         // Nothing to resolve, but a literal address still has to be public.
-        // Returning null here without checking is what let a webhook point
-        // at http://127.0.0.1/ and have the server POST to it.
-        if (isPrivateIp(bare)) throw new Error('Private IP addresses are blocked');
-        return null;
+        // Returning early without checking is what let a webhook point at
+        // http://127.0.0.1/ and have the server POST to it.
+        if (isPrivateIp(bare)) throw blockedDestination('Private IP addresses are blocked');
+        return [];
     }
 
-    const addresses = await lookup(hostname, { all: true, verbatim: true });
-    if (!addresses.length) throw new Error('Hostname did not resolve');
-    if (addresses.some(({ address }) => isPrivateIp(address))) {
-        throw new Error('Hostname resolved to a private IP address');
-    }
-
-    const primary = addresses[0];
-    return new AgentCtor({
-        connect: {
-            // undici calls this with { all: true } and expects the ARRAY
-            // form. The scalar (address, family) form makes it throw
-            // "Invalid IP address: undefined", which silently broke every
-            // caller that pinned a hostname — the image proxy returned 502
-            // for every remote image, and calendar feeds and outbound
-            // webhooks failed the same way.
-            lookup(_hostname, _options, callback) {
-                callback(null, [{ address: primary.address, family: primary.family }]);
-            }
-        }
-    });
-}
-
-// Convenience for callers that only need "is this destination allowed",
-// including the DNS check, without holding a dispatcher.
-// Throws when the destination is not allowed. Named "assert" for that
-// reason: the only caller wraps it in try/catch, and a helper that *returns*
-// its verdict is silently ignored by that shape — which is exactly how the
-// outbound-webhook route shipped with no working SSRF check at all.
-async function assertPublicDestination(rawUrl, { schemes, lookup = dns.lookup } = {}) {
-    const v = validateTargetUrl(rawUrl, schemes ? { schemes } : undefined);
-    if (!v.ok) throw new Error(v.reason);
-    const bare = normalizeHost(v.url.hostname);
-    if (isIP(bare)) {
-        if (isPrivateIp(bare)) throw new Error('Private IP addresses are blocked');
-        return v;
-    }
+    // A resolver failure is transient — no `permanent` flag, so callers
+    // retry it. Only a private answer is permanent.
     let addresses;
     try {
-        addresses = await lookup(v.url.hostname, { all: true, verbatim: true });
+        addresses = await lookup(hostname, { all: true, verbatim: true });
     } catch {
         throw new Error('Hostname did not resolve');
     }
     if (!addresses.length) throw new Error('Hostname did not resolve');
     if (addresses.some(({ address }) => isPrivateIp(address))) {
-        throw new Error('Hostname resolves to a private IP address');
+        throw blockedDestination('Hostname resolved to a private IP address');
     }
+    // Every answer was checked, so hand them all to the connector. Pinning
+    // only addresses[0] drops happy-eyeballs, and a dual-stack host whose
+    // AAAA comes first then fails on a box with no IPv6 route.
+    return addresses.map(({ address, family }) => ({ address, family }));
+}
+
+// Node asks for the array form only when autoSelectFamily is on (it sets
+// options.all) and the scalar form otherwise. Answer in whichever shape was
+// asked for — returning the wrong one kills the socket with
+// ERR_INVALID_IP_ADDRESS, which is what silently broke every pinned caller.
+function pinnedLookup(pinned) {
+    return function lookup(_hostname, options, callback) {
+        if (options && options.all) callback(null, pinned);
+        else callback(null, pinned[0].address, pinned[0].family);
+    };
+}
+
+// For undici/fetch callers. Returns null for a literal-IP host so the result
+// can be passed straight through.
+async function createPinnedDispatcher(rawUrl, { lookup = dns.lookup, AgentCtor = Agent } = {}) {
+    const pinned = await resolvePublicAddresses(rawUrl, lookup);
+    if (!pinned.length) return null;
+    return new AgentCtor({ connect: { lookup: pinnedLookup(pinned) } });
+}
+
+// For callers on Node's own http/https stack (web-push), which takes an
+// https.Agent rather than an undici Dispatcher.
+async function createPinnedHttpsAgent(rawUrl, { lookup = dns.lookup, AgentCtor } = {}) {
+    const HttpsAgent = AgentCtor || require('node:https').Agent;
+    const pinned = await resolvePublicAddresses(rawUrl, lookup);
+    if (!pinned.length) return null;
+    return new HttpsAgent({ lookup: pinnedLookup(pinned) });
+}
+
+// Throws when the destination is not allowed. Named "assert" for that
+// reason: callers wrap it in try/catch, and a helper that *returns* its
+// verdict is silently ignored by that shape — which is exactly how the
+// outbound-webhook route shipped with no working SSRF check at all.
+async function assertPublicDestination(rawUrl, { schemes, lookup = dns.lookup } = {}) {
+    const v = validateTargetUrl(rawUrl, schemes ? { schemes } : undefined);
+    if (!v.ok) throw blockedDestination(v.reason);
+    await resolvePublicAddresses(rawUrl, lookup);
     return v;
 }
 
@@ -210,5 +226,6 @@ module.exports = {
     isPrivateHostname,
     validateTargetUrl,
     createPinnedDispatcher,
+    createPinnedHttpsAgent,
     assertPublicDestination
 };

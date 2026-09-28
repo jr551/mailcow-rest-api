@@ -3,17 +3,23 @@
 const webpush = require('web-push');
 const config = require('../config');
 const { problem, badRequest, notFound } = require('../errors');
-const { validateTargetUrl } = require('../utils/ssrf-guard');
+const { assertPublicDestination } = require('../utils/ssrf-guard');
 
 // web-push POSTs to whatever endpoint the client registered, from the
 // server. Accepting any URL made this an outbound request-forgery and
 // amplification primitive: register N subscriptions pointing at a victim,
 // then /v1/push/test fans out to all of them. Push services are public
 // HTTPS endpoints, so hold subscriptions to that.
-function validatePushEndpoint(endpoint) {
-    const check = validateTargetUrl(String(endpoint || ''), { schemes: ['https:'] });
-    if (!check.ok) return `Invalid push endpoint: ${check.reason}`;
-    return null;
+//
+// The string check alone is not enough: a name the attacker owns can resolve
+// to 10.x/127.x/169.254.169.254, so resolve it and reject a private answer.
+async function validatePushEndpoint(endpoint, lookup) {
+    try {
+        await assertPublicDestination(String(endpoint || ''), { schemes: ['https:'], lookup });
+        return null;
+    } catch (err) {
+        return `Invalid push endpoint: ${err.message}`;
+    }
 }
 const { problemSchema } = require('../schemas');
 
@@ -63,7 +69,7 @@ const configSchema = {
     }
 };
 
-module.exports = async function pushRoutes(app, { pushStore }) {
+module.exports = async function pushRoutes(app, { pushStore, lookup } = {}) {
     // Public — the SPA needs the VAPID public key before subscribing. Only
     // the public key is shared; the private key never leaves the server.
     app.get('/v1/push/config', {
@@ -87,7 +93,7 @@ module.exports = async function pushRoutes(app, { pushStore }) {
         }
     }, async (req, reply) => {
         if (!req.creds) throw problem(401, 'Unauthorized', 'Authentication required');
-        const endpointError = validatePushEndpoint(req.body?.subscription?.endpoint);
+        const endpointError = await validatePushEndpoint(req.body?.subscription?.endpoint, lookup);
         if (endpointError) throw badRequest(endpointError);
         try {
             pushStore.upsert({ user: req.creds.user, subscription: req.body.subscription });

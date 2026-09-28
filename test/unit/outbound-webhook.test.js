@@ -284,3 +284,58 @@ test('store: the per-user limit is enforced', () => {
     store.create({ user: 'b@example.com', password: 'pw', label: 'L', url: 'https://example.com/h' });
     store.close();
 });
+
+test('sieve: a folder named "discard" is not re-parsed as a discard action', () => {
+    // parseAction used a substring test, so `fileinto "discard";` came back
+    // as {type:'discard'} and the next recompile DELETED matching mail.
+    const rules = [{
+        id: 'r1',
+        name: 'File to discard folder',
+        condition: { type: 'subject-contains', value: 'x' },
+        action: { type: 'fileinto', folder: 'discard' }
+    }];
+    const parsed = parseRules(compileRulesScript(rules, ''));
+    assert.equal(parsed.rules.length, 1);
+    assert.deepStrictEqual(parsed.rules[0].action, { type: 'fileinto', folder: 'discard' });
+    // and it must survive a second round-trip unchanged
+    const twice = parseRules(compileRulesScript(parsed.rules, '')).rules;
+    assert.deepStrictEqual(twice[0].action, { type: 'fileinto', folder: 'discard' });
+});
+
+test('sieve: a redirect to an address containing "discard" stays a redirect', () => {
+    const rules = [{
+        id: 'r2',
+        name: 'Forward',
+        condition: { type: 'from-contains', value: 'a@b.c' },
+        action: { type: 'redirect', to: 'discard@example.com' }
+    }];
+    const parsed = parseRules(compileRulesScript(rules, ''));
+    assert.deepStrictEqual(parsed.rules[0].action, { type: 'redirect', to: 'discard@example.com' });
+});
+
+test('sieve: a brace in a condition value survives the round-trip', () => {
+    // The rule regex used `[^\{]+` for the condition, so a `{` in a value
+    // truncated the match, parseCondition returned null and the rule was
+    // silently dropped on the next save.
+    const rules = [{
+        id: 'r3',
+        name: 'Braces',
+        condition: { type: 'subject-contains', value: 'Invoice {123}' },
+        action: { type: 'fileinto', folder: 'Invoices' }
+    }];
+    const parsed = parseRules(compileRulesScript(rules, ''));
+    assert.equal(parsed.rules.length, 1);
+    assert.deepStrictEqual(parsed.rules[0].condition, { type: 'subject-contains', value: 'Invoice {123}' });
+});
+
+test('sieve: a quote in a condition value survives the round-trip', () => {
+    // `([^"]+)` stopped at the escaped quote, so the value came back truncated.
+    const rules = [{
+        id: 'r4',
+        name: 'Quotes',
+        condition: { type: 'subject-contains', value: 'say "hi"' },
+        action: { type: 'fileinto', folder: 'Chat' }
+    }];
+    const parsed = parseRules(compileRulesScript(rules, ''));
+    assert.deepStrictEqual(parsed.rules[0].condition, { type: 'subject-contains', value: 'say "hi"' });
+});

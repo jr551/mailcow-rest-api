@@ -204,7 +204,7 @@ function parseRules(content) {
     const preservedContent = markerIdx >= 0 ? content.substring(markerIdx + PRESERVED_MARKER.length).trim() : '';
 
     const rules = [];
-    const ruleRe = /# rule: ([^\r\n]+)\r?\n# name: ([^\r\n]+)\r?\nif ([^\{]+)\{\s*([\s\S]*?)\s*\}/g;
+    const ruleRe = /# rule: ([^\r\n]+)\r?\n# name: ([^\r\n]+)\r?\nif ([\s\S]*?)\{\r?\n([\s\S]*?)\r?\n\}/g;
     let m;
     while ((m = ruleRe.exec(ourPart)) !== null) {
         // compileRule escapes both fields, so both must be unescaped here.
@@ -227,10 +227,10 @@ function parseRules(content) {
 }
 
 function parseCondition(condStr) {
-    const envMatch = condStr.match(/envelope :is "to" "([^"]+)"/);
+    const envMatch = condStr.match(/envelope :is "to" "((?:[^"\\]|\\.)+)"/);
     if (envMatch) return { type: 'envelope-to-is', value: unescapeSieveString(envMatch[1]) };
 
-    const headerContainsMatch = condStr.match(/header :contains "([^"]+)" "([^"]+)"/);
+    const headerContainsMatch = condStr.match(/header :contains "((?:[^"\\]|\\.)+)" "((?:[^"\\]|\\.)+)"/);
     if (headerContainsMatch) {
         const header = unescapeSieveString(headerContainsMatch[1]);
         const value = unescapeSieveString(headerContainsMatch[2]);
@@ -240,7 +240,7 @@ function parseCondition(condStr) {
         return { type: 'header-contains', header, value };
     }
 
-    const headerIsMatch = condStr.match(/header :is "([^"]+)" "([^"]+)"/);
+    const headerIsMatch = condStr.match(/header :is "((?:[^"\\]|\\.)+)" "((?:[^"\\]|\\.)+)"/);
     if (headerIsMatch) {
         return { type: 'header-is', header: unescapeSieveString(headerIsMatch[1]), value: unescapeSieveString(headerIsMatch[2]) };
     }
@@ -249,17 +249,20 @@ function parseCondition(condStr) {
 }
 
 function parseAction(actionStr) {
-    if (actionStr.includes('discard')) return { type: 'discard' };
+    // Anchored: a substring test also matched `fileinto "discard";`
+    // and `redirect "discard@example.com";`, which turned a filing
+    // rule into a discard on the next recompile.
+    if (/^\s*discard\s*;/m.test(actionStr)) return { type: 'discard' };
 
-    const copyMatch = actionStr.match(/redirect :copy "([^"]+)"/);
+    const copyMatch = actionStr.match(/redirect :copy "((?:[^"\\]|\\.)+)"/);
     if (copyMatch) return { type: 'copy', to: unescapeSieveString(copyMatch[1]) };
 
-    const redirectMatch = actionStr.match(/redirect "([^"]+)"/);
+    const redirectMatch = actionStr.match(/redirect "((?:[^"\\]|\\.)+)"/);
     if (redirectMatch) {
         return { type: 'redirect', to: unescapeSieveString(redirectMatch[1]) };
     }
 
-    const fileintoMatch = actionStr.match(/fileinto(?: :create)? "([^"]+)"/);
+    const fileintoMatch = actionStr.match(/fileinto(?: :create)? "((?:[^"\\]|\\.)+)"/);
     if (fileintoMatch) {
         const folder = unescapeSieveString(fileintoMatch[1]);
         // A fileinto into the `.wh-*` namespace is our own `webhook` action —
