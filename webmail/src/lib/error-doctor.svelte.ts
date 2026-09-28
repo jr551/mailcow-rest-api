@@ -68,6 +68,11 @@ const SILENT_ROUTES: RegExp[] = [
     // and other ephemeral things that 502 routinely. The image just fails
     // to render — the user can see that — no need to also pop a modal.
     /\/v1\/proxy\/image(\?|$)/,
+    // The AI chat history lives in an IMAP folder and is synced at sign-in.
+    // A slow or flaky connection times those fetches out, and counting each
+    // one as a server failure popped the Error Doctor modal and the
+    // maintenance overlay seconds after login.
+    /\/v1\/mailboxes\/\.AI Conversations/,
     // Phishing scan runs in the background on every message open. A blip
     // means we don't show the smoke effect; tomorrow's open will retry.
     /\/v1\/ai\/phishing-scan$/,

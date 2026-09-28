@@ -211,6 +211,12 @@
         settings.weatherChip &&
         (!OUTLOOK_SKINS.has(skinState.skinId) || settings.weatherChipOutlook)
     );
+    // OWA's topbar carries no ambient chips. The skin CSS hides the ticker,
+    // but the caret button is a sibling of the pill, so it stayed visible and
+    // opened an orphan menu over the header — gate the mount as well.
+    let calendarTickerVisible = $derived(
+        settings.calendarTicker && !OUTLOOK_SKINS.has(skinState.skinId)
+    );
 
     // Server health ping. Round-trip /health every 15 s and surface the
     // latency in the topbar (with a radar pulse). Slow/offline states
@@ -1585,7 +1591,7 @@
                     forceVisible={OUTLOOK_SKINS.has(skinState.skinId)}
                 />
             {/if}
-            {#if settings.calendarTicker}
+            {#if calendarTickerVisible}
                 <CalendarTicker />
             {/if}
             <button

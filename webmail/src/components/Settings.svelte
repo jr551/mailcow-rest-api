@@ -550,6 +550,9 @@
     let owKeep = $state(true);
     let owPrepend = $state('');
     let owSaving = $state(false);
+    // The signing secret comes back exactly once, on creation. Hold it so the
+    // user can copy it — the server never lists it again.
+    let owNewSecret = $state<{ id: string; secret: string } | null>(null);
 
     const RULE_CONDITION_LABELS: Record<MailRuleConditionType, string> = {
         'from-contains': 'From contains',
@@ -756,6 +759,7 @@
                 prepend: owPrepend.trim()
             });
             outboundHooks = [...outboundHooks, w];
+            owNewSecret = w.secret ? { id: w.id, secret: w.secret } : null;
             owUrl = ''; owLabel = ''; owPrepend = '';
             if (!ruleActionWebhookId) ruleActionWebhookId = w.id;
             showToast('success', 'Webhook added');
@@ -3057,6 +3061,36 @@
                         payload carries the parsed headers, the body, and gzip+base64 attachments.
                         {#if outboundLimit}(limit {outboundLimit}){/if}
                     </p>
+                    {#if owNewSecret}
+                        <div class="card" data-testid="ow-secret-card">
+                            <h4><Icon name="key" size={13} /> Signing secret — shown once</h4>
+                            <p class="muted small">
+                                Your receiver verifies each POST with this. It is not stored
+                                anywhere you can read it back, so copy it now.
+                            </p>
+                            <div class="form-row" style="padding:0;border:none;background:none;gap:8px;">
+                                <input
+                                    type="text"
+                                    readonly
+                                    value={owNewSecret.secret}
+                                    data-testid="ow-secret-value"
+                                    style="flex:1;font-family:var(--font-mono,monospace);"
+                                />
+                                <button
+                                    type="button"
+                                    class="btn"
+                                    onclick={() => { navigator.clipboard?.writeText(owNewSecret!.secret); showToast('success', 'Secret copied'); }}
+                                    data-testid="ow-secret-copy"
+                                >Copy</button>
+                                <button
+                                    type="button"
+                                    class="btn"
+                                    onclick={() => { owNewSecret = null; }}
+                                    data-testid="ow-secret-dismiss"
+                                >Done</button>
+                            </div>
+                        </div>
+                    {/if}
                     {#if !outboundUnavailable}
                         <div class="filter-block">
                             <div class="rule-form">
@@ -3122,7 +3156,10 @@
             {:else if activeSection === 'calendar'}
                 <section class="tab-section" data-testid="settings-calendar">
                     <h3>Calendar</h3>
-                    <p class="muted small">The next-event ticker in the desktop top bar.</p>
+                    <p class="muted small">
+                        The next-event ticker in the desktop top bar. Outlook skins
+                        leave the top bar clear, so the ticker stays hidden there.
+                    </p>
 
                     <div class="card">
                         <div class="form-row" style="padding:0;border:none;background:none;">

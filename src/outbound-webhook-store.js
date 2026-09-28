@@ -123,7 +123,10 @@ function createOutboundWebhookStore({ filePath, secretBox, maxPerUser = 10 } = {
         };
     }
 
-    function create({ user, password, label, url, keep = false, prepend = '' }, now = Date.now()) {
+    // `keep` defaults to TRUE: the destructive branch deletes the message
+    // after delivery, and a caller that simply omits the field must not lose
+    // mail. The webmail form already defaults to keeping.
+    function create({ user, password, label, url, keep = true, prepend = '' }, now = Date.now()) {
         if (countStmt.get(user).n >= maxPerUser) {
             throw new Error(`Webhook limit reached (${maxPerUser})`);
         }

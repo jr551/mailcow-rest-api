@@ -39,6 +39,10 @@ export interface OutboundWebhook {
     prepend: string;
     createdAt?: number | null;
     lastUsedAt?: number | null;
+    /** Returned ONLY by POST (creation); the server never lists it again.
+     *  It is what the receiver uses to verify x-webhook-signature-v2, so the
+     *  UI has to show it once or the user can never verify a delivery. */
+    secret?: string;
 }
 
 export interface OutboundWebhookInput {

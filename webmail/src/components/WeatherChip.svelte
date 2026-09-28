@@ -316,6 +316,14 @@
             window.removeEventListener('resize', onResize);
         };
     });
+
+    // The location editor swaps the menu contents in place (7 items -> 3), so
+    // a cap measured for the full list would leave dead scroll area and push
+    // the Save/Cancel row off-centre. Re-measure whenever the pane changes.
+    $effect(() => {
+        editingLocation;
+        if (menuOpen) void clampMenu();
+    });
 </script>
 
 <span class="weather-wrap" class:weather-wrap-forced={forceVisible}>
