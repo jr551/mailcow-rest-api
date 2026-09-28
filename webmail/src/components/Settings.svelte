@@ -149,13 +149,8 @@
         }
     ];
 
-    let activeCategory = $state<CategoryId>('account');
     let activeSection = $state<SectionId>('account');
     let settingsSearch = $state('');
-
-    const SECTIONS_BY_ID: Record<string, SectionDef> = Object.fromEntries(
-        CATEGORIES.flatMap((c) => c.sections).map((s) => [s.id, s])
-    );
 
     // The rail's search box filters sections in *every* category, and a hit
     // outside the current category switches to the category that owns it —
@@ -169,36 +164,8 @@
         })).filter((r) => r.sections.length);
     });
 
-    const activeCategoryDef = $derived(CATEGORIES.find((c) => c.id === activeCategory)!);
-    const visibleSections = $derived(
-        searchHits
-            ? searchHits.flatMap((r) => r.sections)
-            : activeCategoryDef.sections
-    );
-
-    function selectCategory(id: CategoryId) {
-        activeCategory = id;
-        const def = CATEGORIES.find((c) => c.id === id)!;
-        // Only move the content pane when the currently-shown section isn't
-        // one of the new category's — otherwise clicking the rail item
-        // you're already on would yank you to its first child.
-        if (!def.sections.some((s) => s.id === activeSection)) {
-            activeSection = def.sections[0]?.id ?? activeSection;
-        }
-    }
-
     function selectSection(s: SectionDef) {
         activeSection = s.id;
-        // Clicking a search hit has to move the rail too, or the middle
-        // column and the highlighted category disagree.
-        const owner = CATEGORIES.find((c) => c.sections.some((x) => x.id === s.id));
-        if (owner) activeCategory = owner.id;
-    }
-
-    // A hit in a different category opens on click. This is what makes the
-    // middle column legible while searching.
-    function sectionCategory(id: SectionId): CategoryId | null {
-        return CATEGORIES.find((c) => c.sections.some((x) => x.id === id))?.id ?? null;
     }
 
     // Sweep state lives at the top so the runner survives tab switches.
@@ -815,6 +782,13 @@
         try {
             await deleteOutboundWebhook(w.id);
             outboundHooks = outboundHooks.filter((x) => x.id !== w.id);
+            // The rule form's select is bound to this id. Svelte does not
+            // re-resolve bind:value when the bound option disappears, so
+            // leaving it set means the form still holds the deleted id and
+            // the next rule POST is rejected with "No such outbound webhook".
+            if (ruleActionWebhookId === w.id) {
+                ruleActionWebhookId = outboundHooks[0]?.id ?? '';
+            }
         } catch (err) {
             const msg = err instanceof ApiError ? (err.detail || err.title) : (err as Error).message;
             showToast('error', msg);
@@ -1024,6 +998,11 @@
                     />
                 </div>
                 {#if searchHits}
+                    {#if searchHits.length === 0}
+                        <p class="rail-empty muted small" data-testid="settings-search-empty">
+                            No settings match “{settingsSearch}”.
+                        </p>
+                    {/if}
                     {#each searchHits as r (r.cat.id)}
                         <div class="rail-group">
                             <div class="rail-cat muted">{r.cat.label}</div>
@@ -3274,6 +3253,7 @@
         overflow-y: auto;
     }
     .rail-search { padding: 4px 4px 10px; }
+    .rail-empty { padding: 10px 12px; line-height: 1.45; }
     .rail-search input {
         width: 100%;
         padding: 7px 10px;
