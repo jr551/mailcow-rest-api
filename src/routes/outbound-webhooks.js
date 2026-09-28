@@ -1,6 +1,7 @@
 'use strict';
 
 const { badRequest, notFound } = require('../errors');
+const { sanitizeWebhookHeaders } = require('../utils/webhook-headers');
 const { problemSchema } = require('../schemas');
 const { assertPublicDestination } = require('../utils/ssrf-guard');
 
@@ -24,10 +25,38 @@ const webhookPublic = {
         keep: { type: 'boolean', description: 'Keep the message in the mailbox after a successful delivery.' },
         prepend: { type: 'string', description: 'Free text placed above the quoted original in the forwarded body.' },
         mailbox: { type: 'string', description: 'Hidden IMAP folder the rule delivers into.' },
+        // Names only; stored values are credentials and are masked forever.
+        headers: {
+            type: 'object',
+            description: 'Custom request headers (e.g. Authorization). Values are masked.',
+            additionalProperties: { type: 'string' }
+        },
         createdAt: { type: ['integer', 'null'] },
         lastUsedAt: { type: ['integer', 'null'] }
     }
 };
+
+// Shared request-body field for POST and PATCH. The finer rules (reserved
+// names, x-webhook-* prefix, control characters) live in
+// sanitizeWebhookHeaders and map to 400 in the handler — JSON Schema can
+// only express the shape, not the blocklist.
+const headersBodyProp = {
+    type: 'object',
+    maxProperties: 10,
+    additionalProperties: { type: 'string', maxLength: 2000 },
+    description: 'Extra HTTP headers sent with every delivery, e.g. {"Authorization":"Bearer …"}'
+};
+
+// Runs the real validation and turns sanitize failures into a 400. PATCH
+// semantics are handled by the store: undefined = unchanged, {} = clear.
+function sanitizeOr400(input) {
+    try {
+        return sanitizeWebhookHeaders(input);
+    } catch (err) {
+        throw badRequest(err.message);
+    }
+}
+
 
 module.exports = async function outboundWebhookRoutes(app, { store, sieveManager } = {}) {
     if (!store) {
@@ -69,7 +98,8 @@ module.exports = async function outboundWebhookRoutes(app, { store, sieveManager
                     label: { type: 'string', minLength: 1, maxLength: 100 },
                     url: { type: 'string', minLength: 1, maxLength: 2000 },
                     keep: { type: 'boolean' },
-                    prepend: { type: 'string', maxLength: 4000 }
+                    prepend: { type: 'string', maxLength: 4000 },
+                    headers: headersBodyProp
                 }
             },
             response: {
@@ -104,7 +134,8 @@ module.exports = async function outboundWebhookRoutes(app, { store, sieveManager
                 label: req.body.label,
                 url: req.body.url,
                 keep: req.body.keep,
-                prepend: req.body.prepend
+                prepend: req.body.prepend,
+                headers: sanitizeOr400(req.body.headers)
             });
         } catch (err) {
             throw badRequest(err.message);
@@ -129,7 +160,8 @@ module.exports = async function outboundWebhookRoutes(app, { store, sieveManager
                 properties: {
                     label: { type: 'string', minLength: 1, maxLength: 100 },
                     keep: { type: 'boolean' },
-                    prepend: { type: 'string', maxLength: 4000 }
+                    prepend: { type: 'string', maxLength: 4000 },
+                    headers: headersBodyProp
                 }
             },
             response: {
@@ -143,7 +175,8 @@ module.exports = async function outboundWebhookRoutes(app, { store, sieveManager
             user: req.creds.user,
             label: req.body.label,
             keep: req.body.keep,
-            prepend: req.body.prepend
+            prepend: req.body.prepend,
+            headers: req.body.headers === undefined ? undefined : sanitizeOr400(req.body.headers)
         });
         if (!updated) throw notFound('No such outbound webhook');
         return updated;

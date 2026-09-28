@@ -39,6 +39,10 @@ export interface OutboundWebhook {
     prepend: string;
     createdAt?: number | null;
     lastUsedAt?: number | null;
+    /** Custom request headers as name → masked value ('•••'). The server
+     *  stores the real values encrypted and never returns them, so the map
+     *  is only good for showing which headers exist. */
+    headers?: Record<string, string>;
     /** Returned ONLY by POST (creation); the server never lists it again.
      *  It is what the receiver uses to verify x-webhook-signature-v2, so the
      *  UI has to show it once or the user can never verify a delivery. */
@@ -50,6 +54,9 @@ export interface OutboundWebhookInput {
     url: string;
     keep?: boolean;
     prepend?: string;
+    /** Extra headers sent with every delivery POST (e.g. Authorization).
+     *  Write-only: once stored the server masks the values forever. */
+    headers?: Record<string, string>;
 }
 
 async function request<T>(method: string, url: string, body?: unknown, retried = false): Promise<T> {
@@ -90,13 +97,16 @@ export async function createOutboundWebhook(input: OutboundWebhookInput): Promis
         label: input.label,
         url: input.url,
         keep: !!input.keep,
-        prepend: input.prepend ?? ''
+        prepend: input.prepend ?? '',
+        // Only send the field when it carries something; the server treats
+        // an absent key as "no custom headers".
+        ...(input.headers && Object.keys(input.headers).length ? { headers: input.headers } : {})
     });
 }
 
 export async function updateOutboundWebhook(
     id: string,
-    patch: { label?: string; keep?: boolean; prepend?: string }
+    patch: { label?: string; keep?: boolean; prepend?: string; headers?: Record<string, string> }
 ): Promise<OutboundWebhook> {
     return request('PATCH', `/v1/me/outbound-webhooks/${encodeURIComponent(id)}`, patch);
 }

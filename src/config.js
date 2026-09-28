@@ -22,6 +22,7 @@ const bool = (v, d) => {
 // Deriving the default from CACHE_PATH's directory makes "on the volume"
 // the thing you get for free and "somewhere else" the thing you opt into.
 const nodePath = require('node:path');
+const { sanitizeWebhookHeaders } = require('./utils/webhook-headers');
 const CACHE_PATH = process.env.CACHE_PATH || './data/cache.db';
 const dataFile = (envValue, filename) =>
     envValue || nodePath.join(nodePath.dirname(CACHE_PATH), filename);
@@ -393,7 +394,10 @@ module.exports = Object.freeze({
     // the background with no user session to borrow credentials from.
     // `secret` (optional) signs "<timestamp>.<body>" with HMAC-SHA256, sent
     // as X-Webhook-Signature-V2: <hex> alongside X-Webhook-Timestamp: <unix
-    // seconds>. `mailbox` defaults to INBOX.
+    // `headers` (optional) is an object of extra request headers, e.g.
+    //   "headers": {"Authorization": "Bearer …"}
+    // Reserved transport/signature names are rejected — the same rules the
+    // user-facing outbound webhooks enforce in sanitizeWebhookHeaders.
     webhooks: (() => {
         const raw = process.env.WEBHOOK_ACCOUNTS || '';
         let accounts = [];
@@ -407,13 +411,28 @@ module.exports = Object.freeze({
                         // Only http(s): a stray scheme here would be handed
                         // straight to undici.
                         .filter((a) => /^https?:\/\//i.test(a.url))
-                        .map((a) => ({
-                            address: a.address.trim(),
-                            password: a.password,
-                            url: a.url.trim(),
-                            mailbox: (typeof a.mailbox === 'string' && a.mailbox.trim()) || 'INBOX',
-                            secret: typeof a.secret === 'string' ? a.secret : ''
-                        }));
+                        .map((a) => {
+                            // A bad headers block drops just the headers,
+                            // not the whole account — same posture as a bad
+                            // optional field anywhere else in this file.
+                            let headers = {};
+                            if (a.headers !== undefined && a.headers !== null) {
+                                try {
+                                    headers = sanitizeWebhookHeaders(a.headers);
+                                } catch (err) {
+                                    // eslint-disable-next-line no-console
+                                    console.warn(`[config] WEBHOOK_ACCOUNTS: dropping headers for ${a.address}:`, err.message);
+                                }
+                            }
+                            return {
+                                address: a.address.trim(),
+                                password: a.password,
+                                url: a.url.trim(),
+                                mailbox: (typeof a.mailbox === 'string' && a.mailbox.trim()) || 'INBOX',
+                                secret: typeof a.secret === 'string' ? a.secret : '',
+                                headers
+                            };
+                        });
                 }
             } catch (err) {
                 // eslint-disable-next-line no-console

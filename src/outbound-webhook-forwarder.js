@@ -96,7 +96,12 @@ function createOutboundWebhookForwarder({
         const body = JSON.stringify(payload);
         const headers = {
             'content-type': 'application/json',
-            'user-agent': 'mailcow-rest-api/outbound-webhook'
+            'user-agent': 'mailcow-rest-api/outbound-webhook',
+            // User-supplied headers (Authorization etc.) merge after our
+            // defaults and before the signature block. Reserved transport
+            // names and x-webhook-* were rejected at creation, so nothing
+            // here can clobber the signature or the framing.
+            ...(webhook.headers || {})
         };
         if (webhook.secret) {
             // Timestamp inside the signed content so a captured request cannot

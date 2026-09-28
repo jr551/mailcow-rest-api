@@ -314,10 +314,17 @@ explained rather than dropped silently.
     "password": "the mailbox's IMAP password",
     "url": "https://hooks.example.com/mail",
     "secret": "optional-hmac-secret",
-    "mailbox": "INBOX"
+    "mailbox": "INBOX",
+    "headers": { "Authorization": "Bearer …" }
   }
 ]
 ```
+
+`headers` is optional and merged into every POST for that account —
+`Authorization` is the usual case. Reserved transport names (`host`,
+`content-length`, `transfer-encoding`, …) and `x-webhook-*` (the signature
+headers) are rejected; an invalid `headers` block is dropped with a warning
+rather than disabling the account.
 
 A message is deleted **only** after the webhook answers 2xx. Anything else
 leaves it in the mailbox and schedules a retry — 1m, 5m, 15m, 1h, 3h, 6h,
@@ -346,8 +353,11 @@ headers above and replay the request anyway.
 Create one under **Settings → Outbound webhooks**, then point a mail rule's
 "Send to external webhook" action at it (optionally keeping the message in the
 mailbox). Each delivery POSTs the envelope, parsed headers, text/HTML bodies, a
-prepend note you can set per webhook, and gzip+base64 attachments with decode
-instructions for the receiver. A Sent-folder receipt records the outcome.
+prepend note you can set per webhook, optional custom request headers
+(`headers`, e.g. `{"Authorization":"Bearer …"}` — stored encrypted, listed
+masked, same reserved-name rules as `WEBHOOK_ACCOUNTS`), and gzip+base64
+attachments with decode instructions for the receiver. A Sent-folder
+receipt records the outcome.
 
 | Variable | Default | Notes |
 |---|---|---|
