@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const path = require('node:path');
 const fs = require('node:fs');
 const Database = require('better-sqlite3');
+const { sanitizeWebhookHeaders } = require('./utils/webhook-headers');
 const { webhookMailbox, WEBHOOK_MAILBOX_PREFIX } = require('./sieve-client');
 
 // User-created outbound webhooks ("email → webhook").
@@ -85,10 +86,19 @@ function createOutboundWebhookStore({ filePath, secretBox, maxPerUser = 10 } = {
         db.exec('ALTER TABLE outbound_webhooks ADD COLUMN password TEXT');
     } catch { /* fresh db already has it */ }
 
+    // Custom request headers (Authorization and friends). These are
+    // credentials — a bearer token in a header is exactly as sensitive as
+    // the mailbox password — so the map is JSON-encoded and stored through
+    // secretBox like `secret` and `password`, and the public shape only ever
+    // shows the header names with masked values.
+    try {
+        db.exec('ALTER TABLE outbound_webhooks ADD COLUMN headers TEXT');
+    } catch { /* fresh db already has it */ }
+
     const insertStmt = db.prepare(`
         INSERT INTO outbound_webhooks
-            (id, user, label, url, secret, keep, prepend, created_at, password)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (id, user, label, url, secret, keep, prepend, created_at, password, headers)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const getStmt = db.prepare('SELECT * FROM outbound_webhooks WHERE id = ?');
     const listStmt = db.prepare(
@@ -104,9 +114,33 @@ function createOutboundWebhookStore({ filePath, secretBox, maxPerUser = 10 } = {
         'UPDATE outbound_webhooks SET revoked_at = ? WHERE id = ? AND user = ? AND revoked_at IS NULL'
     );
     const touchStmt = db.prepare('UPDATE outbound_webhooks SET last_used_at = ? WHERE id = ?');
-    const updateStmt = db.prepare(
-        'UPDATE outbound_webhooks SET label = ?, keep = ?, prepend = ? WHERE id = ? AND user = ? AND revoked_at IS NULL'
-    );
+    const updateStmt = db.prepare(`
+        UPDATE outbound_webhooks SET label = ?, keep = ?, prepend = ?, headers = ?
+        WHERE id = ? AND user = ? AND revoked_at IS NULL
+    `);
+
+    // Stored form is `secretBox.encrypt(JSON.stringify(map))` or null.
+    // Public responses get the names with masked values; listAllLive (the
+    // forwarder path) gets the real decrypted map.
+    function encryptHeaders(headers) {
+        if (headers === undefined || headers === null) return null;
+        const clean = sanitizeWebhookHeaders(headers);
+        return Object.keys(clean).length ? secretBox.encrypt(JSON.stringify(clean)) : null;
+    }
+    function decryptHeaders(encoded) {
+        if (!encoded) return {};
+        try {
+            return JSON.parse(secretBox.decrypt(encoded)) || {};
+        } catch {
+            return {};
+        }
+    }
+    function maskedHeaders(encoded) {
+        const names = Object.keys(decryptHeaders(encoded));
+        const out = {};
+        for (const name of names) out[name] = '•••';
+        return out;
+    }
 
     // The secret never leaves the server after creation, so it is not part of
     // the public shape at all — not even as a hash.
@@ -119,14 +153,17 @@ function createOutboundWebhookStore({ filePath, secretBox, maxPerUser = 10 } = {
             prepend: row.prepend || '',
             mailbox: mailboxFor(row.id),
             createdAt: row.created_at ?? null,
-            lastUsedAt: row.last_used_at ?? null
+            lastUsedAt: row.last_used_at ?? null,
+            // Names only — the values are credentials and never leave the
+            // server after the caller supplies them.
+            headers: maskedHeaders(row.headers)
         };
     }
 
     // `keep` defaults to TRUE: the destructive branch deletes the message
     // after delivery, and a caller that simply omits the field must not lose
     // mail. The webmail form already defaults to keeping.
-    function create({ user, password, label, url, keep = true, prepend = '' }, now = Date.now()) {
+    function create({ user, password, label, url, keep = true, prepend = '', headers }, now = Date.now()) {
         if (countStmt.get(user).n >= maxPerUser) {
             throw new Error(`Webhook limit reached (${maxPerUser})`);
         }
@@ -141,7 +178,8 @@ function createOutboundWebhookStore({ filePath, secretBox, maxPerUser = 10 } = {
             keep ? 1 : 0,
             normalizePrepend(prepend),
             now,
-            secretBox.encrypt(password)
+            secretBox.encrypt(password),
+            encryptHeaders(headers)
         );
         return { ...toPublic(getStmt.get(id)), secret };
     }
@@ -158,7 +196,8 @@ function createOutboundWebhookStore({ filePath, secretBox, maxPerUser = 10 } = {
             ...toPublic(row),
             user: row.user,
             secret: secretBox.decrypt(row.secret),
-            password: secretBox.decrypt(row.password)
+            password: secretBox.decrypt(row.password),
+            headers: decryptHeaders(row.headers)
         }));
     }
 
@@ -181,13 +220,17 @@ function createOutboundWebhookStore({ filePath, secretBox, maxPerUser = 10 } = {
         return toPublic(row);
     }
 
-    function update({ id, user, label, keep, prepend }) {
+    function update({ id, user, label, keep, prepend, headers }) {
         const row = getStmt.get(id);
         if (!row || row.revoked_at || row.user !== user) return null;
         updateStmt.run(
             label === undefined ? row.label : String(label).trim().slice(0, MAX_LABEL),
             keep === undefined ? row.keep : (keep ? 1 : 0),
             prepend === undefined ? row.prepend : normalizePrepend(prepend),
+            // undefined = leave unchanged; null or {} = clear; otherwise a
+            // full replace. Sanitize rejects reserved/forged names before
+            // anything is written.
+            headers === undefined ? row.headers : encryptHeaders(headers),
             id,
             user
         );

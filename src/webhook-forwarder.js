@@ -84,7 +84,11 @@ function createWebhookForwarder({ config, store, logger, connect: connectOverrid
         const body = JSON.stringify(payload);
         const headers = {
             'content-type': 'application/json',
-            'user-agent': 'mailcow-rest-api/webhook-forwarder'
+            'user-agent': 'mailcow-rest-api/webhook-forwarder',
+            // Operator-configured extra headers (Authorization etc.) merge
+            // after our defaults and before the signature block; reserved
+            // names were rejected when WEBHOOK_ACCOUNTS was parsed.
+            ...(account.headers || {})
         };
         if (account.secret) {
             // Lets the receiver verify the POST really came from us. Signed

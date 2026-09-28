@@ -550,6 +550,10 @@
     let owKeep = $state(true);
     let owPrepend = $state('');
     let owSaving = $state(false);
+    // Custom request headers for the next webhook: editable name/value rows.
+    // Seeded with Authorization because that's the overwhelming use case;
+    // values are write-only — the server masks them forever after creation.
+    let owHeaderRows = $state<{ name: string; value: string }[]>([{ name: 'Authorization', value: '' }]);
     // The signing secret comes back exactly once, on creation. Hold it so the
     // user can copy it — the server never lists it again.
     let owNewSecret = $state<{ id: string; secret: string } | null>(null);
@@ -752,15 +756,24 @@
         if (!url) { showToast('error', 'Webhook URL is required'); return; }
         owSaving = true;
         try {
+            // Rows → map; blank names are dropped, both sides trimmed. An
+            // empty map is passed as undefined so the field stays absent.
+            const headers: Record<string, string> = {};
+            for (const r of owHeaderRows) {
+                const name = r.name.trim();
+                if (name) headers[name] = r.value.trim();
+            }
             const w = await createOutboundWebhook({
                 url,
                 label: owLabel.trim() || url,
                 keep: owKeep,
-                prepend: owPrepend.trim()
+                prepend: owPrepend.trim(),
+                headers: Object.keys(headers).length ? headers : undefined
             });
             outboundHooks = [...outboundHooks, w];
             owNewSecret = w.secret ? { id: w.id, secret: w.secret } : null;
             owUrl = ''; owLabel = ''; owPrepend = '';
+            owHeaderRows = [{ name: 'Authorization', value: '' }];
             if (!ruleActionWebhookId) ruleActionWebhookId = w.id;
             showToast('success', 'Webhook added');
         } catch (err) {
@@ -771,7 +784,7 @@
         }
     }
 
-    async function doUpdateOutboundWebhook(w: OutboundWebhook, patch: { keep?: boolean; prepend?: string }) {
+    async function doUpdateOutboundWebhook(w: OutboundWebhook, patch: { keep?: boolean; prepend?: string; headers?: Record<string, string> }) {
         try {
             const u = await updateOutboundWebhook(w.id, patch);
             outboundHooks = outboundHooks.map((x) => (x.id === w.id ? u : x));
@@ -3110,6 +3123,53 @@
                                     <span class="rule-label">Keep</span>
                                     <span class="muted small"><input type="checkbox" bind:checked={owKeep} data-testid="ow-keep" /> keep the message in the mailbox after sending</span>
                                 </label>
+                                <div class="rule-row">
+                                    <span class="rule-label">Headers</span>
+                                    <div style="flex:1;display:flex;flex-direction:column;gap:6px;">
+                                        {#each owHeaderRows as row, i}
+                                            <div style="display:flex;gap:6px;">
+                                                <input
+                                                    type="text"
+                                                    placeholder="Header name"
+                                                    bind:value={row.name}
+                                                    data-testid={`ow-header-name-${i}`}
+                                                    style="flex:1;min-width:0;"
+                                                />
+                                                <input
+                                                    type="text"
+                                                    placeholder="Value"
+                                                    bind:value={row.value}
+                                                    data-testid={`ow-header-value-${i}`}
+                                                    style="flex:2;min-width:0;"
+                                                />
+                                                <button
+                                                    type="button"
+                                                    class="rule-remove"
+                                                    aria-label="Remove header"
+                                                    title="Remove header"
+                                                    disabled={owHeaderRows.length === 1}
+                                                    onclick={() => { owHeaderRows = owHeaderRows.filter((_, j) => j !== i); }}
+                                                    data-testid={`ow-header-remove-${i}`}
+                                                ><Icon name="trash" size={12} /></button>
+                                            </div>
+                                        {/each}
+                                        <div>
+                                            <button
+                                                type="button"
+                                                class="btn"
+                                                onclick={() => { owHeaderRows = [...owHeaderRows, { name: '', value: '' }]; }}
+                                                data-testid="ow-header-add"
+                                            >Add header</button>
+                                        </div>
+                                        <!-- Header values are write-only: the server stores them
+                                             encrypted and only ever returns masked values. -->
+                                        <span class="muted small">
+                                            Sent with every delivery POST (e.g. Authorization: Bearer …).
+                                            Stored encrypted and never shown again — to change them later,
+                                            delete and recreate the webhook.
+                                        </span>
+                                    </div>
+                                </div>
                                 <div class="rule-actions">
                                     <button type="button" class="btn btn-primary" disabled={owSaving} onclick={doCreateOutboundWebhook} data-testid="ow-create">
                                         {owSaving ? 'Creating…' : 'Add webhook'}
@@ -3143,6 +3203,13 @@
                                                         data-testid={`ow-prepend-${w.id}`}
                                                     />
                                                 </div>
+                                                {#if w.headers && Object.keys(w.headers).length}
+                                                    <!-- Values are masked server-side ('•••'); only the
+                                                         names are meaningful. To change them, recreate. -->
+                                                    <div class="rule-clause muted small" data-testid={`ow-headers-${w.id}`}>
+                                                        Headers: {Object.keys(w.headers).join(', ')}
+                                                    </div>
+                                                {/if}
                                             </div>
                                         </li>
                                     {/each}

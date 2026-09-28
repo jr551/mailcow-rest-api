@@ -81,7 +81,7 @@ function stubHttp(status, bodyText = 'ok') {
     return { seen, fn };
 }
 
-function setup({ httpStatus = 200, keep = false, prepend = '', client: clientOverride } = {}) {
+function setup({ httpStatus = 200, keep = false, prepend = '', headers, client: clientOverride } = {}) {
     const store = createOutboundWebhookStore({ filePath: ':memory:', secretBox: fakeBox, maxPerUser: 5 });
     const queue = createWebhookStore({ filePath: ':memory:' });
     const created = store.create({
@@ -90,7 +90,8 @@ function setup({ httpStatus = 200, keep = false, prepend = '', client: clientOve
         label: 'Invoices',
         url: 'https://receiver.example/hook',
         keep,
-        prepend
+        prepend,
+        headers
     });
     const { client, calls } = clientOverride ? { client: clientOverride, calls: clientOverride.__calls } : fakeImap();
     const http = stubHttp(httpStatus);
@@ -288,4 +289,29 @@ test('delivery: a webhook with no usable credential is skipped, not thrown', asy
     });
     await forwarder.tick();
     assert.strictEqual(http.seen.length, 0);
+});
+
+test('delivery: configured custom headers ride on the POST', async () => {
+    const { http, forwarder } = setup({
+        headers: { 'Authorization': 'Bearer abc123', 'X-Tenant': 'billing' }
+    });
+    await forwarder.tick();
+    assert.strictEqual(http.seen.length, 1);
+    const sent = http.seen[0].opts.headers;
+    assert.strictEqual(sent['Authorization'], 'Bearer abc123');
+    assert.strictEqual(sent['X-Tenant'], 'billing');
+    // The built-ins survive the merge, and the signature headers still land.
+    assert.strictEqual(sent['content-type'], 'application/json');
+    assert.match(sent['x-webhook-signature-v2'], /^[0-9a-f]{64}$/);
+});
+
+test('delivery: a reserved header name is rejected at creation', () => {
+    assert.throws(
+        () => setup({ headers: { 'Host': 'evil.example' } }),
+        /reserved/i
+    );
+    assert.throws(
+        () => setup({ headers: { 'X-Webhook-Signature-V2': 'forged' } }),
+        /reserved/i
+    );
 });
