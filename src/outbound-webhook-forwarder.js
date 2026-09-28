@@ -108,9 +108,19 @@ function createOutboundWebhookForwarder({
         // private address afterwards (rebinding) and every poll would POST
         // mailbox contents to an internal service. Re-resolve and pin the
         // connection to the checked address on every delivery.
-        const dispatcher = requestOverride
-            ? undefined
-            : (await createPinnedDispatcher(webhook.url)) || undefined;
+        let dispatcher;
+        if (!requestOverride) {
+            try {
+                dispatcher = (await createPinnedDispatcher(webhook.url)) || undefined;
+            } catch (err) {
+                // A destination that is not allowed will never become
+                // allowed — retrying it to the attempt cap just delays the
+                // inevitable and keeps the message parked.
+                const blocked = new Error(`Webhook URL is not allowed: ${err.message}`);
+                blocked.permanent = true;
+                throw blocked;
+            }
+        }
         const res = await doRequest(webhook.url, {
             method: 'POST',
             headers,
@@ -357,7 +367,7 @@ function createOutboundWebhookForwarder({
                         }
                         outcome = await deliver(webhook, payload);
                     } catch (err) {
-                        const givingUp = attempts >= maxAttempts;
+                        const givingUp = attempts >= maxAttempts || err.permanent === true;
                         queue.recordFailure(webhook.user, uidvalidity, uid, {
                             attempts,
                             nextAttemptAt: current + backoffFor(attempts),

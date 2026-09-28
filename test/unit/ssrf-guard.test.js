@@ -97,7 +97,23 @@ test('createPinnedDispatcher pins the connection to the address it checked', asy
     }
     const d = await createPinnedDispatcher('https://ok.example/x', { lookup, AgentCtor: FakeAgent });
     assert.ok(d instanceof FakeAgent);
-    assert.equal(pinned, '93.184.216.34');
+    // undici calls lookup with { all: true } and reads the ARRAY form; the
+    // scalar (address, family) form makes it throw "Invalid IP address:
+    // undefined", which broke every hostname-pinned caller.
+    assert.deepEqual(pinned, [{ address: '93.184.216.34', family: 4 }]);
+});
+
+test('createPinnedDispatcher refuses a literal private IP', async () => {
+    // Nothing to resolve, but a literal address still has to be public —
+    // this is what let a webhook POST to http://127.0.0.1/.
+    await assert.rejects(
+        () => createPinnedDispatcher('http://127.0.0.1:3001/health', { AgentCtor: class {} }),
+        /private IP/i
+    );
+    await assert.rejects(
+        () => createPinnedDispatcher('http://169.254.169.254/latest/meta-data/', { AgentCtor: class {} }),
+        /private IP/i
+    );
 });
 
 test('createPinnedDispatcher returns null for an already-checked literal IP', async () => {
@@ -108,21 +124,32 @@ test('createPinnedDispatcher returns null for an already-checked literal IP', as
     assert.equal(looked, false, 'a literal IP needs no resolution');
 });
 
-test('assertPublicDestination combines the string and DNS checks', async () => {
-    const priv = await assertPublicDestination('https://rebind.example/f.ics', {
-        lookup: async () => [{ address: '127.0.0.1', family: 4 }]
-    });
-    assert.equal(priv.ok, false);
-    assert.match(priv.reason, /private/i);
+test('assertPublicDestination throws on a rejected destination', async () => {
+    // It must THROW, not return a verdict: the route wraps it in try/catch,
+    // and a returned verdict is silently discarded by that shape.
+    await assert.rejects(
+        () => assertPublicDestination('https://rebind.example/f.ics', {
+            lookup: async () => [{ address: '127.0.0.1', family: 4 }]
+        }),
+        /private/i
+    );
 
     const pub = await assertPublicDestination('https://ok.example/f.ics', {
         lookup: async () => [{ address: '93.184.216.34', family: 4 }]
     });
     assert.equal(pub.ok, true);
 
-    // A name that doesn't resolve fails closed rather than throwing.
-    const nx = await assertPublicDestination('https://nope.example/f.ics', {
-        lookup: async () => { throw new Error('ENOTFOUND'); }
-    });
-    assert.equal(nx.ok, false);
+    // A name that doesn't resolve fails closed.
+    await assert.rejects(
+        () => assertPublicDestination('https://nope.example/f.ics', {
+            lookup: async () => { throw new Error('ENOTFOUND'); }
+        }),
+        /did not resolve/i
+    );
+
+    // A literal private address is rejected without any lookup.
+    await assert.rejects(
+        () => assertPublicDestination('http://127.0.0.1:3001/health'),
+        /private/i
+    );
 });
