@@ -14,6 +14,7 @@ const {
 } = require('./webhook-payload');
 const { headerSafe, formatPhrase } = require('./utils/rfc822');
 const { backoffFor } = require('./webhook-forwarder');
+const { createPinnedDispatcher } = require('./utils/ssrf-guard');
 
 // Per-user outbound webhooks: mail that matched a rule is POSTed to a URL the
 // user named.
@@ -102,15 +103,32 @@ function createOutboundWebhookForwarder({
         // `requestOverride` exists so tests can drive the whole delivery path
         // without a live endpoint. Production never passes it.
         const doRequest = requestOverride || request;
+        // The URL was checked at creation, but that is not enough: the
+        // operator of a public-looking hostname can flip its DNS to a
+        // private address afterwards (rebinding) and every poll would POST
+        // mailbox contents to an internal service. Re-resolve and pin the
+        // connection to the checked address on every delivery.
+        const dispatcher = requestOverride
+            ? undefined
+            : (await createPinnedDispatcher(webhook.url)) || undefined;
         const res = await doRequest(webhook.url, {
             method: 'POST',
             headers,
             body,
             headersTimeout: timeoutMs,
-            bodyTimeout: timeoutMs
+            bodyTimeout: timeoutMs,
+            dispatcher
         });
+        // Cap the reply capture — a hostile or broken endpoint could stream
+        // an unbounded body and `res.body.text()` buffers all of it.
         let text = '';
-        try { text = (await res.body.text()).slice(0, 300); } catch { /* */ }
+        try {
+            for await (const chunk of res.body) {
+                if (text.length >= 300) break;
+                text += chunk.toString('utf8');
+            }
+            text = text.slice(0, 300);
+        } catch { /* a truncated reply is still a reply */ }
         const elapsedMs = now() - started;
         if (res.statusCode < 200 || res.statusCode >= 300) {
             const err = new Error(`Webhook returned ${res.statusCode}: ${text}`);
@@ -365,6 +383,11 @@ function createOutboundWebhookForwarder({
                         continue;
                     }
 
+                    // Mark delivered BEFORE anything else. The queue row is
+                    // durable while the Sent append and mailbox action are
+                    // not — a restart in that gap would otherwise re-POST an
+                    // already-delivered message on the next poll.
+                    queue.recordDelivered(webhook.user, uidvalidity, uid);
                     await appendSentRecord(client, webhook, payload, outcome);
                     store.touch(webhook.id, current);
                     logger?.info(
