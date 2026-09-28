@@ -1802,29 +1802,6 @@
                     </div>
 
                     <div class="card">
-                        <h4>👨‍👩‍👧 VIP addresses</h4>
-                        <div class="form-row" style="padding:0;border:none;background:none;flex-direction:column;align-items:stretch;gap:6px;">
-                            <div class="row-text">
-                                <strong>Family / VIP address list</strong>
-                                <span class="muted">
-                                    Comma-separated. Messages sent to or from any of these addresses
-                                    get a small family badge next to the sender avatar with a hover
-                                    tooltip identifying the VIP address.
-                                </span>
-                            </div>
-                            <input
-                                type="text"
-                                value={settings.vipAddresses}
-                                oninput={(e) => setVipAddresses((e.currentTarget as HTMLInputElement).value)}
-                                placeholder="family@example.com, partner@example.com"
-                                spellcheck="false"
-                                autocomplete="off"
-                                data-testid="settings-vip-addresses"
-                            />
-                        </div>
-                    </div>
-
-                    <div class="card">
                         <h4><Icon name="at" size={13} /> Default From address</h4>
                         <div class="form-row" style="padding:0;border:none;background:none;">
                             <div class="row-text">
@@ -3162,6 +3139,75 @@
                             {/if}
                         </div>
                     {/if}
+                </section>
+            {:else if activeSection === 'calendar'}
+                <section class="tab-section" data-testid="settings-calendar">
+                    <h3>Calendar</h3>
+                    <p class="muted small">The next-event ticker in the desktop top bar.</p>
+
+                    <div class="card">
+                        <div class="form-row" style="padding:0;border:none;background:none;">
+                            <div class="row-text">
+                                <strong>Show the calendar ticker</strong>
+                                <span class="muted">Your next event, in the top bar.</span>
+                            </div>
+                            <label class="toggle compact">
+                                <input
+                                    type="checkbox"
+                                    checked={settings.calendarTicker}
+                                    onchange={(e) => setCalendarTicker(e.currentTarget.checked)}
+                                    data-testid="settings-calendar-ticker"
+                                />
+                                <span>{settings.calendarTicker ? 'On' : 'Off'}</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="form-row" style="padding:0;border:none;background:none;">
+                            <div class="row-text">
+                                <strong>Show event titles</strong>
+                                <span class="muted">Off shows the time only.</span>
+                            </div>
+                            <label class="toggle compact">
+                                <input
+                                    type="checkbox"
+                                    checked={settings.calendarTickerTitles}
+                                    onchange={(e) => setCalendarTickerTitles(e.currentTarget.checked)}
+                                    data-testid="settings-calendar-titles"
+                                />
+                                <span>{settings.calendarTickerTitles ? 'On' : 'Off'}</span>
+                            </label>
+                        </div>
+                    </div>
+                </section>
+            {:else if activeSection === 'people'}
+                <section class="tab-section" data-testid="settings-people">
+                    <h3>People</h3>
+                    <p class="muted small">Who counts as family, and how they're marked in the list.</p>
+
+                    <div class="card">
+                        <h4>👨‍👩‍👧 VIP addresses</h4>
+                        <div class="form-row" style="padding:0;border:none;background:none;flex-direction:column;align-items:stretch;gap:6px;">
+                            <div class="row-text">
+                                <strong>Family / VIP address list</strong>
+                                <span class="muted">
+                                    Comma-separated. Messages sent to or from any of these addresses
+                                    get a small family badge next to the sender avatar with a hover
+                                    tooltip identifying the VIP address.
+                                </span>
+                            </div>
+                            <input
+                                type="text"
+                                value={settings.vipAddresses}
+                                oninput={(e) => setVipAddresses((e.currentTarget as HTMLInputElement).value)}
+                                placeholder="family@example.com, partner@example.com"
+                                spellcheck="false"
+                                autocomplete="off"
+                                data-testid="settings-vip-addresses"
+                            />
+                        </div>
+                    </div>
                 </section>
             {/if}
             </div>
