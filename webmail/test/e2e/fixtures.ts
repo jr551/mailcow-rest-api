@@ -470,9 +470,16 @@ export async function applyMocks(page: Page) {
             body: JSON.stringify({
                 configured: true,
                 kind: 'openai',
-                baseUrl: 'http://localhost:11434/v1',
+                // Point at OUR proxy, matching the real server's
+                // /v1/ai/config (ai.js), which returns the relative prefix
+                // /v1/ai/llm and proxied:true. This used to say
+                // baseUrl:'http://localhost:11434/v1' — a real Ollama host
+                // that does not exist in CI — so every client-side AI call
+                // silently failed and the AI surface went untested.
+                baseUrl: '/v1/ai/llm',
                 model: 'mistral-small-latest',
-                apiKey: 'sk-test'
+                proxied: true,
+                apiKey: ''
             })
         });
     });
@@ -488,6 +495,61 @@ export async function applyMocks(page: Page) {
                 model: 'mistral-small-latest',
                 allowClientOverride: true,
                 presets: ['mistral', 'openai', 'groq', 'together', 'ollama', 'perplexity', 'openrouter', 'anthropic']
+            })
+        });
+    });
+
+
+    // The AI proxy itself. /v1/ai/config now reports baseUrl '/v1/ai/llm', so
+    // every client-side AI call (summarise, draft, actions, translate,
+    // subject suggestion, inbox sort) posts to our own proxy rather than
+    // straight to the provider. Mock the chat/completions shape it expects.
+    //
+    // The inbox sort used to have its own server route (/v1/ai/sort-inbox)
+    // but sortInboxClient talks to the provider DIRECTLY via
+    // cachedChatCompletion, so it lands here like every other AI call. It
+    // asks for a {"rankings":[...]} object, so this one mock has to answer
+    // that shape — a flat prose reply makes the client throw "model did not
+    // return JSON" and the AI-sorted filter silently never reorders. The
+    // prompt is sniffed for that signature, which is exactly how a real
+    // provider tells the two requests apart too.
+    await page.route('**/v1/ai/llm/chat/completions', (route) => {
+        // The post body is JSON, so the schema it asks for arrives
+        // ESCAPED ("\"rankings\"") — sniff the unescaped prompt text and
+        // the bare key name, or this never matches and the sort silently
+        // gets the prose reply below.
+        const body = (route.request().postData() || '') as string;
+        const isInboxSort = body.includes('Triage these') && body.includes('rankings');
+        const content = isInboxSort
+            ? JSON.stringify({
+                rankings: [
+                    // danger-4 needs level 5 (dangerLevel clamps 1-5 to the
+                    // legacy 4 colour levels, with 5 treated as the max).
+                    // Ordering is by category bucket BEFORE level
+                    // (human -> important -> info -> marketing), so the
+                    // invoice has to out-rank the rest on category, not
+                    // just on level.
+                    { uid: 1000, level: 5, category: 'important', human: false, reason: 'Invoice due soon — money at risk' },
+                    { uid: 999, level: 2, category: 'human', human: true, reason: 'Casual lunch thread' },
+                    { uid: 1001, level: 2, category: 'info', human: false, reason: 'Welcome message, non-urgent' },
+                    { uid: 998, level: 1, category: 'info', human: false, reason: 'Tracking notification' }
+                ]
+            })
+            : 'This is a mocked AI response for the test suite.';
+        route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+                id: 'chatcmpl-mock',
+                object: 'chat.completion',
+                created: 1_700_000_000,
+                model: 'mistral-small-latest',
+                choices: [{
+                    index: 0,
+                    message: { role: 'assistant', content },
+                    finish_reason: 'stop'
+                }],
+                usage: { prompt_tokens: 10, completion_tokens: 8, total_tokens: 18 }
             })
         });
     });
@@ -509,23 +571,6 @@ export async function applyMocks(page: Page) {
             contentType: 'application/json',
             body: JSON.stringify({
                 content: '¡Hola!\n\nBienvenido a tu nuevo correo web. Este mensaje muestra el diseño.\n\nSaludos,\nEl Conserje',
-                model: 'mistral-small-latest'
-            })
-        });
-    });
-
-    await page.route('**/v1/ai/sort-inbox', (route) => {
-        route.fulfill({
-            status: 200,
-            contentType: 'application/json',
-            body: JSON.stringify({
-                // Danger order: invoice (1000) critical → tracking (998) low → welcome (1001) low → lunch (999) low
-                rankings: [
-                    { uid: 1000, level: 4, reason: 'Invoice due soon — money at risk' },
-                    { uid: 1001, level: 2, reason: 'Welcome message, non-urgent' },
-                    { uid: 999, level: 2, reason: 'Casual lunch thread' },
-                    { uid: 998, level: 1, reason: 'Tracking notification' }
-                ],
                 model: 'mistral-small-latest'
             })
         });
@@ -667,82 +712,114 @@ export async function applyMocks(page: Page) {
         }
     });
 
+    // A mutable object store, so mutations actually stick.
+    //
+    // These were constant XML bodies: every ListObjectsV2 answered with the
+    // same four objects no matter what the test had just done. That made any
+    // test asserting a *post-mutation* state unsatisfiable — the delete tests
+    // fired a real DELETE (204), the client correctly re-listed, and the
+    // resurrected object from the canned list "reappeared". A delete test can
+    // only prove a delete if the store remembers it.
+    //
+    // Keys are full (prefix-included) and the list response is computed from
+    // them, so PUT/DELETE and List stay consistent with each other.
+    //
+    // Empty folders are seeded as zero-byte "folder marker" objects ending in
+    // '/', which is how S3 (and this app's createFolder) actually represents
+    // them. A folder whose only key IS the marker must still be reported as a
+    // CommonPrefix at its parent level, or it silently disappears from the
+    // listing — the marker contributes no path segment below its own level.
+    const FOLDER_MARKER = { size: 0, lastModified: '2026-04-24T08:00:00.000Z', etag: 'folder' };
+    const store = new Map<string, { size: number; lastModified: string; etag: string }>([
+        ['users/demo/report.pdf', { size: 84200, lastModified: '2026-04-28T10:00:00.000Z', etag: 'abc123' }],
+        ['users/demo/notes.txt', { size: 1240, lastModified: '2026-04-27T08:30:00.000Z', etag: 'def456' }],
+        ['users/demo/readme.md', { size: 2100, lastModified: '2026-04-26T09:00:00.000Z', etag: 'jkl012' }],
+        ['users/demo/Projects/', FOLDER_MARKER],
+        ['users/demo/Projects/plan.md', { size: 3500, lastModified: '2026-04-25T14:00:00.000Z', etag: 'ghi789' }],
+        ['users/demo/Photos/', FOLDER_MARKER]
+    ]);
+
+
+    const listResult = (prefix: string) => {
+        const dir = prefix.endsWith('/') ? prefix : prefix + '/';
+        const parts =
+            '<?xml version="1.0" encoding="UTF-8"?>' +
+            '<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">' +
+            '<Name>test-bucket</Name>' +
+            `<Prefix>${prefix}</Prefix>` +
+            '<Delimiter>/</Delimiter>';
+
+        // Delimiter grouping: immediate child folders come back as
+        // CommonPrefixes, immediate child objects as Contents.
+        const folders = new Set<string>();
+        const contents: string[] = [];
+        for (const [key, meta] of store) {
+            if (!key.startsWith(dir)) continue;
+            const rel = key.slice(dir.length);
+            const slash = rel.indexOf('/');
+            if (slash >= 0) {
+                // A key like "Photos/" or "Photos/holiday.jpg" both make
+                // Photos a child folder; the delimiter collapses them into a
+                // single CommonPrefix. This is also the branch that keeps a
+                // marker-only folder visible in its parent listing.
+                folders.add(dir + rel.slice(0, slash) + '/');
+            } else {
+                // A folder marker for the level being listed is NOT a file.
+                // Real S3 hides it, and the client (parseListXml) skips
+                // zero-byte trailing-slash keys anyway — emitting it would
+                // make "empty" folders list a phantom zero-byte entry.
+                if (key.endsWith('/') && meta.size === 0) continue;
+                contents.push(
+                    '<Contents>' +
+                    `<Key>${key}</Key>` +
+                    `<LastModified>${meta.lastModified}</LastModified>` +
+                    `<ETag>"${meta.etag}"</ETag>` +
+                    `<Size>${meta.size}</Size>` +
+                    '</Contents>'
+                );
+            }
+        }
+
+        return (
+            parts +
+            [...folders].map((f) => `<CommonPrefixes><Prefix>${f}</Prefix></CommonPrefixes>`).join('') +
+            contents.join('') +
+            '</ListBucketResult>'
+        );
+    };
+
     // Mock S3 ListObjectsV2
     await page.route(/https:\/\/s3\.mock\.local\/test-bucket\?list-type=2/, (route, request) => {
         const url = new URL(request.url());
         const prefix = decodeURIComponent(url.searchParams.get('prefix') || '');
-        if (prefix === 'users/demo/' || prefix === 'users%2Fdemo%2F') {
-            route.fulfill({
-                status: 200,
-                contentType: 'application/xml',
-                body:
-                    '<?xml version="1.0" encoding="UTF-8"?>' +
-                    '<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">' +
-                    '<Name>test-bucket</Name>' +
-                    '<Prefix>users/demo/</Prefix>' +
-                    '<Delimiter>/</Delimiter>' +
-                    '<CommonPrefixes><Prefix>users/demo/Projects/</Prefix></CommonPrefixes>' +
-                    '<CommonPrefixes><Prefix>users/demo/Photos/</Prefix></CommonPrefixes>' +
-                    '<Contents>' +
-                    '<Key>users/demo/report.pdf</Key>' +
-                    '<LastModified>2026-04-28T10:00:00.000Z</LastModified>' +
-                    '<ETag>"abc123"</ETag>' +
-                    '<Size>84200</Size>' +
-                    '</Contents>' +
-                    '<Contents>' +
-                    '<Key>users/demo/notes.txt</Key>' +
-                    '<LastModified>2026-04-27T08:30:00.000Z</LastModified>' +
-                    '<ETag>"def456"</ETag>' +
-                    '<Size>1240</Size>' +
-                    '</Contents>' +
-                    '<Contents>' +
-                    '<Key>users/demo/readme.md</Key>' +
-                    '<LastModified>2026-04-26T09:00:00.000Z</LastModified>' +
-                    '<ETag>"jkl012"</ETag>' +
-                    '<Size>2100</Size>' +
-                    '</Contents>' +
-                    '</ListBucketResult>'
-            });
-        } else if (prefix === 'users/demo/Projects/' || prefix === 'users%2Fdemo%2FProjects%2F') {
-            route.fulfill({
-                status: 200,
-                contentType: 'application/xml',
-                body:
-                    '<?xml version="1.0" encoding="UTF-8"?>' +
-                    '<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">' +
-                    '<Name>test-bucket</Name>' +
-                    '<Prefix>users/demo/Projects/</Prefix>' +
-                    '<Delimiter>/</Delimiter>' +
-                    '<Contents>' +
-                    '<Key>users/demo/Projects/plan.md</Key>' +
-                    '<LastModified>2026-04-25T14:00:00.000Z</LastModified>' +
-                    '<ETag>"ghi789"</ETag>' +
-                    '<Size>3500</Size>' +
-                    '</Contents>' +
-                    '</ListBucketResult>'
-            });
-        } else {
-            route.fulfill({
-                status: 200,
-                contentType: 'application/xml',
-                body:
-                    '<?xml version="1.0" encoding="UTF-8"?>' +
-                    '<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">' +
-                    '<Name>test-bucket</Name>' +
-                    '<Prefix>' + prefix + '</Prefix>' +
-                    '<Delimiter>/</Delimiter>' +
-                    '</ListBucketResult>'
-            });
-        }
+        route.fulfill({ status: 200, contentType: 'application/xml', body: listResult(prefix) });
     });
 
-    await page.route(/https:\/\/s3\.mock\.local\/test-bucket\/users\/demo\/.*/, (route) => {
-        if (route.request().method() === 'PUT') {
+    // Object GET/PUT/DELETE. PUT and DELETE mutate the store above, so the
+    // next ListObjectsV2 reflects them (delete, create-folder and upload all
+    // round-trip through here).
+    await page.route(/https:\/\/s3\.mock\.local\/test-bucket\/users\/demo\/.*/, (route, request) => {
+        const method = request.method();
+        const key = decodeURIComponent(new URL(request.url()).pathname.replace(/^\/test-bucket\//, ''));
+        if (method === 'PUT') {
+            const body = request.postDataBuffer() ?? Buffer.alloc(0);
+            store.set(key, { size: body.length, lastModified: new Date().toISOString(), etag: 'newetag' });
             route.fulfill({ status: 200, headers: { 'ETag': '"newetag"' } });
-        } else if (route.request().method() === 'DELETE') {
+        } else if (method === 'DELETE') {
+            // A folder delete targets the marker key ("Photos/"), which alone
+            // would leave the folder's children behind and let the folder
+            // reappear in the next listing. Real S3 needs a recursive delete
+            // for that, so the mock does the same.
+            if (key.endsWith('/')) {
+                for (const k of [...store.keys()]) {
+                    if (k.startsWith(key)) store.delete(k);
+                }
+            } else {
+                store.delete(key);
+            }
             route.fulfill({ status: 204 });
         } else {
-            const url = route.request().url();
+            const url = request.url();
             if (url.includes('readme.md')) {
                 route.fulfill({ status: 200, contentType: 'text/markdown', body: '# README\n\nThis is a **mock** markdown file for testing.\n\n## Features\n\n- Bullet one\n- Bullet two\n\n> A blockquote for good measure.\n\n`inline code` and a [link](https://example.com)' });
             } else if (url.includes('notes.txt')) {

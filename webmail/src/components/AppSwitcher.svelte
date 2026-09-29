@@ -16,7 +16,8 @@
     }
 </script>
 
-<div class="rail" data-testid="app-switcher" aria-label="App switcher">
+<!-- id is the target of the topbar toggle's aria-controls. -->
+<div class="rail" id="app-switcher" data-testid="app-switcher" aria-label="App switcher">
     <button
         type="button"
         class="rail-btn"

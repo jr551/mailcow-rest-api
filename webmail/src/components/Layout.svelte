@@ -1524,12 +1524,18 @@
 
 <div class="shell" data-density={settings.density} data-testid="shell">
     <header class="topbar">
+        <!-- `settings.hideSidebar === true` means the rail is COLLAPSED, so
+             the button's ACTION is "show" and its pressed state is false.
+             The old markup had aria-pressed inverted: it reported "true"
+             while the rail was hidden, which a screen reader announces as
+             "sidebar on". aria-expanded + aria-controls say it properly. -->
         <button
             type="button"
             class="btn btn-ghost sidebar-toggle"
             title={settings.hideSidebar ? 'Show sidebar' : 'Hide sidebar'}
             aria-label={settings.hideSidebar ? 'Show sidebar' : 'Hide sidebar'}
-            aria-pressed={settings.hideSidebar}
+            aria-expanded={!settings.hideSidebar}
+            aria-controls="app-switcher"
             onclick={() => setHideSidebar(!settings.hideSidebar)}
             data-testid="sidebar-toggle"
         >

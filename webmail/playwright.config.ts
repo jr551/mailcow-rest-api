@@ -30,10 +30,28 @@ export default defineConfig({
             }
         }
     ],
+    // Always build, always serve a fresh bundle.
+    //
+    // Two things made this suite lie during the v0.18-0.20 work, and both
+    // produced a green-looking run against code that was not under test:
+    //
+    //   1. `reuseExistingServer: !process.env.CI` reattached to whatever
+    //      `vite preview` was already on 5180. A preview server left behind
+    //      by an earlier session kept serving a STALE dist for hours, so a
+    //      full suite run reported failures that did not exist in the
+    //      current source, and a run could pass without exercising the code
+    //      that was just written.
+    //   2. Nothing verified the dist actually matched the source. A build
+    //      that failed, or was never re-run after an edit, was served as if
+    //      it were current.
+    //
+    // So: build first, always, and fail loudly if the build fails; never
+    // reuse a server. Costs a few seconds per run and removes a whole class
+    // of false green.
     webServer: {
-        command: 'npm run preview -- --host 127.0.0.1 --port 5180 --strictPort',
+        command: 'npm run build && npm run preview -- --host 127.0.0.1 --port 5180 --strictPort',
         url: 'http://127.0.0.1:5180/webmail/',
-        reuseExistingServer: !process.env.CI,
-        timeout: 30_000
+        reuseExistingServer: false,
+        timeout: 180_000
     }
 });

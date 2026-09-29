@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { applyMocks, login, MOCK_USER, MOCK_PASS, messages } from './fixtures';
 import { mkdirSync } from 'node:fs';
+import { addDays, addMonths, format } from 'date-fns';
 
 const SCREEN_DIR = 'test/screenshots';
 mkdirSync(SCREEN_DIR, { recursive: true });
@@ -698,6 +699,30 @@ test('Settings: Mail rules header conditions reveal the header field', async ({ 
 // localStorage. The tool-call round-trip happens inside the browser; no
 // imap-rest server endpoint is involved beyond the existing /v1/* tools.
 test('ChatBot: bubble opens panel and shows config-needed when AI is unset', async ({ page }) => {
+    // The suite fixture reports the server as AI-CONFIGURED, so the
+    // config-needed state this test exists to assert is unreachable by
+    // default: isChatConfigured() returns true off /v1/ai/config alone and
+    // the panel renders fully wired. Unconfigured has to be set up here, by
+    // answering both probes the way a server with no LLM key would.
+    await page.route('**/v1/ai/config', (route) =>
+        route.fulfill({
+            status: 404,
+            contentType: 'application/json',
+            body: JSON.stringify({ status: 404, title: 'Not Found', detail: 'AI is not configured' })
+        })
+    );
+    await page.route('**/v1/ai/capabilities', (route) =>
+        route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+                configured: false, kind: 'openai', preset: '', model: '',
+                allowClientOverride: true,
+                presets: ['mistral', 'openai', 'groq']
+            })
+        })
+    );
+
     await login(page);
     await expect(page.getByTestId('chatbot-bubble')).toBeVisible();
     await page.getByTestId('chatbot-bubble').click();
@@ -738,28 +763,57 @@ test('Calendar: create event flow POSTs to /v1/me/calendars and shows in month +
     await expect(page.getByTestId('cal-schedule-view')).toContainText('Conf Room B');
 });
 
-test('Calendar: view-switcher key bindings (3=month, 5=schedule, t=today)', async ({ page }) => {
+
+test('Calendar: view-switcher key bindings (1=month, 2=schedule, t=today)', async ({ page }) => {
     await login(page);
     await page.getByTestId('app-switch-calendar').click();
-    await page.getByTestId('cal-view-schedule').click();
-    await expect(page.getByTestId('cal-schedule-view')).toBeVisible();
-    await page.keyboard.press('3');
     await expect(page.getByTestId('cal-month-view')).toBeVisible();
+
+    // 2 → schedule.
+    await page.keyboard.press('2');
+    await expect(page.getByTestId('cal-schedule-view')).toBeVisible();
+
+    // 1 → back to month. The old binding for this was 3, and 5 for
+    // schedule, back when the switcher offered Day/Week/Year as well.
+    // Those views were never implemented, so the tabs (and therefore the
+    // shortcuts) were cut down to the two that render; CalendarApp.onKeydown
+    // and the tab tooltips are the contract now.
+    await page.keyboard.press('1');
+    await expect(page.getByTestId('cal-month-view')).toBeVisible();
+
+    // t → today. Navigate into a different month first, or resetting the
+    // cursor to the same value it already holds would assert nothing.
+    await page.getByTestId('cal-next').click();
+    await expect(page.getByTestId('cal-period')).toContainText(
+        format(addMonths(new Date(), 1), 'MMMM yyyy')
+    );
+    await page.keyboard.press('t');
+    await expect(page.getByTestId('cal-period')).toContainText(format(new Date(), 'MMMM yyyy'));
 });
 
 test('Suggest event: AI extracts an event from an email and pops the modal pre-filled', async ({ page }) => {
-    // Plant a configured LLM provider so the suggest button appears + can call out.
-    await page.addInitScript(() => {
-        localStorage.setItem('webmail.settings.v1', JSON.stringify({
-            llm: { kind: 'openai', preset: 'openai', apiKey: 'sk-test', baseUrl: 'http://mock-llm.test/v1', model: 'gpt-4o-mini' },
-            useCustomLlm: true, density: 'comfortable', listFilter: 'all'
-        }));
-    });
-
     // The suggest button now opens a 5-card picker; the LLM call returns
     // an `options` array. We pick the first one and assert the modal
     // pre-fills from that card's title + location.
-    await page.route('**/mock-llm.test/v1/chat/completions', (route) => {
+    //
+    // Route the PROVIDER PROXY, not a provider of our own. The suite
+    // fixture answers /v1/ai/config with a configured server, and every
+    // resolveBaseUrl() in the app checks capabilities.aiConfig BEFORE
+    // settings.llm — so a baseUrl planted in localStorage is dead, and the
+    // call always goes to /v1/ai/llm. Interception has to be there.
+    //
+    // The proposed dates are anchored to TODAY, not hard-coded. Schedule
+    // view only renders 60 days forward from the cursor, so a literal
+    // 2026-05-08 stopped being visible the moment that date passed and
+    // this test began failing on a date change alone, with nothing in the
+    // product having moved. A model proposing a time relative to "now" is
+    // also the realistic case — relative phrases are what the prompt
+    // tells it to resolve.
+    const at = (d: number, hhmm: string) => `${format(addDays(new Date(), d), 'yyyy-MM-dd')}T${hhmm}:00`;
+    const day = format(addDays(new Date(), 2), 'yyyy-MM-dd');
+    const other = format(addDays(new Date(), 3), 'yyyy-MM-dd');
+    const allday = format(addDays(new Date(), 4), 'yyyy-MM-dd');
+    await page.route('**/v1/ai/llm/chat/completions', (route) => {
         route.fulfill({
             status: 200,
             contentType: 'application/json',
@@ -774,15 +828,15 @@ test('Suggest event: AI extracts an event from an email and pops the modal pre-f
                                     icon: '🍽️',
                                     rationale: 'They suggested Friday lunch.',
                                     title: 'Lunch with Sam',
-                                    start: '2026-05-08T12:30:00',
-                                    end: '2026-05-08T13:30:00',
+                                    start: at(2, '12:30'),
+                                    end: at(2, '13:30'),
                                     location: 'Carlos cafe',
                                     description: "Lunch chat following Sam's reply."
                                 },
-                                { label: 'Block focus time', icon: '🛡️', title: 'Focus', start: '2026-05-08T14:00:00', end: '2026-05-08T15:00:00' },
-                                { label: 'Quick reminder',  icon: '⏰', title: 'Reminder', start: '2026-05-08T09:00:00', end: '2026-05-08T09:15:00' },
-                                { label: 'Read carefully',  icon: '🔎', title: 'Read', start: '2026-05-08T16:00:00', end: '2026-05-08T16:15:00' },
-                                { label: 'Mark as deadline', icon: '📅', title: 'Deadline', start: '2026-05-08', end: '2026-05-08', allDay: true }
+                                { label: 'Block focus time', icon: '🛡️', title: 'Focus', start: at(3, '14:00'), end: at(3, '15:00') },
+                                { label: 'Quick reminder',  icon: '⏰', title: 'Reminder', start: at(2, '09:00'), end: at(2, '09:15') },
+                                { label: 'Read carefully',  icon: '🔎', title: 'Read', start: at(3, '16:00'), end: at(3, '16:15') },
+                                { label: 'Mark as deadline', icon: '📅', title: 'Deadline', start: allday, end: allday, allDay: true }
                             ]
                         })
                     }
@@ -815,14 +869,12 @@ test('Suggest event: AI extracts an event from an email and pops the modal pre-f
 });
 
 test('ChatBot: list_calendars tool roundtrip surfaces calendar names in the answer', async ({ page }) => {
-    await page.addInitScript(() => {
-        localStorage.setItem('webmail.settings.v1', JSON.stringify({
-            llm: { kind: 'openai', preset: 'openai', apiKey: 'sk-test', baseUrl: 'http://mock-llm.test/v1', model: 'gpt-4o-mini' },
-            useCustomLlm: true, density: 'comfortable', listFilter: 'all'
-        }));
-    });
+    // Intercept the PROVIDER PROXY. The fixture reports a configured server
+    // on /v1/ai/config, and chat's resolveBaseUrl() prefers
+    // capabilities.aiConfig over settings.llm, so no baseUrl planted in
+    // localStorage is ever dialled — the call lands on /v1/ai/llm.
     let llmCallCount = 0;
-    await page.route('**/mock-llm.test/v1/chat/completions', (route) => {
+    await page.route('**/v1/ai/llm/chat/completions', (route) => {
         llmCallCount += 1;
         if (llmCallCount === 1) {
             route.fulfill({
@@ -862,17 +914,11 @@ test('ChatBot: list_calendars tool roundtrip surfaces calendar names in the answ
 });
 
 test('ChatBot: tool call loop drives /v1/me/mail-rules and renders the answer', async ({ page }) => {
-    // Plant the user's AI provider config so isChatConfigured() is true.
-    await page.addInitScript(() => {
-        localStorage.setItem('webmail.settings.v1', JSON.stringify({
-            llm: { kind: 'openai', preset: 'openai', apiKey: 'sk-test', baseUrl: 'http://mock-llm.test/v1', model: 'gpt-4o-mini' },
-            useCustomLlm: true, density: 'comfortable', listFilter: 'all'
-        }));
-    });
     // First completion: model asks to call list_mail_rules.
     // Second completion (after we feed the tool result back): model writes the final answer.
+    // Same proxy-routing constraint as the list_calendars test above.
     let llmCallCount = 0;
-    await page.route('**/mock-llm.test/v1/chat/completions', (route) => {
+    await page.route('**/v1/ai/llm/chat/completions', (route) => {
         llmCallCount += 1;
         if (llmCallCount === 1) {
             route.fulfill({
@@ -1109,13 +1155,49 @@ test('Settings: skin picker swaps the whole palette, and the accent layers over 
     await page.click('[data-testid=settings-tab-appearance]');
     await page.getByTestId('skin-custom-input').fill('#7c3aed');
 
+    // Still Gmail underneath — type and shape untouched.
+    expect(await readVar('--font-sans')).toContain('Roboto');
+
+    // The accent layer is MODE-AWARE. It used to derive one family from one
+    // lightness and apply it in both palettes, which on Gmail's dark surface
+    // produced accent TEXT at 1.41:1 — invisible — so every AI chip and
+    // accent-coloured link vanished the moment you picked a dark theme.
+    // Dark therefore re-derives two roles: --accent is the lifted BAR
+    // (l clamped to 58..74%, so #7c3aed at l=57.8% reads as a surface rather
+    // than a black hole) and --accent-text is the lighter ink that sits ON a
+    // surface. Assert both against what the layer actually produces.
+    const darkAccent = await readVar('--accent');
+    expect(darkAccent).toBe('hsl(262.1 83.3% 74.0%)');
+    const darkAccentText = await readVar('--accent-text');
+    expect(darkAccentText).toBe('hsl(262.1 83.3% 84.0%)');
+
+    // And the skin's own DARK surface survives the layer — the whole point of
+    // a layer. This assertion used to expect #ffffff, Gmail's light surface,
+    // while the test ran in dark mode where it is #292a2d.
+    expect((await readVar('--bg-surface')).toLowerCase()).toBe('#292a2d');
+
+    // Close Settings first — its overlay sits over the topbar, so the
+    // theme toggle is not clickable while the modal is open.
+    await page.getByTestId('settings-done').click();
+    await expect(page.getByTestId('settings-modal')).toHaveCount(0);
+    await page.screenshot({ path: `${SCREEN_DIR}/20-accent-layered.png`, fullPage: true });
+    // The topbar appearance control is a POPOVER, not a bare cycling
+    // button: it opens a panel with an Auto/Light/Dark radiogroup, and
+    // clicking the trigger again would just close it. The accent layer
+    // branches on the effective mode, so drive the real radio.
+    await page.getByTestId('theme-toggle').click();
+    await page.getByTestId('appearance-mode-light').click();
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+    // Flipping to light must re-derive the same hue for the light palette,
+    // and the accent must survive the mode change rather than reverting to
+    // the skin's own red. Light keeps the raw hue (only the hover/soft/text
+    // roles are re-derived), so --accent comes back as the hsl() form of the
+    // picked hex, and --accent-text as a darker step of it (l 57.8% -> 39.8%,
+    // the link-safe shade) rather than the dark palette's lifted 84%.
     expect(await readVar('--font-sans')).toContain('Roboto');
     expect((await readVar('--bg-surface')).toLowerCase()).toBe('#ffffff');
-    // The override is derived, not a raw hex, so assert on the rendered hue.
-    const layered = await readVar('--accent');
-    expect(layered).toMatch(/^(#7c3aed|hsl\(26[0-9.]+)/i);
-
-    await page.screenshot({ path: `${SCREEN_DIR}/20-accent-layered.png`, fullPage: true });
+    expect((await readVar('--accent')).toLowerCase()).toBe('hsl(262.1 83.3% 57.8%)');
+    expect((await readVar('--accent-text')).toLowerCase()).toBe('hsl(262.1 83.3% 39.8%)');
 });
 
 test('install banner appears when beforeinstallprompt fires', async ({ page }) => {
@@ -1175,7 +1257,7 @@ test('tracking email shows spy theme glow and icon', async ({ page }) => {
     await page.screenshot({ path: `${SCREEN_DIR}/14-tracking-detail-dark.png`, fullPage: true });
 });
 
-test('AI Sorted filter reorders messages by danger level with glows', async ({ page }) => {
+test('AI Sorted filter buckets humans first, then ranks by danger level with glows', async ({ page }) => {
     await page.addInitScript(() => localStorage.setItem('webmail.theme', 'dark'));
     await login(page);
     await expect(page.getByTestId('msg-list')).toBeVisible();
@@ -1183,17 +1265,28 @@ test('AI Sorted filter reorders messages by danger level with glows', async ({ p
     // Click the AI Sorted filter chip
     await page.getByTestId('filter-ai-sorted').click();
 
-    // Wait for the AI-sorted result to settle (mock is fast so strip may flash by)
-    await page.waitForTimeout(300);
-
-    // The first row should now be the invoice (uid 1000) with danger-4 glow
-    const firstRow = page.locator('.row[data-testid^="msg-row-"]').first();
-    await expect(firstRow).toHaveAttribute('data-testid', 'msg-row-1000');
-    await expect(firstRow).toHaveClass(/danger-4/);
-
-    // Verify other danger levels are present
+    // AI sort buckets by CATEGORY FIRST, relevance level second
+    // (human -> important -> info -> marketing, which is what the chip's
+    // own tooltip promises), so Sam's lunch thread outranks the invoice no
+    // matter how urgent the invoice is. This test used to expect the
+    // invoice on top, which was the old sort-by-danger-level contract.
+    //
+    // No fixed sleep: the sort is a model round-trip, and the danger class
+    // is applied from the ranking, so the class appearing IS the signal
+    // that the sort landed.
     const rows = page.locator('.row[data-testid^="msg-row-"]');
     await expect(rows).toHaveCount(4);
+
+    const firstRow = rows.first();
+    await expect(firstRow).toHaveAttribute('data-testid', 'msg-row-999');
+    await expect(firstRow).toHaveClass(/ai-cat-human/);
+
+    // The invoice is next — the top relevance in the 'important' bucket,
+    // and the only row at the top danger level, so it carries the glow.
+    const invoiceRow = rows.nth(1);
+    await expect(invoiceRow).toHaveAttribute('data-testid', 'msg-row-1000');
+    await expect(invoiceRow).toHaveClass(/danger-4/);
+    await expect(invoiceRow).toHaveClass(/ai-cat-important/);
 
     // Screenshot the AI-sorted inbox
     await page.screenshot({ path: `${SCREEN_DIR}/15-ai-sorted-dark.png`, fullPage: true });
@@ -1283,19 +1376,31 @@ test('Suggest event uses server AI config when no local key is set', async ({ pa
     await expect(page.getByTestId('cal-evt-title')).toHaveValue('Server-config lunch');
 });
 
-test('Other AI button appears with wand icon and amber styling', async ({ page }) => {
+test('Message detail exposes both AI buttons: wand "Other AI" menu and "AI tools" panel', async ({ page }) => {
     await login(page);
     await page.locator('[data-testid=msg-row-1001]').click();
     await expect(page.getByTestId('detail-subject')).toBeVisible();
 
-    // The "Other AI" button should be visible (when chat is configured via mocks)
-    const otherAiBtn = page.getByTestId('ai-btn');
+    // The wand button opens the suggested-actions MENU. It used to share
+    // ai-btn with the panel opener, which made the id ambiguous between two
+    // buttons that are both live for a configured account; it is ai-tools-btn
+    // now.
+    const otherAiBtn = page.getByTestId('ai-tools-btn');
     await expect(otherAiBtn).toBeVisible();
     await expect(otherAiBtn).toContainText('Other AI');
-
     // Verify the button uses the amber/warning class (ai-btn-other)
     const classAttr = await otherAiBtn.getAttribute('class');
     expect(classAttr).toContain('ai-btn-other');
+
+    // The other one opens the AI PANEL (Summarize / Draft / Action items /
+    // Translate) and is labelled "AI tools".
+    const aiPanelBtn = page.getByTestId('ai-btn');
+    await expect(aiPanelBtn).toBeVisible();
+    await expect(aiPanelBtn).toContainText('AI tools');
+    // And it must open a panel, not the menu — they are distinct surfaces.
+    await aiPanelBtn.click();
+    await expect(page.getByTestId('ai-panel')).toBeVisible();
+    await expect(page.getByTestId('ai-tools-pop')).toHaveCount(0);
 });
 
 test('Voice mode opens fullscreen overlay and runs conversation loop', async ({ page }) => {
@@ -1334,6 +1439,32 @@ test('Voice mode opens fullscreen overlay and runs conversation loop', async ({ 
             setTimeout(() => this.dispatchEvent(new Event('ended')), 30);
             return Promise.resolve();
         };
+        // VoiceChat will not start listening until it holds a mic stream,
+        // and its auto-submit detector only ever runs inside the
+        // AudioContext analyser interval. Playwright denies the microphone
+        // by default, so mocking Web Speech alone gives an overlay that
+        // opens and then silently never hears anything — the STT mock is
+        // never even constructed. Both halves have to be stubbed.
+        // (Everything here lives INSIDE the init script for that reason:
+        // addInitScript serialises the function, so a module-level helper
+        // would compile and then throw ReferenceError in the page.)
+        navigator.mediaDevices.getUserMedia = () =>
+            Promise.resolve({ getTracks: () => [{ stop: () => undefined }] } as unknown as MediaStream);
+        class FakeAnalyser {
+            fftSize = 1024;
+            smoothingTimeConstant = 0.6;
+            getByteTimeDomainData(a: Uint8Array) { a.fill(128); }   // flat line = silence
+            disconnect() { /* noop */ }
+        }
+        class FakeAudioContext {
+            state = 'running';
+            createAnalyser() { return new FakeAnalyser() as unknown as AnalyserNode; }
+            createMediaStreamSource() { return { connect: () => undefined } as unknown as MediaStreamAudioSourceNode; }
+            resume() { return Promise.resolve(); }
+            close() { return Promise.resolve(); }
+        }
+        (window as unknown as Record<string, unknown>).AudioContext = FakeAudioContext;
+        (window as unknown as Record<string, unknown>).webkitAudioContext = FakeAudioContext;
     });
 
     // Mock ElevenLabs TTS.
@@ -1341,8 +1472,13 @@ test('Voice mode opens fullscreen overlay and runs conversation loop', async ({ 
         route.fulfill({ status: 200, contentType: 'audio/mpeg', body: Buffer.from([]) });
     });
 
-    // Mock LLM chat completion for the voice turn.
-    await page.route('**/v1/chat/completions', (route) => {
+    // Mock LLM chat completion for the voice turn. Intercept the PROVIDER
+    // PROXY: the suite fixture reports a configured server, and chat's
+    // resolveBaseUrl() checks capabilities.aiConfig before settings.llm, so
+    // the turn goes to /v1/ai/llm rather than to any provider baseUrl. The
+    // localStorage LLM config these tests used to plant is never consulted
+    // while the server reports itself configured.
+    await page.route('**/v1/ai/llm/chat/completions', (route) => {
         route.fulfill({
             status: 200,
             contentType: 'application/json',
@@ -1352,14 +1488,6 @@ test('Voice mode opens fullscreen overlay and runs conversation loop', async ({ 
                 }]
             })
         });
-    });
-
-    // Set local LLM key so chat is configured.
-    await page.addInitScript(() => {
-        localStorage.setItem('webmail.settings.v1', JSON.stringify({
-            llm: { kind: 'openai', preset: 'openai', apiKey: 'sk-test', baseUrl: '', model: '' },
-            useCustomLlm: true, density: 'comfortable', listFilter: 'all'
-        }));
     });
 
     await login(page);
@@ -1516,7 +1644,11 @@ test('Mic auto-sends when Voice toggle is on', async ({ page }) => {
         route.fulfill({ status: 200, contentType: 'audio/mpeg', body: Buffer.from([]) });
     });
 
-    await page.route('**/v1/chat/completions', (route) => {
+    // Intercept the PROVIDER PROXY — the suite fixture reports a configured
+    // server, and chat's resolveBaseUrl() checks capabilities.aiConfig
+    // before settings.llm, so the turn goes to /v1/ai/llm and a
+    // localStorage LLM config is never consulted.
+    await page.route('**/v1/ai/llm/chat/completions', (route) => {
         route.fulfill({
             status: 200,
             contentType: 'application/json',
@@ -1529,10 +1661,6 @@ test('Mic auto-sends when Voice toggle is on', async ({ page }) => {
     });
 
     await page.addInitScript(() => {
-        localStorage.setItem('webmail.settings.v1', JSON.stringify({
-            llm: { kind: 'openai', preset: 'openai', apiKey: 'sk-test', baseUrl: '', model: '' },
-            useCustomLlm: true, density: 'comfortable', listFilter: 'all'
-        }));
         // Enable voice prefs so mic auto-sends.
         localStorage.setItem('webmail.ai.voice.v1', JSON.stringify({ enabled: true, voiceId: '21m00Tcm4TlvDq8ikWAM', speakUserToo: false }));
     });

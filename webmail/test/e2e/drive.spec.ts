@@ -62,7 +62,14 @@ test('select and delete file', async ({ page }) => {
 test('upload file via drag and drop', async ({ page }) => {
     await login(page);
     await page.getByTestId('app-switch-drive').click();
-    await expect(page.getByTestId('drive-app')).toBeVisible();
+    // Wait for the LISTING, not just the container. DriveApp renders
+    // `drive-app` on mount and only then kicks off loadDriveConfig() →
+    // loadPath(); a drop landing in that window hits uploadFiles()'s
+    // `if (!cfg) return` guard and silently vanishes — no tray, no request.
+    // Real users cannot drop onto an unlisted folder, so synchronising on
+    // `drive-grid` is what the test means, and it makes the run deterministic
+    // instead of racing an async config fetch.
+    await expect(page.getByTestId('drive-grid')).toBeVisible({ timeout: 10_000 });
     // Create a DataTransfer with a mock file
     const dataTransfer = await page.evaluateHandle(() => {
         const dt = new DataTransfer();

@@ -466,7 +466,18 @@
         gap: 8px;
         z-index: 10;
     }
+    /* `position: static` is load-bearing, not decorative. app.css defines a
+       GLOBAL `.fab` (the single compose button: position fixed, right/bottom
+       16px, z-index 50) and DriveView is its only user. Specificity ties on
+       the class name and the global sheet is loaded after this scoped block,
+       so it won: both of DriveView's FABs were laid out by the global rule at
+       the same fixed right/bottom corner, rendered exactly on top of each
+       other, and the upload FAB (later sibling, so painted last) swallowed
+       every tap meant for the new-folder FAB. Restoring `static` puts the two
+       back in the .fab-group column flow, which is the whole reason the
+       group exists. */
     .fab {
+        position: static;
         width: 56px;
         height: 56px;
         border-radius: 50%;

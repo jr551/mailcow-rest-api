@@ -237,7 +237,15 @@ function load(): Settings {
                 weatherUnits: parsed.weatherUnits === 'fahrenheit' ? 'fahrenheit' : 'celsius',
                 calendarTicker: !!parsed.calendarTicker,
                 calendarTickerTitles: !!parsed.calendarTickerTitles,
-                hideSidebar: parsed.hideSidebar !== false
+                // The app rail (Mail / Calendar / AI / Drive) is VISIBLE by
+                // default. This line read `parsed.hideSidebar !== false`,
+                // which defaults to TRUE — and since commit c7ef6fc "true"
+                // also means "the rail is collapsed" (it stopped targeting
+                // the folder pane and started targeting <AppSwitcher />), so
+                // the rail shipped HIDDEN for every user. Default to shown;
+                // a user who explicitly collapsed it still has `true` stored
+                // and keeps the collapsed rail.
+                hideSidebar: parsed.hideSidebar === true
             };
             // Sanitise the blob on the way past, not just the object we
             // return, so the stale field can't come back via settings-sync.
@@ -287,7 +295,9 @@ function load(): Settings {
         weatherUnits: 'celsius',
         calendarTicker: false,
         calendarTickerTitles: false,
-        hideSidebar: true
+        // Rail VISIBLE on a fresh profile. See the load() comment: `true`
+        // means collapsed, so defaulting it true hid the app rail.
+        hideSidebar: false
     };
 }
 
