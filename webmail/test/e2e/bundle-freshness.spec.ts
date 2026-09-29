@@ -53,6 +53,13 @@ test('the served bundle is newer than the source it was built from', () => {
 });
 
 test('the app shell loads and the service worker does not intercept', async ({ page }) => {
+    // Load the app for real. Without this navigation the test ran against
+    // about:blank, where `navigator.serviceWorker` is undefined — so the
+    // assertion below passed even if the bundle never booted, which is the
+    // opposite of what the name promises.
+    await page.goto('/');
+    await expect(page.locator('#app'), 'the SPA must mount into #app').not.toBeEmpty();
+
     // If the service worker were live it would answer /v1/* itself and the
     // page.route() mocks in fixtures.ts would never fire, which reads as
     // "the app ignores the mock" rather than "the SW is intercepting".

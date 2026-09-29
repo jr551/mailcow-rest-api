@@ -160,6 +160,175 @@ test('dark palettes are dark, and their borders are visible against them', () =>
     assert.deepEqual(failures, [], `dark palettes that would not read:\n  ${failures.join('\n  ')}`);
 });
 
+// --- Dark palettes are a LAYER STACK, not a list of greys ------------------
+//
+// Every contrast test above measures against --bg-surface alone. That was
+// adequate while a dark palette was a single flat grey, and it stopped being
+// adequate the moment dark mode grew a stack: the shipped Gmail dark palette
+// had a --text-tertiary of #9aa0a6 that cleared 5.43:1 on --bg-surface and
+// still failed AA on --bg-active (3.96:1), --bg-selected (3.72:1) and
+// --bg-tag (3.96:1) — three sub-AA surfaces the suite never once measured.
+// So these tests assert the STRUCTURE: that the dark surfaces form an
+// ordered stack, that no two of them collapse onto one hex, and that each
+// ink holds AA on every layer rather than only the one the suite used to
+// look at.
+
+// The layers a dark surface can occupy, in the order they are painted. The
+// page is the canvas; everything else is a step above it.
+const DARK_LAYERS = [
+    '--bg-base', '--bg-surface', '--bg-surface-alt', '--bg-input',
+    '--bg-elevated', '--bg-hover', '--bg-active', '--bg-tag'
+];
+
+// The pairs that MUST be ordered relative to each other, because each one is
+// painted on top of another. --bg-selected is excluded on purpose: it is a
+// tinted slab, so it is compared by separation below rather than by
+// lightness, since a selection is meant to read by hue.
+const MUST_CLIMB = [
+    ['--bg-input', '--bg-elevated'],
+    ['--bg-elevated', '--bg-hover'],
+    ['--bg-hover', '--bg-active'],
+    ['--bg-active', '--bg-tag']
+];
+
+test('dark surface layers are distinct, and the interaction states climb', () => {
+    for (const skin of palettes().filter((p) => p.mode === 'dark')) {
+        // (1) No two semantically different surfaces may share a hex. The
+        // shipped Outlook dark palette had --bg-base === --bg-surface and
+        // --bg-elevated === --bg-selected, which is what made the list
+        // indistinguishable from the page behind it.
+        const seen = new Map();
+        for (const layer of DARK_LAYERS) {
+            const value = skin[layer];
+            if (!value) continue;
+            const prior = seen.get(value);
+            if (prior) {
+                assert.fail(
+                    `${skin.id} dark: ${layer} and ${prior} are both ${value} — two different`
+                    + ' layers sharing one hex is exactly the collapse this stack exists to prevent'
+                );
+            }
+            seen.set(value, layer);
+        }
+        // (2) Every adjacent pair on the ladder must be a real step, and
+        // specifically must not go BACKWARDS. The old Outlook palette had
+        // --bg-hover (#2a2a2a) darker than --bg-elevated (#2b2b2b), so
+        // hovering a row inside a popover made it sink.
+        for (const [lower, upper] of MUST_CLIMB) {
+            const lo = skin[lower];
+            const hi = skin[upper];
+            if (!lo || !hi) continue;
+            assert.ok(
+                relativeLuminance(hi) > relativeLuminance(lo),
+                `${skin.id} dark: ${upper} ${hi} is not a step above ${lower} ${lo}`
+            );
+        }
+        // (3) An input must sit ABOVE the surface it is drawn on, with its
+        // own border. The old Outlook value (#1b1b1b) was darker than its
+        // own page, so every field read as a hole punched in the layout.
+        for (const host of ['--bg-base', '--bg-surface', '--bg-surface-alt']) {
+            const h = skin[host];
+            if (!h) continue;
+            assert.ok(
+                relativeLuminance(skin['--bg-input']) > relativeLuminance(h),
+                `${skin.id} dark: --bg-input ${skin['--bg-input']} is not above ${host} ${h}`
+            );
+        }
+        // (4) A selection has to be visibly a selection. It is a tinted slab,
+        // so brightness alone is the wrong measure — what matters is that it
+        // separates from the surfaces it can be drawn on, whether by step or
+        // by hue. A flat grey that merely matched --bg-elevated, as the old
+        // Outlook value did, fails on both counts.
+        for (const host of ['--bg-base', '--bg-surface', '--bg-surface-alt', '--bg-input']) {
+            const h = skin[host];
+            if (!h) continue;
+            assert.ok(
+                contrastRatio(skin['--bg-selected'], h) >= 1.08,
+                `${skin.id} dark: --bg-selected ${skin['--bg-selected']} is indistinguishable from`
+                + ` ${host} ${h} (${contrastRatio(skin['--bg-selected'], h).toFixed(2)}:1)`
+            );
+        }
+        // (5) The borders have to separate the surfaces they draw on, and
+        // they have to stay on their own ordered ramp rather than
+        // collapsing to one tone.
+        for (const border of ['--border-subtle', '--border-soft', '--border-strong']) {
+            const b = skin[border];
+            if (!b) continue;
+            assert.ok(
+                relativeLuminance(b) > relativeLuminance(skin['--bg-input']),
+                `${skin.id} dark: ${border} ${b} is not above --bg-input ${skin['--bg-input']},`
+                + ' so an input has no visible edge'
+            );
+        }
+        const ramp = ['--border-subtle', '--border-soft', '--border-strong']
+            .map((b) => skin[b])
+            .filter(Boolean);
+        for (let i = 1; i < ramp.length; i++) {
+            assert.ok(
+                relativeLuminance(ramp[i]) > relativeLuminance(ramp[i - 1]),
+                `${skin.id} dark: the border ramp is not ordered (${ramp[i - 1]} then ${ramp[i]})`
+            );
+        }
+        assert.equal(new Set(ramp).size, ramp.length, `${skin.id} dark: two border steps share a hex`);
+    }
+});
+
+test('dark text holds AA on EVERY layer, not just --bg-surface', () => {
+    // The regression this is here for: Gmail's dark --text-tertiary of
+    // #9aa0a6 measured 5.43:1 on --bg-surface and failed on three other
+    // layers the suite never looked at. A layered palette has to be audited
+    // layer by layer, because the ink that is fine on a page is not
+    // necessarily fine on a tag pill.
+    const failures = [];
+    for (const skin of palettes().filter((p) => p.mode === 'dark')) {
+        for (const layer of DARK_LAYERS) {
+            const bg = skin[layer];
+            if (!bg) continue;
+            for (const ink of ['--text-primary', '--text-secondary', '--text-tertiary']) {
+                const color = skin[ink];
+                if (!color) continue;
+                const ratio = contrastRatio(color, bg);
+                if (ratio < 4.5) {
+                    failures.push(`${skin.id} dark ${ink} ${color} on ${layer} ${bg} = ${ratio.toFixed(2)}:1`);
+                }
+            }
+        }
+    }
+    assert.deepEqual(failures, [], `dark text below AA on some layer:\n  ${failures.join('\n  ')}`);
+});
+
+test('the Gmail dark inversion holds, and the two skins are genuinely different palettes', () => {
+    // Gmail's dark theme INVERTS the light palette's page/list relationship:
+    // the page is the dark canvas and the message list is a step LIGHTER on
+    // it. Outlook does the opposite — a card-style list on a darker page — so
+    // the same token means the opposite thing on the two skins, and both are
+    // correct. That relationship lives in a comment today, which is exactly
+    // the kind of thing a re-tune silently inverts. Assert it instead.
+    const dark = palettes().filter((p) => p.mode === 'dark');
+    const outlook = dark.find((p) => p.id === 'outlook');
+    const gmail = dark.find((p) => p.id === 'gmail');
+    assert.ok(outlook && gmail, 'expected both shipped skins to declare a dark palette');
+
+    // Gmail: the list is a step lighter than the page it sits on.
+    assert.ok(
+        relativeLuminance(gmail['--bg-surface']) > relativeLuminance(gmail['--bg-base']),
+        `gmail dark: --bg-surface ${gmail['--bg-surface']} must be LIGHTER than the page`
+        + ` --bg-base ${gmail['--bg-base']} — the inversion is the whole point of Gmail's dark theme`
+    );
+    // Outlook: the page is the darker of the two, the card-style list is above it.
+    assert.ok(
+        relativeLuminance(outlook['--bg-base']) < relativeLuminance(outlook['--bg-surface']),
+        `outlook dark: --bg-base ${outlook['--bg-base']} must be the page, below the list surface`
+        + ` ${outlook['--bg-surface']}`
+    );
+    // The two skins must not ship the same ladder, or "Gmail dark" is Outlook
+    // dark with a different name.
+    assert.notEqual(
+        outlook['--bg-surface'], gmail['--bg-surface'],
+        'both dark skins ship the same --bg-surface'
+    );
+});
+
 // --- The accent palette ---------------------------------------------------
 //
 // The skins above are checked as shipped. The ACCENT LAYER on top of them is

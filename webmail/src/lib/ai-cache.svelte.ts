@@ -173,17 +173,3 @@ export async function cachedChatCompletion(opts: CachedChatCompletionOpts): Prom
     maybeEvict(hour);
     return { ok: res.ok, status: res.status, text, cached: false };
 }
-
-/** Drop every cached entry. Exposed for Settings → Clear caches. */
-export function clearAiCache(): number {
-    let dropped = 0;
-    try {
-        const keys: string[] = [];
-        for (let i = 0; i < localStorage.length; i++) {
-            const k = localStorage.key(i);
-            if (k && k.startsWith(PREFIX)) keys.push(k);
-        }
-        for (const k of keys) { localStorage.removeItem(k); dropped++; }
-    } catch { /* */ }
-    return dropped;
-}

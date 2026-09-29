@@ -94,8 +94,11 @@ export const SKINS: Skin[] = [
                     background: var(--accent) !important;
                     border-bottom: 1px solid var(--accent-hover) !important;
                 }
-                .topbar .brand-mark { color: var(--text-on-accent) !important; }
-                .topbar .brand-sub { color: color-mix(in srgb, var(--text-on-accent) 75%, transparent) !important; }
+                /* OWA's own wordmark is a quiet watermark, not a heading, so
+                 * the brand ink sits at 78% rather than full white. */
+                .topbar .brand-mark {
+                    color: color-mix(in srgb, var(--text-on-accent) 78%, transparent) !important;
+                }
                 .topbar .logo { background: color-mix(in srgb, var(--text-on-accent) 18%, transparent) !important; }
                 /* The command bar paints from --accent, so its ink has to
                  * follow --text-on-accent rather than being pinned to
@@ -144,6 +147,29 @@ export const SKINS: Skin[] = [
                     margin-left: 4px;
                 }
                 .topbar .brand-user-emoji { font-size: 14px; }
+
+                /* The latency slot is a fixed-width box on the accent bar, so
+                 * the chip's own white-ish pill would read as a second field.
+                 * OWA puts its status indicator straight on the chrome.
+                 *
+                 * Plain descendant selectors, deliberately: this block is
+                 * injected as raw text via styleEl.textContent, so it never
+                 * passes through Svelte's CSS pipeline, so a :global()
+                 * pseudo here is emitted literally and matches nothing. */
+                .topbar .latency-slot .lat-chip,
+                .topbar .latency-slot .server-ping {
+                    /* Measured, not eyeballed. The original was a 14% white
+                     * wash, which put its own text at 3.10:1 against itself
+                     * and 1.25:1 against the bar, so the ms figure read as a
+                     * smudge. A chip this small is TEXT first: it needs a
+                     * real light-on-dark pairing, not a tint of the surface
+                     * behind it. Opaque near-white fill with near-black ink
+                     * lands ~13:1 on either skin and still reads as a chip,
+                     * because of the border and the rounded silhouette. */
+                    background: var(--text-on-accent) !important;
+                    border-color: color-mix(in srgb, var(--text-on-accent) 55%, var(--accent)) !important;
+                    color: #16181d !important;
+                }
 
                 /* OWA's topbar carries no ambient chips — weather and the
                  * calendar ticker stay hidden under this skin even when the
@@ -235,38 +261,80 @@ export const SKINS: Skin[] = [
             '--pill-padding': '2px 8px'
         },
 
-        // Fluent dark. The command bar stays the communication blue — OWA's
-        // dark theme does not neutralise it — and every neutral steps onto
-        // Fluent's neutralLighter ramp. Surfaces sit a hair ABOVE black
-        // rather than at it: pure black reads as an "OLED gimmick" instead
-        // of Fluent, and on a near-black pane a dark hairline is invisible,
-        // so the borders have to do the separating.
+        // Fluent dark, rebuilt as an ordered stack of layers. The command bar
+        // stays the communication blue — OWA's dark theme does not neutralise
+        // it — and every neutral steps onto a cool blue-leaning ramp: Fluent's
+        // dark neutrals are never truly neutral, they sit a few points blue.
+        //
+        // The ramp is a LADDER, not a list of greys, and the order is the whole
+        // point. The old set repeated one grey: base and surface were the same
+        // hex, so the list and the page behind it were the same colour;
+        // selected and elevated were the same hex, so a selected row and a
+        // popover were the same colour; hover (#2a2a2a) was DARKER than the
+        // elevated surface it sits on; and the input was darker than the page,
+        // which read as a hole punched in the layout. Read the top to bottom
+        // and each entry is a step further from the glass:
+        //
+        //   base          the page itself, the darkest layer, and the only
+        //                 thing allowed to touch the viewport edge
+        //   surface       panels, the message list — one step above the page
+        //   surface-alt   wells, striped rows, alternate header bands
+        //   input         form fields, which must sit ABOVE the surface they
+        //                 are drawn on, with their own border
+        //   elevated      popovers, menus, toasts, the search suggestion tray
+        //   hover         the wash on a resting row or button
+        //   active        one step past hover, so a press reads as a press
+        //   selected      tinted, so selection reads by HUE as well as depth
+        //   tag           count pills and small badges; the topmost neutral
+        //
+        // Steps are kept to roughly 6-8 sRGB levels, which is enough to see on
+        // a near-black pane and small enough to leave headroom: every ink
+        // below clears 4.5:1 on EVERY one of those eight surfaces, which is
+        // what forces the text ramp to be brighter than OWA's own (#a19f9d
+        // cannot survive a tag pill). Nothing here is pure black either —
+        // the darkest layer keeps its blue so it reads as Fluent rather than
+        // as an OLED gimmick.
         //
         // No accent or semantic tokens: those are the user's layer.
         darkVars: {
-            '--bg-base': '#1f1f1f',
-            '--bg-surface': '#1f1f1f',
-            '--bg-surface-alt': '#252525',
-            '--bg-elevated': '#2b2b2b',
-            '--bg-hover': '#2a2a2a',
-            '--bg-active': '#323232',
-            '--bg-selected': '#2b2b2b',
+            '--bg-base': '#17191f',
+            '--bg-surface': '#1e2027',
+            '--bg-surface-alt': '#252831',
+            '--bg-input': '#2c2f39',
+            '--bg-elevated': '#33363f',
+            '--bg-hover': '#3a3e48',
+            '--bg-active': '#424650',
+            // Lifted far enough to separate from every surface a selected row
+            // can actually be painted on — the list (#1e2027), a striped row
+            // or calendar header band (#252831) and an input (#2c2f39) — not
+            // just from the one the list happens to use. A selection that
+            // only reads on the default row background is a selection that
+            // disappears the moment a table is striped.
+            '--bg-selected': '#20375f',
             '--bg-overlay': 'rgba(0, 0, 0, 0.62)',
-            '--bg-input': '#1b1b1b',
-            '--bg-tag': '#2d2d2d',
+            '--bg-tag': '#484c56',
 
             '--text-primary': '#f3f2f1',
             '--text-secondary': '#d2d0ce',
-            '--text-tertiary': '#a19f9d',
+            // Lighter than OWA's own #a19f9d. That value clears AA on the
+            // page but not on a tag pill or a pressed button, and the whole
+            // ramp has to clear AA on every surface in the stack, not just
+            // the one the subject line happens to sit on.
+            '--text-tertiary': '#c2c0be',
             '--text-on-accent': '#ffffff',
             // OWA dark uses the lighter communication blue for links so they
             // clear AA on the dark pane.
             '--text-link': '#6cb2f7',
 
-            // Dark borders go LIGHTER than the surface, not darker.
-            '--border-subtle': '#2d2d2d',
-            '--border-soft': '#3b3a39',
-            '--border-strong': '#57534f',
+            // Dark borders go LIGHTER than the surfaces they draw, not
+            // darker — a dark hairline on a dark pane is invisible, so on this
+            // skin the borders are what separate a card from the page behind
+            // it. They run on their own three-step ramp, each a clear step
+            // above the one before and all of them above --bg-input, so an
+            // input is never a lighter slab with a border you cannot see.
+            '--border-subtle': '#34373f',
+            '--border-soft': '#41454f',
+            '--border-strong': '#585d68',
             // Outlook couples the focus ring to the accent; darkVars leaves
             // it to the accent layer so a re-tinted bar keeps a matching ring.
             '--border-focus': '#0078d4',
@@ -308,11 +376,14 @@ export const SKINS: Skin[] = [
                 .topbar .theme-toggle:hover { background: var(--bg-hover) !important; }
 
                 /* Gmail's search field is a soft-grey rounded box — the one
-                 * rounded shape in the whole header. */
+                 * rounded shape in the whole header. The radius moves from
+                 * --radius-md to a full pill so the field keeps the same
+                 * silhouette as it does under the Outlook skin; the skin
+                 * difference is the fill, not the shape. */
                 .topbar .search-wrap {
                     background: var(--bg-hover) !important;
                     border: 1px solid var(--border-soft) !important;
-                    border-radius: var(--radius-md) !important;
+                    border-radius: 999px !important;
                     padding: 0 16px !important;
                 }
                 .topbar .search-wrap:focus-within {
@@ -491,45 +562,75 @@ export const SKINS: Skin[] = [
             '--pill-padding': '4px 12px'
         },
 
-        // Material dark. Gmail's dark theme inverts the relationship between
-        // the list and the page: the page goes to the DARK grey (#202124) and
-        // the message list stays a step LIGHTER (#292a2d), so rows read as
-        // cards on a darker canvas — the light palette's white-on-grey,
-        // inverted. Google's dark greys are also genuinely desaturated, not
-        // just dimmed.
+        // Material dark, rebuilt as an ordered stack of layers. Gmail's dark
+        // theme INVERTS the relationship between the list and the page, and
+        // that inversion is correct and stays: the page is the dark grey
+        // canvas and the message list is a step LIGHTER, so rows read as
+        // cards on a darker background — the light palette's white-on-grey,
+        // turned over. Google's dark greys are genuinely desaturated rather
+        // than merely dimmed, so this ramp is near-true-grey.
+        //
+        // Everything else is layered like Outlook's, because the old set
+        // repeated one grey: base and surface-alt were the same hex,
+        // surface and input were the same hex, and hover (#303134) sat
+        // DARKER than the surface it washes, so hovering a row made it sink.
+        // active and tag were also the same hex. The order below is the
+        // order a surface is painted in, and it is inverted only for the two
+        // that genuinely are: base and surface-alt are the canvas underneath
+        // the list, everything else climbs from there.
+        //
+        //   base          the page, the dark canvas
+        //   surface       the message list, a step above the page
+        //   surface-alt   the canvas again — used where the list itself wants
+        //                 a sunken well, so it belongs UNDER surface
+        //   input         form fields: above the surface they are drawn on
+        //   elevated      menus, dialogs, the topmost card
+        //   hover         the wash on a resting row
+        //   active        one step past hover, so a press reads as a press
+        //   selected      a desaturated blue, not the pale #d3e3fd of light
+        //   tag           count pills; the topmost neutral
+        //
+        // As on Outlook, every ink clears 4.5:1 on all of those surfaces,
+        // which is what lifts --text-tertiary off Google's #9aa0a6.
         //
         // No accent or semantic tokens: those are the user's layer. The
         // Compose button keeps its own red in extras.css, which is where
         // Gmail's dark Compose actually lives too.
         darkVars: {
-            '--bg-base': '#202124',
-            '--bg-surface': '#292a2d',
-            '--bg-surface-alt': '#202124',
-            '--bg-elevated': '#35363a',
-            '--bg-hover': '#303134',
-            '--bg-active': '#3c4043',
+            '--bg-base': '#191a1c',
+            '--bg-surface': '#25272a',
+            '--bg-surface-alt': '#1e1f22',
+            '--bg-input': '#2c2f33',
+            '--bg-elevated': '#333639',
+            '--bg-hover': '#3b3f44',
+            '--bg-active': '#444950',
             // Gmail's dark selection is a desaturated blue, not the pale
-            // #D3E3FD of the light theme.
-            '--bg-selected': '#394457',
+            // #D3E3FD of the light theme, and it is lifted clear of the list
+            // surface so a selected row reads at a glance.
+            '--bg-selected': '#27385a',
             '--bg-overlay': 'rgba(0, 0, 0, 0.7)',
-            '--bg-input': '#292a2d',
-            '--bg-tag': '#3c4043',
+            '--bg-tag': '#4a4f57',
 
             '--text-primary': '#e3e3e3',
             '--text-secondary': '#bdc1c6',
-            '--text-tertiary': '#9aa0a6',
+            // Google's #9aa0a6 clears AA on the page but not on a tag pill or
+            // a pressed button; the ramp has to hold everywhere, not only on
+            // the one surface the timestamp happens to sit on.
+            '--text-tertiary': '#c3c8ce',
             '--text-on-accent': '#ffffff',
             // Google lightens its link blue for dark; #8ab4f8 is their own
-            // dark-theme link colour and clears AA on both #202124 and
-            // #292a2d.
+            // dark-theme link colour and clears AA on every surface in the
+            // stack above.
             '--text-link': '#8ab4f8',
 
-            // Material dark dividers are lighter than the surface, for the
-            // same reason: a dark hairline on a dark pane is invisible.
-            '--border-subtle': '#3c4043',
-            '--border-soft': '#4a4d51',
-            '--border-strong': '#5f6368',
-            '--border-focus': '#ea4335',
+            // Material dark dividers are lighter than the surfaces they draw
+            // on, for the same reason as everywhere else in dark: a dark
+            // hairline on a dark pane is invisible. Google's own greys came
+            // from the light theme and were too dark to separate anything
+            // here, so all three steps are re-cut above --bg-input.
+            '--border-subtle': '#43484d',
+            '--border-soft': '#4e545b',
+            '--border-strong': '#666b72',
 
             // Material dark elevations: a stronger ambient with almost no
             // directional key light, so depth comes from the overlay rather
@@ -576,8 +677,9 @@ function hslAccent(hex: string): { h: number; s: number; l: number; str: string 
 
 // The ink a label uses when it sits ON the accent fill. Not black and not
 // white by convention — the accent layer measures both against the fill it
-// actually produced and takes the winner, because the ten shipped swatches
-// span l=26 (#0f766e) to l=56 (#ea4335) and no single constant wins them all.
+// actually produced and takes the winner, because the fourteen shipped
+// swatches span l=26 (#0f766e) to l=56 (#ea4335) and no single constant wins
+// them all.
 const ACCENT_INK = '#141414';
 
 // WCAG 2.x relative luminance / contrast, used to pick that ink. Deliberately
@@ -668,7 +770,7 @@ function accentOverrideVars(accentHex: string): Record<string, string> | null {
     const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
     // The ink for a label that sits ON the accent fill — a button, Outlook's
     // command bar. Chosen by measurement rather than by convention: white is
-    // right for nine of the ten shipped swatches, but on Gmail red it is
+    // right for thirteen of the fourteen shipped swatches, but on Gmail red it is
     // 3.92:1, and a near-black ink is 4.70:1 on the same fill. Both skins
     // default --text-on-accent to white, so this only diverges where it has to.
     const onAccent = (fill: string) =>
@@ -687,7 +789,7 @@ function accentOverrideVars(accentHex: string): Record<string, string> | null {
     }
 
     // 58..74 keeps a mid-blue bar from washing out to a pastel slab while
-    // still lifting a near-black one (Pine's #0f766e, l=26) into range.
+    // still lifting a near-black one (the teal swatch's #0f766e, l=26) into range.
     const barL = clamp(l + 20, 58, 74);
     const bar = `hsl(${h.toFixed(1)} ${s.toFixed(1)}% ${f(barL)})`;
     return {

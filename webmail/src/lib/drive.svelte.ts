@@ -142,14 +142,6 @@ export function toggleSelect(path: string) {
     state.selected = next;
 }
 
-export function clearSelection() {
-    state.selected = new Set();
-}
-
-export function selectAll() {
-    state.selected = new Set(state.items.map((i) => i.path));
-}
-
 export async function createFolder(name: string): Promise<void> {
     const cfg = getConfig();
     const user = authState.activeUser;

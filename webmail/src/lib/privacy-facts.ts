@@ -59,11 +59,11 @@ export interface PrivacySummary {
 // calendar-suggest.ts:41, folder-prefs.svelte.ts:164). The fallback branches
 // all end at a preset host (e.g. https://api.mistral.ai/v1,
 // inbox-summary.ts:50-57) or the user's own base URL.
-export function isViaServerProxy(): boolean {
+function isViaServerProxy(): boolean {
     return !!capabilities.aiConfig?.configured;
 }
 
-export function providerDestination(): string {
+function providerDestination(): string {
     if (capabilities.aiConfig?.configured) {
         // routes/ai.js:460-467 — the model is resolved server-side and the
         // baseUrl is the relative prefix `/v1/ai/llm` (:465, :248), so the
@@ -141,6 +141,39 @@ export function privacySummary(): PrivacySummary {
     };
 
     const facts: PrivacyFact[] = [credentials, scan, briefing, chat, clientRedaction];
+
+    // Remote images. These are the claims behind the Settings → Privacy
+    // image panel, and they are stated in the UI's own terms: images always
+    // load, and the proxy is what changes WHO fetches them. The limit is
+    // stated in the same breath as the benefit, because the benefit on its
+    // own reads as "your mail is private", which it is not — see the
+    // `image-proxy-limit` fact below.
+    const imageRouting: PrivacyFact = {
+        id: 'image-routing',
+        claim: settings.proxyImages
+            ? 'Images in your messages are fetched through this server, so the sender’s image host '
+            + 'never sees your IP address, browser, or connection time. It can still see that a '
+            + 'request was made for that image.'
+            : 'Images in your messages are fetched directly by your browser, so the sender’s image '
+            + 'host sees your IP address. Turn the privacy proxy back on in Settings → Privacy.',
+        source: 'webmail/src/lib/settings.svelte.ts (proxyImages); src/routes/image-proxy.js:149-150'
+    };
+
+    // The honest limit, and the one most likely to be assumed away because
+    // the panel above sounds reassuring. A tracking pixel served through the
+    // proxy still reaches the sender's origin and still records that this
+    // mailbox requested it, when. The 24h cache-control WIDENS that record's
+    // usefulness rather than narrowing it — a stale read is as good a signal
+    // as a live one — so "proxied" must never be paraphrased as "private".
+    const imageProxyLimit: PrivacyFact = {
+        id: 'image-proxy-limit',
+        claim: 'The proxy hides who fetched an image, not that you read the message. A tracking '
+            + 'pixel still reaches the sender and still records the open. Proxied images are also '
+            + 'cached here for 24 hours, and each account has a daily image allowance.',
+        source: 'src/routes/image-proxy.js:190,193,234,150'
+    };
+
+    facts.push(imageRouting, imageProxyLimit);
 
     if (proxied) {
         // The server scrubber. Gated on LLM_SCRUB_SECRETS (config.js:210,

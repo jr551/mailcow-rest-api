@@ -231,16 +231,6 @@ export function removeSession(user: string) {
     if (!filtered.length) clearPerm();
 }
 
-// Drop everything (sign-out all accounts).
-export function clearAll() {
-    state.sessions = [];
-    state.activeUser = null;
-    state.error = null;
-    state.expiringSoon = false;
-    persist(state);
-    clearPerm();
-}
-
 export function switchTo(user: string) {
     if (state.sessions.find((s) => s.user === user)) {
         state.activeUser = user;
@@ -445,28 +435,6 @@ export async function logoutRemote(): Promise<void> {
             headers: { authorization: bearerHeader(session) }
         });
     } catch { /* server may not implement; ignore */ }
-}
-
-// Probe the active session.
-export async function probeSession(): Promise<number | null> {
-    const session = getSession();
-    if (!session) return null;
-    try {
-        const res = await fetch(apiUrl('/v1/auth/session'), {
-            headers: { authorization: bearerHeader(session) }
-        });
-        if (!res.ok) return null;
-        const data = await res.json();
-        const expiresAt = typeof data.expiresAt === 'string'
-            ? new Date(data.expiresAt).getTime()
-            : Number(data.expiresAt);
-        if (Number.isFinite(expiresAt) && expiresAt !== session.expiresAt) {
-            upsertSession({ ...session, expiresAt });
-        }
-        return expiresAt;
-    } catch {
-        return null;
-    }
 }
 
 const SOON_MS = 5 * 60 * 1000;

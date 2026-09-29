@@ -162,6 +162,38 @@ const listMessagesQuerySchema = {
     }
 };
 
+// Bulk delete. `uids` is the exact set to expunge; `sender` is the
+// rspamd `blacklist_from` pattern whose matches should be found server-side
+// instead. Exactly one of the two must be supplied, and the two are
+// mutually exclusive because a caller that supplies both has two different
+// ideas of what it wants gone and silently taking one of them is how mail
+// gets deleted that the user meant to keep.
+//
+// `uids` is capped at 1000: the IMAP UID EXPUNGE is a single command over
+// a mailbox, and a mailbox that large is better paged by the client than
+// deleted blind in one request that can time out halfway with no report.
+const bulkDeleteMessagesBodySchema = {
+    type: 'object',
+    additionalProperties: false,
+    minProperties: 1,
+    properties: {
+        uids: {
+            type: 'array',
+            maxItems: 1000,
+            items: { type: 'integer', minimum: 1 }
+        },
+        sender: { type: 'string', minLength: 3, maxLength: 320 },
+        // Count only — run the search, expunge nothing.
+        //
+        // This exists because the confirmation the user reads MUST name a
+        // count, and the only honest way to know it is to run the same
+        // search the delete runs. Asking the delete itself for the count
+        // would expunge before the user has confirmed, which is the one
+        // thing a destructive action must never do.
+        dryRun: { type: 'boolean', default: false }
+    }
+};
+
 const problemSchema = {
     type: 'object',
     properties: {
@@ -173,16 +205,14 @@ const problemSchema = {
 };
 
 module.exports = {
-    addressSchema,
-    envelopeSchema,
     mailboxSchema,
     messageListItemSchema,
     messageDetailSchema,
-    attachmentRefSchema,
     flagsOpSchema,
     moveOpSchema,
     createMailboxSchema,
     renameMailboxSchema,
     listMessagesQuerySchema,
-    problemSchema
+    problemSchema,
+    bulkDeleteMessagesBodySchema
 };

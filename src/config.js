@@ -234,6 +234,16 @@ module.exports = Object.freeze({
         braveSearchApiKey: process.env.BRAVE_SEARCH_API_KEY || ''
     },
 
+    // VirusTotal URL reputation, for the webmail's "check before you click"
+    // prompt. The key is held here and never leaves the process: the route
+    // attaches it server-side and the browser only ever sees a verdict.
+    // Unset (the default) is a supported state, not a misconfiguration —
+    // the route answers 501 and Settings explains that link checking is
+    // unavailable rather than the UI pretending every link is fine.
+    virustotal: {
+        apiKey: process.env.VIRUSTOTAL_API_KEY || ''
+    },
+
     webmail: {
         enabled: bool(process.env.WEBMAIL_ENABLED, true),
         distPath: process.env.WEBMAIL_DIST || './webmail/dist'

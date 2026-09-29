@@ -305,10 +305,20 @@ test('rule created from the context menu is listed in Settings', async ({ page }
     await page.screenshot({ path: `${SCREEN_DIR}/20-rule-from-message.png`, fullPage: true });
 });
 
-test('Escape closes the rule dialog', async ({ page }) => {
+test('Escape closes the rule dialog without tearing down the reading pane', async ({ page }) => {
     await login(page);
+    // Open a message FIRST. The dialog's Escape handler is capture-phase
+    // precisely because Layout's document-level handler used to run first and
+    // close the reading pane as well as the dialog. With nothing selected
+    // there is nothing for that race to destroy, so the test would pass even
+    // if the handler regressed to the bubble phase.
+    await page.click('[data-testid=msg-row-1001]');
+    await expect(page.getByTestId('detail-subject')).toBeVisible();
+
     await openRuleDialog(page);
     await expect(page.getByTestId('rule-future-only-note')).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(page.getByTestId('rule-from-message-dialog')).toHaveCount(0);
+    // One Escape, one dismissal: the message behind the dialog survives.
+    await expect(page.getByTestId('detail-subject')).toBeVisible();
 });

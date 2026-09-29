@@ -149,15 +149,6 @@ class B2Client {
         return res;
     }
 
-    async deleteKey(applicationKeyId) {
-        const auth = await this.authorize();
-        return this._request(`${auth.apiUrl}/b2api/v3/b2_delete_key`, {
-            method: 'POST',
-            headers: { authorization: auth.authorizationToken },
-            body: { applicationKeyId }
-        });
-    }
-
     async listFileNames(bucketId, prefix = '', startFileName = '', maxFileCount = 1000) {
         const auth = await this.authorize();
         return this._request(`${auth.apiUrl}/b2api/v3/b2_list_file_names`, {

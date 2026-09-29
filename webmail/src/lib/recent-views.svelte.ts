@@ -27,8 +27,6 @@ export interface RecentView {
 
 const state = $state<{ items: RecentView[] }>({ items: [] });
 
-export const recentViews = state;
-
 /** Append a view, trimming to MAX_VIEWS. Drops back-to-back duplicates of the
  *  same (kind, title) so e.g. a re-render of the same message doesn't fill
  *  the buffer with noise. */
@@ -64,8 +62,4 @@ function humanAgo(ts: number): string {
     const h = Math.round(m / 60);
     if (h < 24) return `${h}h ago`;
     return `${Math.round(h / 24)}d ago`;
-}
-
-export function clearRecentViews(): void {
-    state.items = [];
 }

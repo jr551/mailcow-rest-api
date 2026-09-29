@@ -137,4 +137,8 @@ async function deliverOutbound({
     }
 }
 
-module.exports = { deliverOutbound, deliveryHeaders, sign, REPLY_CAP };
+module.exports = {
+    deliverOutbound,
+    deliveryHeaders,
+    sign
+};

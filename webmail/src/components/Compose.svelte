@@ -1,7 +1,7 @@
 <script lang="ts">
     import { onMount } from 'svelte';
     import { ui, showToast } from '../lib/store.svelte';
-    import { sendStub, getSendFromAddresses, ApiError } from '../lib/api';
+    import { sendStub, getSendFromAddresses, draftReply, ApiError } from '../lib/api';
     import { authState } from '../lib/auth.svelte';
     import { formatAddress, formatFullDate } from '../lib/format';
     import { smtpAvailable, settings, setDisplayName, pickFromName } from '../lib/settings.svelte';
@@ -271,6 +271,11 @@
 
     let subject = $state(buildSubject());
     let body = $state(buildBodyHtml());
+    // Handle into the Tiptap instance. Compose's `body` binding is
+    // write-only as far as the editor is concerned (RichEditor only pushes
+    // HTML out via onUpdate), so anything that needs to put text INTO the
+    // document has to go through this.
+    let editorApi: { insertHtml?: (html: string) => void } = $state({});
 
     // Empty-subject AI assist: when the user hits Send with no subject, we
     // ask the model for one and show it inline (purple) with Use / Edit /
@@ -338,7 +343,6 @@
 
     // Pre-send AI check. Held back from sending so the user gets one
     // tap to consider the suggestion. Shift+Send bypasses entirely.
-    let preCheckRunning = $state(false);
     let preCheckSuggestion = $state<string | null>(null);
     let preCheckRationale = $state('');
     let preCheckBypass = $state(false);
@@ -356,6 +360,167 @@
     let reviewLoading = $state(false);
     let subjectOptions = $state<string[]>([]);
     let chosenSubjectIdx = $state<number | null>(null);
+
+    // ─── AI reply suggestion ────────────────────────────────────────────
+    //
+    // Opening a Reply asks the model for a starting paragraph and shows it
+    // in a strip above the editor. Three properties matter, and each one
+    // is load-bearing:
+    //
+    // 1. IT NEVER BLOCKS. The request is fired from a timer in onMount,
+    //    after the window is already on screen and interactive. Nothing is
+    //    awaited before render, no field is disabled, and the user can
+    //    type, edit and send the whole time it runs. If the model is slow
+    //    the user simply never sees the strip.
+    //
+    // 2. IT IS BOUND TO THE WINDOW. One AbortController, aborted on
+    //    unmount and whenever a fresh request supersedes the old one.
+    //    Closing the compose mid-generation cancels the HTTP request
+    //    rather than leaving it to finish into a component that no longer
+    //    exists — which would spend tokens and, worse, write into a dead
+    //    $state proxy.
+    //
+    // 3. IT IS SUBORDINATE TO THE MASTER SWITCH. `replySuggestEligible()`
+    //    re-checks settings.aiFeatures on every call, and an $effect
+    //    aborts + hides in flight if the user flips AI off while Compose is
+    //    open. aiSuggestReply only ever narrows the feature further; it
+    //    can never widen it.
+    let replySuggest = $state<string | null>(null);
+    let replySuggestLoading = $state(false);
+    let replySuggestError = $state<string | null>(null);
+    // Epoch of the last request we actually let out. A response from a
+    // superseded request is dropped rather than shown, so two overlapping
+    // generations can't race each other into the strip.
+    let replySuggestSeq = 0;
+    let replySuggestAbort: AbortController | null = null;
+    // Regenerate is a button a thumb can find with the mouse, so it needs
+    // the same guard the outbound-webhook test-send uses: one request in
+    // flight, and a short cooldown between them. Hammering this spends
+    // real tokens per click and tells the user nothing — the model has no
+    // notion of "try again harder".
+    const REGEN_COOLDOWN_MS = 4000;
+    let lastReplySuggestAt = 0;
+
+    /** Every gate, in one place, re-evaluated on each call. */
+    function replySuggestEligible(): boolean {
+        return (replyMode === 'reply' || replyMode === 'replyAll')
+            && !!replyTo
+            && settings.aiFeatures
+            && settings.aiSuggestReply
+            && aiAvailable();
+    }
+
+    /** Kill whatever is running. Safe to call when nothing is. */
+    function abortReplySuggest() {
+        if (replySuggestAbort) {
+            replySuggestAbort.abort();
+            replySuggestAbort = null;
+        }
+        replySuggestLoading = false;
+    }
+
+    /** The original message as the model should see it: headers plus the
+     *  plain-text body. Same shape the AI panel's Draft button sends, so
+     *  the model gets a thread it already knows how to reply to. */
+    function threadForAi(): string {
+        if (!replyTo) return '';
+        const env = replyTo.envelope;
+        const headers = [
+            `From: ${env.from?.[0]?.name || ''} <${env.from?.[0]?.address || ''}>`,
+            env.subject ? `Subject: ${env.subject}` : '',
+            env.date ? `Date: ${env.date}` : ''
+        ].filter(Boolean).join('\n');
+        const text = replyTo.text || htmlToPlainText(replyTo.html || '');
+        return `${headers}\n\n${text}`;
+    }
+
+    async function requestReplySuggest(opts: { regen: boolean }) {
+        if (!replySuggestEligible()) return;
+        if (replySuggestLoading) return;
+        if (opts.regen) {
+            const since = Date.now() - lastReplySuggestAt;
+            if (since < REGEN_COOLDOWN_MS) return;
+        }
+        abortReplySuggest();
+        lastReplySuggestAt = Date.now();
+        const seq = ++replySuggestSeq;
+        const controller = new AbortController();
+        replySuggestAbort = controller;
+        replySuggestLoading = true;
+        replySuggestError = null;
+        if (opts.regen) replySuggest = null;   // don't leave stale text under a spinner
+        try {
+            const r = await draftReply(threadForAi(), undefined, { signal: controller.signal });
+            // Dropped if the user closed the window, hit refresh, or turned
+            // AI off while this was in the air.
+            if (seq !== replySuggestSeq || controller.signal.aborted) return;
+            const text = (r.content || '').trim();
+            if (!text) {
+                replySuggestError = 'No suggestion came back — carry on.';
+            } else {
+                replySuggest = text;
+            }
+        } catch (err) {
+            if (controller.signal.aborted || seq !== replySuggestSeq) return;
+            // An aborted fetch throws a DOMException; anything else is a
+            // real failure worth a quiet one-liner. Not an error dialog:
+            // the user never asked for this, so it must not interrupt.
+            replySuggestError = err instanceof ApiError
+                ? (err.detail || err.title)
+                : 'Couldn\'t draft a reply — carry on.';
+        } finally {
+            if (seq === replySuggestSeq) {
+                replySuggestLoading = false;
+                if (replySuggestAbort === controller) replySuggestAbort = null;
+            }
+        }
+    }
+
+    /**
+     * Accept the suggestion by INSERTING it above whatever the user has
+     * already written, never by replacing the body.
+     *
+     * A reply is a document the user is already in the middle of typing
+     * — the whole point of the feature being async is that they start
+     * typing while the model thinks. Overwriting the body at that moment
+     * would destroy their words to install the model's, which is the
+     * single most infuriating thing this strip could do. Appending keeps
+     * both, and the user edits the seam: their paragraph first, the
+     * model's opening after it, in that order, which is also the order
+     * they read.
+     */
+    function acceptReplySuggest() {
+        const text = replySuggest;
+        if (!text) return;
+        abortReplySuggest();
+        const para = text.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean)
+            .map((p) => `<p>${p.replace(/\n/g, '<br>')}</p>`).join('');
+        // Route through Tiptap, not `body = ...`. The bound variable is
+        // only read by RichEditor on mount, so writing to it from here
+        // updates the state and the visible document never — and the next
+        // keystroke reverts it. A blank paragraph first so the suggestion
+        // doesn't butt against the last word the user typed.
+        if (editorApi.insertHtml) editorApi.insertHtml(`<p></p>${para}`);
+        else body = `${body}<p></p>${para}`;
+        replySuggest = null;
+        replySuggestError = null;
+    }
+
+    function dismissReplySuggest() {
+        abortReplySuggest();
+        replySuggest = null;
+        replySuggestError = null;
+    }
+
+    // The hard-off can be flipped while this window is open. Abort, hide,
+    // and never re-fire: the master switch is the privacy control and a
+    // feature added after it was written must not become a way around it.
+    $effect(() => {
+        if (settings.aiFeatures) return;
+        abortReplySuggest();
+        replySuggest = null;
+        replySuggestError = null;
+    });
 
     function pickPrimaryAddress(toField: string): string | null {
         const first = (toField || '').split(',')[0].trim();
@@ -440,6 +605,19 @@
     let fromMatched = $state(false);
     let toGlow = $state(false);
 
+    // The friendly name to show next to the From address. Reuses
+    // pickFromName — the exact helper doSend() uses for the From header —
+    // rather than re-deriving a name here, so what the user sees on this
+    // row and what the recipient sees in the header cannot drift apart.
+    // It already prefers the saved displayName and falls back to a
+    // tidied local-part ("john.rowe" → "John Rowe"); when even that is
+    // empty we render nothing and the bare address stands alone.
+    //
+    // Depends on `from` so it tracks the address as the user edits or
+    // picks an alias, and on settings.displayName so editing the name in
+    // Settings updates this row live.
+    let fromName = $derived(pickFromName(from) ?? '');
+
     onMount(async () => {
         // Pull a pending attachment handed in from PdfViewer (or any
         // other surface that wants to start a reply with a file).
@@ -473,6 +651,24 @@
             toGlow = true;
             setTimeout(() => { toGlow = false; }, 2400);
         }
+    });
+
+    onMount(() => {
+        // Fire the reply suggestion only after this window is up. A
+        // setTimeout(0) rather than a bare call at the top of onMount:
+        // onMount already awaits getSendFromAddresses above, and a
+        // suggestion request queued behind that would sit invisible for
+        // as long as the alias lookup takes. Scheduling it as its own
+        // macrotask keeps it off the critical path of first paint and of
+        // the user's first keystroke either way.
+        const t = setTimeout(() => { void requestReplySuggest({ regen: false }); }, 0);
+        return () => {
+            clearTimeout(t);
+            // Unmount is the abort signal. Closing or abandoning the
+            // window cancels the request in flight; nothing is written
+            // back into a component that no longer exists.
+            abortReplySuggest();
+        };
     });
 
     const title = replyMode === 'forward' ? 'Forward'
@@ -673,10 +869,26 @@
     >
         <!-- From is a single address line in OWA. The display name and the
              catch-all domain chips are secondary controls, so they moved
-             into the Advanced popover rather than sitting on this row. -->
+             into the Advanced popover rather than sitting on this row.
+
+             The friendly name IS shown here, as a chip beside the address,
+             because picking the wrong identity on the one row that decides
+             who the mail appears to come from is a real mistake — "which of
+             my six aliases is this?" is much easier to answer when your name
+             is on screen. It is a SIBLING of the input, never part of its
+             value: the input stays a bare type="email" bound to the
+             address, which is exactly what doSend() sends and what
+             pickFromName() keys off. Putting "John Rowe <a@b>" into the
+             field instead would break the send (the server wants an
+             address) and would defeat the alias picker. -->
         <div class="hdr-row from-row">
             <span class="hdr-lbl">From</span>
             <div class="from-pair">
+                {#if fromName}
+                    <span class="from-name" title={`Sending as ${fromName}`} data-testid="compose-from-name-display">
+                        {fromName}
+                    </span>
+                {/if}
                 <input
                     type="email"
                     bind:value={from}
@@ -962,6 +1174,81 @@
             </div>
         {/if}
 
+        <!-- AI reply suggestion.
+
+             Sits between the recipient block and the editor, in the same
+             slot the history panel uses, because that is where the user
+             is already looking when they open a reply. Deliberately a
+             strip and not a modal: the model call is something the user
+             never asked for, and a modal would put a dialog between them
+             and a reply they were about to write.
+
+             The loading state reads as ordinary work in progress — a
+             spinner beside a quiet label, accent-coloured, no red, no
+             warning icon. The one thing this must never look like is a
+             failure, because at this point the user has done nothing
+             wrong and cannot act on it.
+
+             Gated on settings.aiFeatures in the template as well as in
+             requestReplySuggest: the render guard and the request guard
+             are deliberately both present. The request guard alone would
+             be enough for privacy, but a strip left on screen after the
+             master switch flips would be a lie about the app's state. -->
+        {#if settings.aiFeatures && (replySuggestLoading || replySuggest || replySuggestError)}
+            <div class="draft-sugg" role="status" aria-live="polite" data-testid="compose-reply-suggest">
+                <Icon name="sparkles" size={12} />
+                {#if replySuggestLoading}
+                    <span class="draft-sugg-text muted">
+                        Drafting a reply you can keep or throw away…
+                    </span>
+                    <span class="spinner small"></span>
+                    <button
+                        type="button"
+                        class="draft-sugg-btn"
+                        onclick={dismissReplySuggest}
+                        title="Dismiss"
+                        data-testid="compose-reply-suggest-cancel"
+                    ><Icon name="close" size={11} /></button>
+                {:else if replySuggest}
+                    <span class="draft-sugg-text" data-testid="compose-reply-suggest-text">
+                        {replySuggest}
+                    </span>
+                    <button
+                        type="button"
+                        class="draft-sugg-btn accept"
+                        onclick={acceptReplySuggest}
+                        title="Add this to your reply"
+                        data-testid="compose-reply-suggest-accept"
+                    >Use</button>
+                    <button
+                        type="button"
+                        class="draft-sugg-btn"
+                        onclick={() => void requestReplySuggest({ regen: true })}
+                        title="Try another wording"
+                        aria-label="Suggest another reply"
+                        data-testid="compose-reply-suggest-regen"
+                    ><Icon name="refresh" size={11} /></button>
+                    <button
+                        type="button"
+                        class="draft-sugg-btn"
+                        onclick={dismissReplySuggest}
+                        title="Discard this suggestion"
+                        aria-label="Discard reply suggestion"
+                        data-testid="compose-reply-suggest-dismiss"
+                    ><Icon name="close" size={11} /></button>
+                {:else}
+                    <span class="draft-sugg-text muted">{replySuggestError}</span>
+                    <button
+                        type="button"
+                        class="draft-sugg-btn"
+                        onclick={dismissReplySuggest}
+                        title="Dismiss"
+                        data-testid="compose-reply-suggest-cancel"
+                    ><Icon name="close" size={11} /></button>
+                {/if}
+            </div>
+        {/if}
+
         <div
             class="body"
             class:reply-mode={replyMode === 'reply' || replyMode === 'replyAll'}
@@ -981,6 +1268,7 @@
         >
             <RichEditor
                 bind:html={body}
+                api={editorApi}
                 ghostPlaceholder={replyMode === 'reply' || replyMode === 'replyAll'}
                 placeholder={replyMode === 'forward' ? 'Add a note above the forwarded message…'
                     : (replyMode === 'reply' || replyMode === 'replyAll')
@@ -1244,7 +1532,23 @@
         user-select: none;
     }
     .from-row { align-items: center; }
-    .from-pair { flex: 1; min-width: 0; display: flex; }
+    .from-pair { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 6px; }
+    /* The friendly name, shown before the address on the From row. Sized
+       down from the address because it is the label, not the value — the
+       address stays the thing you read first. flex: 0 0 auto so a long
+       name can never squeeze the input; the row is wide and the name is
+       short, but a display name is user-supplied and a 40-character one
+       must not eat the field. */
+    .from-name {
+        flex: 0 0 auto;
+        max-width: 45%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text-secondary);
+    }
     .from-pair input {
         flex: 1;
         min-width: 0;
@@ -1458,6 +1762,61 @@
         cursor: pointer;
     }
     .history-dismiss:hover { background: var(--bg-hover); color: var(--text-primary); }
+    /* AI reply suggestion. A quieter sibling of .subj-sugg: same slot in
+       the compose chrome, but the text is a paragraph rather than a
+       one-line subject, so it is clamped to two lines instead of
+       ellipsised — a suggestion you cannot read is a suggestion you
+       cannot judge. Accent-tinted, not purple: the purple subject strip
+       is a different feature, and two purple strips stacked in one
+       window reads as a bug. Colours are theme variables so both skins
+       inherit their own palette rather than a hard-coded hex. */
+    .draft-sugg {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        margin: 6px 14px 8px;
+        padding: 8px 10px 8px 12px;
+        background: color-mix(in srgb, var(--accent) 6%, var(--bg-surface));
+        border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border-subtle));
+        border-radius: 10px;
+        font-size: 12.5px;
+        line-height: 1.45;
+        color: var(--text-primary);
+    }
+    .draft-sugg :global(svg) { flex-shrink: 0; margin-top: 2px; color: var(--accent-text); }
+    .draft-sugg-text {
+        flex: 1;
+        min-width: 0;
+        white-space: pre-wrap;
+        overflow: hidden;
+        display: -webkit-box;
+        -webkit-line-clamp: 3;
+        line-clamp: 3;
+        -webkit-box-orient: vertical;
+    }
+    .draft-sugg-btn {
+        flex-shrink: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 22px;
+        height: 22px;
+        padding: 0 6px;
+        border-radius: var(--radius-xs);
+        border: 1px solid var(--border-subtle);
+        background: var(--bg-surface);
+        color: var(--text-tertiary);
+        font-size: 11.5px;
+        font-weight: 600;
+        cursor: pointer;
+    }
+    .draft-sugg-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+    .draft-sugg-btn.accept {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: var(--bg-base);
+    }
+    .draft-sugg-btn.accept:hover { filter: brightness(1.06); }
     .spinner.small { width: 12px; height: 12px; border-width: 2px; }
     /* Pre-send modal — sits over the compose pane. Held back from
        scary phishing-overlay treatment because it's just a friendly
@@ -1644,24 +2003,6 @@
     }
     @media (prefers-reduced-motion: reduce) {
         .body.reply-mode :global(.rich-editor) { animation: none; }
-    }
-    .body-fallback {
-        flex: 1;
-        min-height: 240px;
-        padding: 14px 16px;
-        font-family: var(--font-sans);
-        font-size: 14.5px;
-        line-height: 1.6;
-        background: var(--bg-base);
-        border: 1px solid var(--border-subtle);
-        border-radius: var(--radius-sm);
-        color: var(--text-primary);
-        resize: none;
-    }
-    .body-fallback:focus {
-        outline: none;
-        border-color: var(--border-focus);
-        box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
     }
     /* Action bar. OWA separates the composer's switches from its primary
      * pair with a rule and a lot of space, so Send keeps the eye. */

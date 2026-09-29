@@ -460,4 +460,6 @@ function createOutboundWebhookForwarder({
     return { start, stop, tick, processWebhook, buildPayload, buildSentRecord };
 }
 
-module.exports = { createOutboundWebhookForwarder, SENT_FOLDER };
+module.exports = {
+    createOutboundWebhookForwarder
+};

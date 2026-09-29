@@ -117,29 +117,85 @@
         };
     });
 
-    // Drag from header
-    let dragStart = { x: 0, y: 0, panelX: 0, panelY: 0 };
+    // Drag from header — and, when the gesture turns out to be a TAP rather
+    // than a drag, a minimise/restore.
+    //
+    // Why the click is resolved in the pointer sequence instead of via
+    // onclick: the header is already the drag handle, so a pointerup after
+    // a real drag lands on exactly the same element an onclick would fire
+    // for. An onclick would therefore minimise the panel at the end of
+    // every drag — the user drags the compose window somewhere and it
+    // vanishes. The alternative (a separate click listener) has the same
+    // problem. So the gesture itself is classified by one threshold: a
+    // pointer that goes down and up without ever exceeding CLICK_SLOP_PX
+    // of movement is a tap, and a tap minimises.
+    //
+    // CLICK_SLOP_PX is 3px: enough to absorb the jitter of a real click
+    // (a hand never lands a pointer in exactly the same pixel twice) and
+    // far below what a deliberate drag travels, so the two readings are
+    // disjoint by construction — a gesture under the threshold never moves
+    // the panel, so it cannot also have been a drag.
+    const CLICK_SLOP_PX = 3;
+
+    let dragStart = { x: 0, y: 0, panelX: 0, panelY: 0, moved: false };
+    // Armed when a pointer went down on the header in a state where no drag
+    // is possible (maximised, or minimised) — there is no movement to
+    // distinguish from a tap, so the pointerup is taken at face value. This
+    // is what lets a click restore a minimised panel, where dragging is
+    // disabled outright.
+    let armedAsTap = false;
+
+    function isInteractiveTarget(target: EventTarget | null): boolean {
+        return !!(target as HTMLElement | null)?.closest?.('button, input, a, select, textarea, [role="button"]');
+    }
+
     function onDragStart(e: PointerEvent) {
-        if (geo.maximized || geo.minimized) return;
-        // Don't initiate drag from interactive elements inside the header.
-        const target = e.target as HTMLElement;
-        if (target.closest('button, input, a')) return;
+        // A control inside the header owns its own click, so it arms
+        // NOTHING: the header's tap-to-minimise must not also run, or
+        // clicking Close would minimise the panel on its way out and
+        // clicking Minimise would toggle it straight back open. This is
+        // what keeps the header's own buttons working normally instead of
+        // being swallowed by the minimise gesture.
+        if (isInteractiveTarget(e.target)) { armedAsTap = false; return; }
+        armedAsTap = geo.maximized || geo.minimized;
+        if (armedAsTap) return;
         dragging = true;
-        dragStart = { x: e.clientX, y: e.clientY, panelX: geo.x, panelY: geo.y };
-        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+        dragStart = { x: e.clientX, y: e.clientY, panelX: geo.x, panelY: geo.y, moved: false };
+        try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* noop */ }
         e.preventDefault();
     }
     function onDragMove(e: PointerEvent) {
         if (!dragging) return;
-        geo.x = dragStart.panelX + (e.clientX - dragStart.x);
-        geo.y = dragStart.panelY + (e.clientY - dragStart.y);
+        const dx = e.clientX - dragStart.x;
+        const dy = e.clientY - dragStart.y;
+        // Once past CLICK_SLOP_PX the gesture is a drag, full stop: the
+        // panel follows the pointer and the matching pointerup must not
+        // also count as a tap. Below it nothing has moved yet, so the
+        // gesture is still eligible to be a click.
+        if (!dragStart.moved && Math.hypot(dx, dy) < CLICK_SLOP_PX) return;
+        dragStart.moved = true;
+        geo.x = dragStart.panelX + dx;
+        geo.y = dragStart.panelY + dy;
         clampToViewport();
     }
+    // Suppresses the dblclick-maximise for a moment after a tap, so that
+    // double clicking the header (a natural way to ask for "minimise this")
+    // does not instead fire the Windows-convention maximise. Cleared on a
+    // timer because no dblclick ever arrives to clear it.
+    let tapSuppressUntil = 0;
+
     function onDragEnd(e: PointerEvent) {
-        if (!dragging) return;
-        dragging = false;
-        try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch { /* noop */ }
-        persist();
+        // A tap is a pointerup with no movement past the threshold. Only
+        // a tap minimises; a drag persists the new position as before.
+        const wasTap = dragging ? !dragStart.moved : armedAsTap;
+        if (dragging) {
+            dragging = false;
+            try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch { /* noop */ }
+        }
+        armedAsTap = false;
+        if (!wasTap) { persist(); return; }
+        tapSuppressUntil = performance.now() + 500;
+        toggleMinimize();
     }
 
     // Resize from bottom-right corner
@@ -197,6 +253,9 @@
     }
 </script>
 
+<!-- Escape closes the panel, but never while it is minimised: a minimised
+     panel is a title bar the user deliberately parked, and the only thing
+     they can do with it is restore or close it deliberately. -->
 <svelte:window onkeydown={(e) => { if (e.key === 'Escape' && !geo.minimized) close(); }} />
 
 <div
@@ -208,13 +267,35 @@
     style={styleString()}
     data-testid={testId}
 >
+    <!-- The header carries pointer handlers (drag, and tap-to-minimise), so
+         the a11y linter requires a role. It is deliberately NOT a tab stop:
+         the minimise button in .head-actions is the keyboard route, and a
+         second focusable stop doing the same thing would only be noise in
+         the tab order. 'banner' describes it honestly — a titled region at
+         the top of the dialog that groups the window controls — and unlike
+         'toolbar' or 'button' it does not demand a tabindex.
+
+         tabindex="-1" (present, not omitted) keeps the header
+         programmatically focusable so assistive tech can still land on it,
+         while leaving it out of the sequential tab order. -->
     <header
         class="head"
+        role="presentation"
+        aria-label={`${title} window controls`}
+        tabindex="-1"
         onpointerdown={onDragStart}
         onpointermove={onDragMove}
         onpointerup={onDragEnd}
         onpointercancel={onDragEnd}
-        ondblclick={() => !geo.minimized && toggleMaximize()}
+        ondblclick={() => {
+            if (geo.minimized) return;
+            // A dblclick that arrived straight after a tap is the user's
+            // second click on "minimise", not a request to maximise. The
+            // window closes that tap. Time-based rather than a flag the
+            // dblclick clears, because no dblclick follows a single tap.
+            if (performance.now() < tapSuppressUntil) return;
+            toggleMaximize();
+        }}
         data-testid={`${testId}-header`}
     >
         <h2>{title}</h2>

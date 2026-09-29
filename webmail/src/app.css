@@ -69,28 +69,47 @@
 
 :root[data-theme='dark'] {
     color-scheme: dark;
-    /* Dark palette — tuned for WCAG-AA on body text + sidebar icons.
-     * Card surfaces sit one step above the page so they have visible edges. */
-    --bg-base: #121317;
-    --bg-surface: #1c1e24;
-    --bg-surface-alt: #20232a;
-    --bg-elevated: #232730;
-    --bg-hover: #262a33;
-    --bg-active: #2d323d;
-    --bg-selected: #1c2f45;
+    /* Dark palette — an ordered stack of layers, not a list of greys.
+     *
+     * These are the values the login screen and the first paint render with,
+     * before a shipped skin writes its own palette over them inline on
+     * <html>, so they have to stand on their own rather than as placeholders.
+     * The order below is the order a surface is painted in, and each step is
+     * roughly 7-9 sRGB levels above the one beneath — visible on a near-black
+     * pane, small enough to leave contrast headroom. The previous set
+     * collapsed that structure: base and the darkest greys were within four
+     * levels of each other, and --bg-input (#14161b) sat BELOW the page, so
+     * every form field read as a hole rather than a control.
+     *
+     * Every ink below clears 4.5:1 on all eight surfaces, which is what
+     * lifts --text-tertiary off the #8b93a0 that could not survive a tag
+     * pill. The .topbar .search-wrap rule further down keeps its own white
+     * field and is deliberately NOT tokenised — Outlook-on-the-web does that
+     * in dark too, and swapping it to --bg-input collapses it from 15.52:1
+     * to 1.11:1. */
+    --bg-base: #141619;
+    --bg-surface: #1c1f24;
+    --bg-surface-alt: #23262c;
+    --bg-input: #2a2e35;
+    --bg-elevated: #31353d;
+    --bg-hover: #383c45;
+    --bg-active: #40454f;
+    --bg-selected: #1b2c4c;
     --bg-overlay: rgba(0, 0, 0, 0.62);
-    --bg-input: #14161b;
-    --bg-tag: #262a33;
+    --bg-tag: #464b56;
 
     --text-primary: #ebedf3;
-    --text-secondary: #b4bac4;   /* was #aeb4be — bumped for sidebar legibility */
-    --text-tertiary: #8b93a0;    /* was #7e8693 — bumped */
+    --text-secondary: #b4bac4;
+    --text-tertiary: #bcc3cd;   /* was #8b93a0 — clears AA on the tag pill too */
     --text-on-accent: #ffffff;
     --text-link: #95b5f7;
 
-    --border-subtle: #2a2e38;
-    --border-soft: #353a45;
-    --border-strong: #495060;
+    /* Dark borders go LIGHTER than the surfaces they draw, not darker: a dark
+     * hairline on a dark pane is invisible. All three steps sit above
+     * --bg-input, so a form field keeps a visible edge against its own fill. */
+    --border-subtle: #2f333a;
+    --border-soft: #3b4048;
+    --border-strong: #4e545e;
     --border-focus: #6cb2f7;
 
     --accent: #6cb2f7;
@@ -117,25 +136,29 @@
 @media (prefers-color-scheme: dark) {
     :root[data-theme='auto'] {
         color-scheme: dark;
-        --bg-base: #121317;
-        --bg-surface: #1c1e24;
-        --bg-surface-alt: #20232a;
-        --bg-elevated: #232730;
-        --bg-hover: #262a33;
-        --bg-active: #2d323d;
-        --bg-selected: #1c2f45;
+        /* Must stay token-for-token in step with the :root[data-theme='dark']
+         * block above — it is the same palette reached by a different route
+         * ('auto' with a dark OS). A token listed in one and not the other
+         * silently changes meaning when the user flips the OS setting, which
+         * is exactly the class of bug the ladder above exists to prevent. */
+        --bg-base: #141619;
+        --bg-surface: #1c1f24;
+        --bg-surface-alt: #23262c;
+        --bg-input: #2a2e35;
+        --bg-elevated: #31353d;
+        --bg-hover: #383c45;
+        --bg-active: #40454f;
+        --bg-selected: #1b2c4c;
         --bg-overlay: rgba(0, 0, 0, 0.62);
-        --bg-input: #14161b;
-        --bg-tag: #262a33;
+        --bg-tag: #464b56;
         --text-primary: #ebedf3;
         --text-secondary: #b4bac4;
-        --text-tertiary: #8b93a0;
+        --text-tertiary: #bcc3cd;
         --text-on-accent: #ffffff;
-        --text-link: #6cb2f7;
-        --border-subtle: #2a2e38;
-        --border-soft: #353a45;
-        --border-strong: #495060;
-        --border-focus: #6cb2f7;
+        --text-link: #95b5f7;
+        --border-subtle: #2f333a;
+        --border-soft: #3b4048;
+        --border-strong: #4e545e;
         --accent: #6cb2f7;
         --accent-hover: #8ab4f8;
         --accent-soft: #1b2a3a;

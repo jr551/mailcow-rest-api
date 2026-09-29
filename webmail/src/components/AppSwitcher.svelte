@@ -1,6 +1,6 @@
 <script lang="ts">
-    // Thin left rail that flips the top-level surface between Mail and
-    // Calendar. Sits flush against the existing sidebar.
+    // Thin left rail that flips the top-level surface between Mail,
+    // Calendar, AI and Drive. Sits flush against the existing sidebar.
     import { ui } from '../lib/store.svelte';
     import { recordView } from '../lib/recent-views.svelte';
     import { settings } from '../lib/settings.svelte';

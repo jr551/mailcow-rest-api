@@ -104,10 +104,6 @@ export function forgetCreds(user: string) {
     writeVault(readVault().filter((e) => e.user !== user));
 }
 
-export function forgetAllCreds() {
-    writeVault([]);
-}
-
 export function rememberedUsers(): string[] {
     return readVault().map((e) => e.user);
 }

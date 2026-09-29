@@ -18,7 +18,7 @@ const RETRY_INTERVAL_MS = 30_000;
 /** Race a fetch of /health against a 2s timeout. Resolves true if /health
  *  returned 2xx within the budget, false otherwise (timeout or network
  *  error). Never throws. */
-export async function probeReachable(timeoutMs = PROBE_TIMEOUT_MS): Promise<boolean> {
+async function probeReachable(timeoutMs = PROBE_TIMEOUT_MS): Promise<boolean> {
     if (typeof fetch === 'undefined') return true;
     const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
     const timer = setTimeout(() => ctrl?.abort(), timeoutMs);

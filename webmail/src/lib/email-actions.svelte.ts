@@ -1,7 +1,7 @@
-// Generate 5 contextual AI actions for the currently-open email. Calls
-// the user's LLM directly (browser → provider) — same path as the chat
-// bot, no server roundtrip. Each action returns a `prompt` you can drop
-// into a new AI thread.
+// Generate 3 contextual AI actions for the currently-open email. Same
+// endpoint resolution as the chat bot: the server's same-origin proxy when
+// the server has AI configured, otherwise the user's provider directly.
+// Each action returns a `prompt` you can drop into a new AI thread.
 
 import { settings, capabilities, aiAuthKey } from './settings.svelte';
 

@@ -54,17 +54,6 @@ export function trustImagesFromSender(email: string, days = 30) {
     write(v);
 }
 
-export function forgetImagesFromSender(email: string) {
-    if (!email) return;
-    const v = read();
-    delete v[key(email)];
-    write(v);
-}
-
-export function clearImageTrust() {
-    try { localStorage.removeItem(STORAGE_KEY); } catch { /* noop */ }
-}
-
 // Quick heuristic — does the HTML reference any remote image source? We
 // can't load the iframe just to check; doing it on the raw HTML is good
 // enough for the gate. False positives just mean we show the prompt;

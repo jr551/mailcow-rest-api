@@ -176,25 +176,3 @@ export async function putThumb(
         });
     } catch { /* noop */ }
 }
-
-export async function clearUser(user: string): Promise<void> {
-    if (typeof indexedDB === 'undefined') return;
-    try {
-        const db = await openDb();
-        for (const storeName of [TREE_STORE, THUMB_STORE]) {
-            await new Promise<void>((resolve) => {
-                const tx = db.transaction(storeName, 'readwrite');
-                const store = tx.objectStore(storeName);
-                const req = store.openCursor();
-                req.onsuccess = (e) => {
-                    const cur = (e.target as IDBRequest<IDBCursorWithValue | null>).result;
-                    if (!cur) return resolve();
-                    const row = cur.value as { user: string };
-                    if (row.user === user) cur.delete();
-                    cur.continue();
-                };
-                tx.onerror = () => resolve();
-            });
-        }
-    } catch { /* noop */ }
-}

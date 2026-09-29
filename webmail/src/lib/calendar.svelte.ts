@@ -301,7 +301,7 @@ export async function loadCalendar(): Promise<void> {
 }
 
 /** Re-fetch events for a specific calendar (e.g. after toggling visibility). */
-export async function refreshCalendarEvents(calendarId: string): Promise<void> {
+async function refreshCalendarEvents(calendarId: string): Promise<void> {
     const cal = state.calendars.find((c) => c.id === calendarId);
     if (!cal) return;
     const { from, to } = defaultRange();
@@ -338,7 +338,6 @@ function mergedRaw(events: CalEvent[]): NormalizedEvent[] {
 
 // --- CRUD --------------------------------------------------------------
 
-export function listCalendars(): Calendar[] { return state.calendars; }
 export function getCalendar(id: string): Calendar | undefined {
     return state.calendars.find((c) => c.id === id);
 }
@@ -368,10 +367,6 @@ export function listEvents(opts: { from?: Date; to?: Date; calendarIds?: string[
         }
         return true;
     });
-}
-
-export function getEvent(id: string): CalEvent | undefined {
-    return state.events.find((e) => e.id === id);
 }
 
 export async function addEvent(input: Omit<CalEvent, 'id' | 'createdAt' | 'updatedAt'>): Promise<CalEvent> {
@@ -476,7 +471,7 @@ export async function removeSubscription(id: string): Promise<boolean> {
 
 // --- Recurrence expansion (simple RRULE FREQ=… handler) ---------------
 
-export function expandOccurrences(evt: CalEvent, from: Date, to: Date): CalEvent[] {
+function expandOccurrences(evt: CalEvent, from: Date, to: Date): CalEvent[] {
     if (!evt.recurrence || evt.recurrence === 'none') {
         const s = parseISO(evt.start);
         const e = parseISO(evt.end);

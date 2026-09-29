@@ -5,6 +5,9 @@
     import { markSpam, markTrusted, isTrustedSender } from '../lib/spam-feedback.svelte';
     import { themeState } from '../lib/theme.svelte';
     import { sanitizeHtml, buildIframeSrcDoc, placeholderRemoteImages } from '../lib/sanitize';
+    import { linkCheckShim } from '../lib/sanitize';
+    import { linkCheckEnabled } from '../lib/virustotal';
+    import LinkCheckPrompt from './LinkCheckPrompt.svelte';
     import { proxyImagesInHtml, isProxyHealthy } from '../lib/image-proxy';
     import { formatFullDate, formatBytes, formatAddress, formatAddressList, isTrackingEmail, isNotificationMessage, isSmsMessage } from '../lib/format';
     import NotificationBubble from './NotificationBubble.svelte';
@@ -19,7 +22,7 @@
     import { suggestEventFromEmail, suggestCalendarOptions, type CalendarSuggestion } from '../lib/calendar-suggest';
     import { isChatConfigured } from '../lib/chat.svelte';
     import { loadCalendar } from '../lib/calendar.svelte';
-    import { isImageTrusted, trustImagesFromSender, hasRemoteImages } from '../lib/image-trust';
+    import { hasRemoteImages } from '../lib/image-trust';
     import { suggestEmailActions, type EmailAction } from '../lib/email-actions.svelte';
     import { newThread, appendMessage, setTools, requestAutoSend } from '../lib/ai-threads.svelte';
     import { scanEmailForPhishing, getCachedScan, envelopeToHeaders, type PhishingScanResult } from '../lib/phishing-scan';
@@ -39,8 +42,6 @@
     }
     let { onReply, onReplyAll, onForward, onTrash, onArchive, onMove, onAi }: Props = $props();
 
-    let allowImages = $state(false);
-    let rememberSender = $state(true);
     let showRaw = $state<'auto' | 'text' | 'html'>('auto');
     let moveOpen = $state(false);
     let folderPickerAtt = $state<Attachment | null>(null);
@@ -214,34 +215,85 @@
         if (phishingAbort) { phishingAbort.abort(); phishingAbort = null; }
     });
 
-    // Remote images are BLOCKED by default. Auto-allow happens only when the
-    // user has made a standing decision that outranks this message: the
-    // master "always allow" setting, or a previous per-sender trust.
+    // --- link check before opening ---------------------------------------
     //
-    // `settings.proxyImages` is deliberately NOT in this list any more. It
-    // used to be, on the theory that the proxy hides the user's IP so the
-    // prompt is pointless — but the proxy hides *who* fetched, not *that the
-    // mail was read*. A tracking pixel still reaches the sender's host and
-    // still records this mailbox opening this message, and the proxy then
-    // caches the response for 24h (routes/image-proxy.js:193), extending
-    // the window. Routing is not consent, so the proxy now only decides HOW
-    // an already-allowed image is fetched (see `useProxy` below), never
-    // whether it loads. Rationale and migration: settings.svelte.ts
-    // migrateRemoteImagesDefault.
+    // The body iframe reports clicks through postMessage (see linkCheckShim
+    // in lib/sanitize.ts for why a script in the frame is unavoidable and
+    // why the frame keeps an opaque origin). Three things have to line up
+    // for a message to be accepted, and all three are checked here rather
+    // than in the shim, because the parent is the side that can be sure:
+    //
+    //   1. `event.source` is OUR frame. An opaque-origin frame posts with
+    //      origin "null", so an `event.origin` check would accept nothing
+    //      (and a laxer "allow null" would accept anything). Comparing the
+    //      MessagePort to the iframe we rendered is the check that actually
+    //      identifies the sender, and it also rejects the other iframes on
+    //      this page — the .eml preview has one of its own.
+    //   2. The nonce matches the one in the document we just built, so a
+    //      stale frame from a previous message cannot speak for this one.
+    //   3. The feature is on. Read at handling time, not at build time, so
+    //      flipping the switch takes effect without a re-render.
+    //
+    // This is a UX guard, not a security boundary — nothing here can stop a
+    // frame that already defeated the sanitizer from posting a URL of its
+    // choosing. What it guarantees is the ordinary case: the link you
+    // clicked is the link you are shown, and nothing opens unannounced.
+    let bodyFrame = $state<HTMLIFrameElement | null>(null);
+    let pendingLink = $state<{ url: string; label: string } | null>(null);
+    let linkToken = $state('');
+
+    // Regenerated per message rather than once per mount: `{#key d.uid}`
+    // remounts the pane on every message, but a nonce that outlives its
+    // document would let an abandoned frame's postMessage be mistaken for
+    // the current one.
     $effect(() => {
-        const fromAddr = ui.detail?.envelope.from?.[0]?.address || '';
-        allowImages = settings.alwaysAllowImages || isImageTrusted(fromAddr);
-        rememberSender = true;
+        const uid = ui.detail?.uid;
+        linkToken = uid === undefined ? '' : `lc-${uid}-${Math.random().toString(36).slice(2, 10)}`;
     });
 
-    function loadRemoteContent() {
-        const fromAddr = ui.detail?.envelope.from?.[0]?.address || '';
-        if (rememberSender && fromAddr) {
-            trustImagesFromSender(fromAddr);
-            showToast('success', `Will load remote content from ${fromAddr} for 30 days.`);
-        }
-        allowImages = true;
+    const bodyShim = $derived(linkCheckEnabled() ? linkCheckShim(linkToken) : '');
+
+    function onFrameMessage(e: MessageEvent) {
+        // The frame must exist. Deliberately NOT gated on `pendingLink` —
+        // that is the value this handler is about to SET, so guarding on it
+        // dropped the first click (pendingLink still null) and the prompt
+        // never appeared at all.
+        if (!bodyFrame) return;
+        // (1) source identity
+        if (e.source !== bodyFrame.contentWindow) return;
+        const d = e.data;
+        if (!d || typeof d !== 'object') return;
+        const m = d as Record<string, unknown>;
+        if (m.__linkcheck !== 1) return;
+        // (2) nonce — the document that produced this message is the one we
+        // built, not a frame left over from the previous message.
+        if (m.token !== linkToken) return;
+        const url = typeof m.url === 'string' ? m.url : '';
+        if (!/^https?:\/\//i.test(url)) return;
+        // (3) the switch, re-read at handling time
+        if (!linkCheckEnabled()) return;
+        pendingLink = { url, label: typeof m.label === 'string' ? m.label : '' };
     }
+
+    // The prompt opens the link from the PARENT, not the frame. The frame
+    // has already had its navigation cancelled by the shim, so re-firing a
+    // click in there is a race; a plain window.open with noopener is both
+    // simpler and immune to the frame being re-rendered underneath us.
+    function openLinkNow(url: string) {
+        pendingLink = null;
+        window.open(url, '_blank', 'noopener,noreferrer');
+    }
+
+    // Registered in an $effect rather than onMount so the listener is torn
+    // down and re-added with the component's lifetime, matching every other
+    // subscription in this file.
+
+
+    $effect(() => {
+        window.addEventListener('message', onFrameMessage);
+        return () => window.removeEventListener('message', onFrameMessage);
+    });
+
 
     // --- AI tools popover (5 LLM-generated actions) ---------------------
     let aiToolsOpen = $state(false);
@@ -465,24 +517,38 @@
         return looksLight ? 'light' : 'dark';
     }
 
+    // Remote images are ALWAYS allowed. There is no per-message permission
+    // decision left, no "Load remote content" button, and no per-sender
+    // 30-day trust to remember: the blocking path and all three of its
+    // supporting pieces are gone, because in practice the prompt showed up
+    // on ordinary mail and read to users as "this mailbox is broken" rather
+    // than "this mailbox is private". What protects the reader is the
+    // proxy, which is on by default (settings.svelte.ts
+    // migrateRemoteImagesAlwaysAllowed).
+    //
     // Proxy-rewriting is async (each remote image is a network round-trip),
     // so we maintain a parallel state that lags the synchronous srcDoc by
-    // however long the proxy takes. The iframe shows the un-proxied HTML
-    // (with images blocked, since allowImages-without-proxy is the same as
-    // before) until the rewrite resolves.
+    // however long the proxy takes. Until the rewrite resolves the iframe
+    // shows placeholders rather than the sender's own URLs — rendering those
+    // would leak the read to them, which is the one thing the proxy exists
+    // to prevent.
     let proxiedSrcDoc = $state<{ uid: number; html: string } | null>(null);
     let proxyAbort: AbortController | null = null;
     let proxyLoading = $state(false);
 
     const baseSafeHtml = $derived.by(() => {
         if (!ui.detail || !ui.detail.html) return '';
-        return sanitizeHtml(ui.detail.html, { allowRemoteImages: allowImages });
+        // allowRemoteImages is a constant true now. It is still passed
+        // explicitly rather than left to the default because sanitizeHtml's
+        // default is FALSE, and a reader that silently relied on that
+        // default would block every image the moment this call was edited.
+        return sanitizeHtml(ui.detail.html, { allowRemoteImages: true });
     });
 
     $effect(() => {
         // Re-run whenever the detail changes or the proxy toggle flips.
         const detail = ui.detail;
-        const useProxy = settings.proxyImages && allowImages && isProxyHealthy();
+        const useProxy = settings.proxyImages && isProxyHealthy();
         proxyAbort?.abort();
         proxyAbort = null;
         proxyLoading = false;
@@ -511,7 +577,7 @@
 
     const srcDoc = $derived.by(() => {
         if (!ui.detail || !ui.detail.html) return '';
-        const useProxy = settings.proxyImages && allowImages && isProxyHealthy();
+        const useProxy = settings.proxyImages && isProxyHealthy();
         const ready = proxiedSrcDoc && proxiedSrcDoc.uid === ui.detail.uid;
         // While the proxy is still fetching, show placeholders rather than
         // the sender's own URLs: rendering those would leak the read to
@@ -520,7 +586,13 @@
         const html = useProxy
             ? (ready ? proxiedSrcDoc!.html : placeholderRemoteImages(baseSafeHtml))
             : baseSafeHtml;
-        return buildIframeSrcDoc(html, viewerEffectiveTheme());
+        // The third argument is the click reporter. It is '' whenever the
+        // feature is off, so the frame's document is byte-identical to what
+        // it was before link checking existed — no script, no listener, and
+        // (because the sandbox attribute is bound to the same condition)
+        // no `allow-scripts` either. The switch is therefore genuinely a
+        // security-posture switch, not just a UI one.
+        return buildIframeSrcDoc(html, viewerEffectiveTheme(), bodyShim);
     });
 
     async function viewOcr(att: Attachment) {
@@ -1576,28 +1648,60 @@
                     </div>
                 </div>
             {/if}
+
+            <!-- The scanning state is NOT in the .scan-bubble-rail below,
+                 and the reason is the whole point of this component.
+                 That rail is `position: absolute; inset-inline: 0; top: 0`
+                 over `.body`, and `.scam-bubble-floating` is a pill up to
+                 `min(560px, 100%)` wide — so the scan used to sit ON TOP
+                 of the first lines of the message for the whole scan. It
+                 could not be moved to a hairline at the top edge of the
+                 body either: the label and the ✕ still need ~20px of
+                 real estate, and 20px of real estate inside `.body` is
+                 20px of message text. So it docks into the header
+                 chrome row, directly under `.view-toggle`, where it
+                 reads as part of the message's own furniture instead of
+                 a badge dropped on top of it, and where the body is
+                 never covered by a single pixel.
+                 Also note this state never blurred the message:
+                 `.frame-wrap` gets `class:blurred` from
+                 `phishingResult?.isPhishing`, and `phishingResult` is
+                 still `null` while scanning (it is only assigned in the
+                 `.then` at the end of the scan effect), so the pill was
+                 the ONLY thing obstructing the message — which is why
+                 the obstruction, not the styling, is what got fixed. -->
+            <!-- The row is ALWAYS rendered, holding its height whether or
+                 not a scan is running, so `.detail-header` measures
+                 identically in both states. A strip that only appeared
+                 while scanning would add ~25px to the header at scan
+                 start and take it back at scan end — the message would
+                 jump down and pop back up, which is the same defect the
+                 in-flow era of this bubble was rejected for. The
+                 reserved row is a few points of vertical space that is
+                 always there; the jumping header was 25px of motion,
+                 every message, every time. -->
+            <div class="scan-strip-slot" class:active={phishingScanning && !phishingDismissed}>
+                {#if phishingScanning && !phishingDismissed}
+                    <div class="scan-strip" role="status" data-testid="scam-scanning-bubble" aria-live="polite">
+                        <span class="scan-strip-track" aria-hidden="true">
+                            <span class="scan-strip-sweep"></span>
+                        </span>
+                        <span class="scan-strip-text">AI scanning…</span>
+                        <button
+                            type="button"
+                            class="scan-strip-close"
+                            title="Skip the scan"
+                            aria-label="Dismiss scan"
+                            onclick={() => { phishingDismissed = true; }}
+                        ><Icon name="close" size={10} /></button>
+                    </div>
+                {/if}
+            </div>
         </header>
 
         <div class="body" data-testid="detail-body">
             <div class="scan-bubble-rail" aria-live="polite">
-                {#if phishingScanning && !phishingDismissed}
-                    <div class="scam-bubble scam-bubble-scanning scam-bubble-floating" role="status" data-testid="scam-scanning-bubble">
-                        <span class="scam-orb" aria-hidden="true">
-                            <span class="scam-orb-ring"></span>
-                            <span class="scam-orb-core">🤖</span>
-                        </span>
-                        <span class="phish-bubble-text">
-                            <strong>AI scanning…</strong>
-                        </span>
-                        <button
-                            type="button"
-                            class="phish-bubble-close"
-                            title="Skip the scan"
-                            aria-label="Dismiss scan"
-                            onclick={() => { phishingDismissed = true; }}
-                        ><Icon name="close" size={11} /></button>
-                    </div>
-                {:else if phishingResult?.isPhishing && (phishingResult?.confidence ?? 0) >= settings.phishingScanConfidenceFloor && !phishingDismissed}
+                {#if phishingResult?.isPhishing && (phishingResult?.confidence ?? 0) >= settings.phishingScanConfidenceFloor && !phishingDismissed}
                     <!-- {@const} must be a direct child of a block, not of a
                          plain element, so it sits here rather than inside the
                          bubble div. -->
@@ -1730,40 +1834,47 @@
                 </div>
             {/if}
             {#if viewMode(d) === 'html'}
-                {@const blurred = !allowImages && hasRemoteImages(d.html)}
-                <div class="frame-wrap" class:blurred={blurred || (phishingResult?.isPhishing && !phishingDismissed)}>
+                <!-- No `blurred` / remote-overlay branch any more: remote
+                     images are always allowed, so there is no permission
+                     state left for an overlay to describe. The frame only
+                     blurs for a confirmed phishing hit. -->
+                <div class="frame-wrap" class:blurred={phishingResult?.isPhishing && !phishingDismissed}>
+                    <!-- `allow-scripts` is added ONLY while link checking is
+                         on, and `allow-same-origin` never is. The shim needs
+                         a script to cancel the click at all — a frame without
+                         it is inert, and the only signal out of an inert
+                         frame is the navigation completing, which is too late
+                         to ask about it. Omitting allow-same-origin keeps the
+                         frame on an opaque origin, so the script cannot read
+                         our DOM, cookies or storage; it can only postMessage.
+                         With the feature off, this attribute is byte-for-byte
+                         what it was before link checking existed, so the extra
+                         capability is opt-in rather than inherited. -->
                     <iframe
+                        bind:this={bodyFrame}
                         title="Message body"
-                        sandbox="allow-popups allow-popups-to-escape-sandbox"
+                        sandbox={linkCheckEnabled()
+                            ? 'allow-popups allow-popups-to-escape-sandbox allow-scripts'
+                            : 'allow-popups allow-popups-to-escape-sandbox'}
                         srcdoc={srcDoc}
                         referrerpolicy="no-referrer"
                         class="html-frame"
-                        class:blurred
                     ></iframe>
-                    {#if blurred}
-                        <div class="remote-overlay" data-testid="remote-overlay">
-                            <div class="remote-card">
-                                <Icon name="eye" size={18} />
-                                <h4>This message has remote content</h4>
-                                <p>Loading external images can tell the sender you opened it. Load anyway?</p>
-                                <button
-                                    type="button"
-                                    class="btn btn-primary"
-                                    onclick={loadRemoteContent}
-                                    data-testid="load-remote-content"
-                                >Load remote content</button>
-                                <label class="remember">
-                                    <input
-                                        type="checkbox"
-                                        bind:checked={rememberSender}
-                                        data-testid="remember-sender"
-                                    />
-                                    <span>Remember for {d.envelope.from?.[0]?.address || 'this sender'} for 30 days</span>
-                                </label>
-                            </div>
-                        </div>
-                    {/if}
                 </div>
+
+                <!-- The link-check confirmation. Mounted here rather than
+                     at the component root so it is scoped to the body view
+                     and tears down with it. `onProceed` opens from the
+                     parent, because the frame's own click was already
+                     cancelled by the shim. -->
+                {#if pendingLink}
+                    <LinkCheckPrompt
+                        url={pendingLink.url}
+                        label={pendingLink.label}
+                        onProceed={openLinkNow}
+                        onCancel={() => (pendingLink = null)}
+                    />
+                {/if}
             {:else if viewMode(d) === 'text'}
                 <pre class="text-body" class:blurred={phishingResult?.isPhishing && !phishingDismissed}>{d.text || '(no text body)'}</pre>
             {:else}
@@ -1804,12 +1915,13 @@
                     {#each d.attachments as att (att.id)}
                         <li class="attachment">
                             <div class="att-thumb" aria-hidden="true">
-                                {#if isImage(att) && allowImages}
+                                <!-- These thumbnails are OUR OWN attachments,
+                                     served from the mail server, not sender
+                                     content — the image-permission gate that
+                                     used to sit in front of them only ever
+                                     described the message body. -->
+                                {#if isImage(att)}
                                     <img src={downloadHref(att)} alt="" loading="lazy" />
-                                {:else if isImage(att)}
-                                    <span class="thumb-icon image" title="Click 'Show external images' to load thumbnails">
-                                        <Icon name="eye" size={16} />
-                                    </span>
                                 {:else if (att.contentType || '').toLowerCase() === 'application/pdf'}
                                     <span class="thumb-icon pdf">PDF</span>
                                 {:else}
@@ -2130,19 +2242,6 @@
         position: relative;
         display: inline-flex;
         flex: 0 0 auto;
-    }
-    .avatar-lg {
-        width: 34px;
-        height: 34px;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        border-radius: 50%;
-        color: #ffffff;
-        font-weight: 600;
-        font-size: 14px;
-        flex: 0 0 auto;
-        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
     }
     .meta-text { flex: 1; min-width: 200px; }
     .meta-line {
@@ -2703,60 +2802,6 @@
         filter: blur(6px) saturate(0.85);
         pointer-events: none;
     }
-    .remote-overlay {
-        position: absolute;
-        inset: 0;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        padding: 24px;
-        background: linear-gradient(to bottom,
-            color-mix(in srgb, var(--bg-surface) 30%, transparent),
-            color-mix(in srgb, var(--bg-surface) 60%, transparent));
-        backdrop-filter: blur(2px);
-        animation: fade-in 220ms cubic-bezier(0.2, 0.7, 0.2, 1);
-    }
-    .remote-card {
-        max-width: 380px;
-        padding: 22px 24px;
-        background: var(--bg-surface);
-        border: 1px solid var(--border-subtle);
-        border-radius: var(--radius-lg);
-        box-shadow: var(--shadow-lg);
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        text-align: center;
-        gap: 10px;
-        color: var(--text-primary);
-    }
-    .remote-card h4 {
-        margin: 0;
-        font-size: 15px;
-        font-weight: 600;
-        letter-spacing: -0.01em;
-    }
-    .remote-card p {
-        margin: 0 0 4px;
-        font-size: 12.5px;
-        color: var(--text-secondary);
-        line-height: 1.55;
-    }
-    .remote-card .btn-primary { padding: 8px 18px; font-weight: 600; }
-    .remote-card .remember {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        font-size: 12px;
-        color: var(--text-tertiary);
-        cursor: pointer;
-        user-select: none;
-    }
-    .remote-card .remember input {
-        width: 14px;
-        height: 14px;
-        accent-color: var(--accent);
-    }
     .text-body {
         white-space: pre-wrap;
         word-wrap: break-word;
@@ -2794,38 +2839,6 @@
     @media (max-width: 720px) {
         .outlook-replies .btn span { display: none; }
         .outlook-replies .btn { padding: 6px 10px; }
-    }
-    .reply-group {
-        position: relative;
-        display: inline-flex;
-        align-items: stretch;
-    }
-    .reply-group .btn { border-radius: var(--radius-sm) 0 0 var(--radius-sm); border-right: 0; }
-    .reply-more {
-        padding: 0 8px;
-        background: var(--bg-surface);
-        border: 1px solid var(--border-soft);
-        border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-        color: var(--text-secondary);
-        transition: background-color var(--transition-fast);
-    }
-    .reply-more:hover { background: var(--bg-hover); }
-    .reply-group .menu kbd {
-        font-family: var(--font-mono);
-        font-size: 10px;
-        padding: 1px 5px;
-        background: var(--bg-base);
-        border: 1px solid var(--border-subtle);
-        border-bottom-width: 2px;
-        border-radius: var(--radius-xs);
-        color: var(--text-tertiary);
-        margin-left: auto;
-    }
-    .reply-group .menu li button {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        width: 100%;
     }
     .attachments {
         flex: 0 0 auto;
@@ -3011,11 +3024,6 @@
         font-weight: 700;
         color: #4c1d95;
     }
-    .phishing-sub {
-        margin: 0;
-        font-size: 13px;
-        color: #6b21a8;
-    }
     .phishing-reasoning {
         margin: 0;
         font-size: 14px;
@@ -3033,50 +3041,9 @@
     .phishing-indicators li {
         margin-bottom: 4px;
     }
-    .phishing-spinner {
-        width: 28px;
-        height: 28px;
-        border: 3px solid rgba(147, 51, 234, 0.2);
-        border-top-color: #7c3aed;
-        border-radius: 50%;
-        animation: spin 800ms linear infinite;
-    }
-    @keyframes spin {
-        to { transform: rotate(360deg); }
-    }
     /* Skip button sits on the WHITE phishing-card, not the dark scrim.
        The earlier "white pill on white card" iteration was invisible.
        Now: high-contrast purple pill with a soft flash. */
-    .phishing-skip {
-        margin-top: 12px;
-        padding: 7px 16px;
-        font-size: 12.5px;
-        font-weight: 700;
-        letter-spacing: 0.01em;
-        color: #4c1d95;
-        background: white;
-        border: 1.5px solid #9333ea;
-        border-radius: 999px;
-        cursor: pointer;
-        animation: phishing-skip-flash 1.8s ease-in-out infinite;
-        box-shadow: 0 1px 2px rgba(76, 29, 149, 0.12);
-    }
-    @keyframes phishing-skip-flash {
-        0%, 100% {
-            transform: scale(1);
-            box-shadow: 0 1px 2px rgba(76, 29, 149, 0.12);
-        }
-        50% {
-            transform: scale(1.04);
-            box-shadow: 0 0 0 4px rgba(147, 51, 234, 0.18), 0 1px 2px rgba(76, 29, 149, 0.18);
-            background: #f5f3ff;
-        }
-    }
-    .phishing-skip:hover {
-        background: #ede9fe;
-        animation: none;
-        transform: scale(1.03);
-    }
     .body {
         position: relative;
     }
@@ -3217,47 +3184,99 @@
         animation: phish-bubble-in 360ms ease-out,
                    scan-bubble-out 700ms ease-in 8200ms forwards;
     }
-    /* Scanning state — nothing has been concluded yet, so this is the
-     * quietest of the four: a plain surface with an accent hairline and
-     * the spinning orb for the motion. It used to be a saturated violet
-     * gradient, which made an *in-progress* scan shout as loudly as a
-     * confirmed phishing hit — the exact "ordinary mail looks unsafe"
-     * failure. */
-    .scam-bubble-scanning {
-        background: var(--bg-surface);
-        border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border-subtle));
-        box-shadow: var(--shadow-md);
+    /* ---- Scanning strip -------------------------------------------------
+     * Replaces the round `.scam-orb` pill that used to float over the
+     * message. Three things changed at once, all from the same cause:
+     * the old element was absolutely positioned INSIDE `.body` and up to
+     * 560px wide, so for the whole scan it covered the first lines of
+     * the mail.
+     *
+     * 1. It lives in the header (see the markup comment), so it takes
+     *    zero pixels of the message.
+     * 2. It is horizontal, because horizontal is how a left-to-right
+     *    reader reads "this is progressing". A circle says "busy"; a
+     *    sweeping segment on a long thin track says "moving forward",
+     *    which is the truthful thing — the scan IS advancing through
+     *    the message.
+     * 3. No fill, no shadow, no backdrop. A tinted slab at the top of the
+     *    body still reads as a badge lying on the mail; a 2px hairline
+     *    with a travelling highlight reads as a status line belonging to
+     *    the pane, and in a screenshot it is mistaken for a border.
+     *
+     * Tokens only. `--accent` is repainted per skin AND by the user's
+     * semantic overrides, and every mix is toward `--bg-surface` rather
+     * than toward a fixed light or dark, so the same declarations hold
+     * across all four skin × theme combinations. */
+    /* `.scan-strip-slot` reserves the row's height unconditionally. It is
+     * the only thing in that 18px, and it is ALWAYS in the DOM, so the
+     * header's height is a constant: the message below cannot move when a
+     * scan starts or finishes. */
+    .scan-strip-slot {
+        display: flex;
+        align-items: center;
+        height: 18px;
+        margin-top: 8px;
+    }
+    .scan-strip {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        /* Must FILL the slot. As a plain flex item the strip would
+         * default to `flex: 0 1 auto` and shrink to its label's width,
+         * leaving the track sitting on its 24px min-width as a stub
+         * rather than a line across the pane — and the horizontal read
+         * the user asked for depends on the track having real length. */
+        flex: 1 1 auto;
+        min-width: 0;
+        font-size: 12px;
+        line-height: 1.4;
         color: var(--text-secondary);
     }
-    .scam-bubble-scanning :global(svg) { color: var(--text-tertiary); flex-shrink: 0; }
-    .scam-orb {
+    /* The track carries the motion; it is the only part that needs to be
+     * wide, and `flex: 1` lets the label keep its natural width so the
+     * row never wraps on a narrow pane. */
+    .scan-strip-track {
         position: relative;
-        width: 26px;
-        height: 26px;
-        flex: 0 0 26px;
+        flex: 1 1 auto;
+        min-width: 24px;
+        height: 2px;
+        border-radius: 999px;
+        overflow: hidden;
+        background: color-mix(in srgb, var(--accent) 22%, var(--border-subtle));
+    }
+    .scan-strip-sweep {
+        position: absolute;
+        inset-block: 0;
+        width: 38%;
+        border-radius: inherit;
+        background: linear-gradient(
+            to right,
+            transparent,
+            var(--accent) 45%,
+            var(--accent)
+        );
+        animation: scan-strip-sweep 1.5s cubic-bezier(0.5, 0, 0.5, 1) infinite;
+    }
+    @keyframes scan-strip-sweep {
+        from { transform: translateX(-100%); }
+        to   { transform: translateX(263%); }
+    }
+    .scan-strip-text { flex: 0 0 auto; white-space: nowrap; }
+    .scan-strip-close {
+        flex: 0 0 auto;
         display: inline-flex;
         align-items: center;
         justify-content: center;
+        width: 18px;
+        height: 18px;
+        padding: 0;
+        border: none;
+        border-radius: 999px;
+        background: transparent;
+        color: var(--text-tertiary);
+        cursor: pointer;
     }
-    .scam-orb-ring {
-        position: absolute;
-        inset: 0;
-        border-radius: 50%;
-        border: 2px solid transparent;
-        border-top-color: var(--accent);
-        border-right-color: color-mix(in srgb, var(--accent) 55%, transparent);
-        animation: scam-orb-spin 1s linear infinite;
-    }
-    .scam-orb-core {
-        font-size: 14px;
-        line-height: 1;
-        animation: scam-orb-pulse 2.4s ease-in-out infinite;
-    }
-    @keyframes scam-orb-spin { to { transform: rotate(360deg); } }
-    @keyframes scam-orb-pulse {
-        0%, 100% { transform: scale(1); opacity: 0.92; }
-        50%      { transform: scale(1.18); opacity: 1; }
-    }
+    .scan-strip-close:hover { background: var(--bg-hover); color: var(--text-primary); }
     /* Borderline state — "the model found something but not enough to
      * flag it". It sits BETWEEN the quiet scanning bubble and the
      * danger fill on purpose, so it uses the warning family with a
@@ -3513,11 +3532,14 @@
     /* Reduced motion, done properly and in ONE place.
      *
      * The audit this replaces found four real gaps:
-     *  1. `.scam-bubble-scanning` and `.scam-bubble-borderline` and
-     *     `.spam-bubble-floating` animate via `phish-bubble-in` +
-     *     `scan-bubble-out … forwards`, but the old query only listed
-     *     `.phishing-bubble` — so for those three bubbles NOTHING was
-     *     suppressed. Only the floating PHISHING bubble was covered.
+     *  1. `.scam-bubble-borderline` and `.spam-bubble-floating`
+     *     animate via `phish-bubble-in` + `scan-bubble-out … forwards`,
+     *     but the old query only listed `.phishing-bubble` — so for those
+     *     two bubbles NOTHING was suppressed. Only the floating PHISHING
+     *     bubble was covered. (The third member of that set, the
+     *     scanning bubble, no longer exists: it is now the header
+     *     `.scan-strip`, which is not a bubble and has no auto-dismiss
+     *     animation to preserve — it is removed when the scan resolves.)
      *  2. `animation: none` on the -floating variants also cancelled
      *     `scan-bubble-out`, whose 8.2s delay is the auto-dismiss. The
      *     JS timer still runs, but the element stayed fully opaque and
@@ -3547,13 +3569,24 @@
         /* Decorative loops and entrances — stop them outright. */
         .smoke,
         .scan-bubble-rail,
-        .scam-orb-ring,
-        .scam-orb-core,
-        .scam-shimmer,
-        .phishing-skip,
-        .phishing-spinner {
+        .scan-strip-sweep,
+        .scam-shimmer {
             animation: none !important;
         }
+        /* The sweep's whole purpose is the travel, so cancelling it would
+         * leave an empty track — indistinguishable from a finished scan.
+         * Give it a still frame that reads as "in progress" without
+         * moving: a striped track, the standard non-animated idiom for
+         * indeterminate work. `repeating-linear-gradient` rather than an
+         * image so it re-colours with --accent in every skin. */
+        .scan-strip-track {
+            background: repeating-linear-gradient(
+                to right,
+                color-mix(in srgb, var(--accent) 55%, transparent) 0 6px,
+                transparent 6px 12px
+            );
+        }
+        .scan-strip-sweep { display: none; }
         /* The smoke puffs' resting keyframe is opacity 0, so cancelling
          * leaves them invisible anyway — stated explicitly so a future
          * keyframe edit can't reintroduce frozen blobs over the text. */

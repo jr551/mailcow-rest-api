@@ -123,7 +123,7 @@ function listKey(user: string, path: string, page: number, search: string | unde
         encodeURIComponent(path) + '.' + page + '.' + (search || '');
 }
 
-export function getMessageList(
+function getMessageList(
     user: string,
     path: string,
     page: number,
@@ -293,19 +293,6 @@ async function evictBodiesOverLimit(): Promise<void> {
         };
         tx.onerror = () => resolve();
     });
-}
-
-export async function invalidateBody(user: string, path: string, uid: number): Promise<void> {
-    if (typeof indexedDB === 'undefined') return;
-    try {
-        const db = await openDb();
-        await new Promise<void>((resolve) => {
-            const tx = db.transaction(STORE, 'readwrite');
-            tx.objectStore(STORE).delete(bodyKey(user, path, uid));
-            tx.oncomplete = () => resolve();
-            tx.onerror = () => resolve();
-        });
-    } catch { /* noop */ }
 }
 
 export async function clearAllForUser(user: string): Promise<void> {

@@ -114,4 +114,6 @@ function createSecretBox({ envValue, dataDir, logger } = {}) {
     return { encrypt, decrypt, isEncrypted, deriveSubKey, enabled, source };
 }
 
-module.exports = { createSecretBox, deriveKey };
+module.exports = {
+    createSecretBox
+};

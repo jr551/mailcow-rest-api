@@ -91,8 +91,3 @@ export function ensureCountry(ip: string | null | undefined): void {
         })
         .finally(() => { inflight.delete(ip); });
 }
-
-export function clearGeoipCache() {
-    for (const k of Object.keys(_state.codes)) delete _state.codes[k];
-    try { localStorage.removeItem(CACHE_KEY); } catch { /* noop */ }
-}

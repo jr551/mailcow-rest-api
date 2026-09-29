@@ -14,7 +14,7 @@
     import { formatFullDate, formatAddressList, senderShort } from '../../lib/format';
     import { sanitizeHtml, buildIframeSrcDoc } from '../../lib/sanitize';
     import { proxyImagesInHtml, isProxyHealthy } from '../../lib/image-proxy';
-    import { hasRemoteImages, isImageTrusted, trustImagesFromSender } from '../../lib/image-trust';
+    import { hasRemoteImages } from '../../lib/image-trust';
     import { settings } from '../../lib/settings.svelte';
     import { scanEmailForPhishing, getCachedScan, envelopeToHeaders, type PhishingScanResult } from '../../lib/phishing-scan';
     import { isTrustedSender } from '../../lib/spam-feedback.svelte';
@@ -27,7 +27,6 @@
     const loading = $derived(mobileState.detailLoading);
     const error = $derived(mobileState.detailError);
 
-    let allowImages = $state(false);
     let proxiedSrcDoc = $state<string | null>(null);
     let hasRemote = $state(false);
     let iframeSrc = $state('');
@@ -120,9 +119,7 @@
     $effect(() => {
         const html = msg?.html;
         const text = msg?.text;
-        const fromAddr = msg?.envelope.from?.[0]?.address;
         if (!msg) {
-            allowImages = false;
             proxiedSrcDoc = null;
             hasRemote = false;
             iframeSrc = '';
@@ -131,26 +128,23 @@
         }
         const remote = hasRemoteImages(html);
         hasRemote = remote;
-        // Remote images are BLOCKED by default; see
-        // components/MessageDetail.svelte for the full rationale. The
-        // desktop reader dropped `|| settings.proxyImages` from this same
-        // condition, and leaving it here would make the two surfaces
-        // disagree about what "blocked" means for the same account. The
-        // proxy still governs HOW an allowed image is fetched
-        // (`proxyActive` below), never whether it loads at all.
-        const shouldAllow = settings.alwaysAllowImages || isImageTrusted(fromAddr) || !remote;
-        allowImages = shouldAllow;
-        proxyActive = shouldAllow && settings.proxyImages && remote;
+        // Remote images are ALWAYS allowed — the blocking prompt, the
+        // per-message "load" button and the per-sender trust are all gone.
+        // See components/MessageDetail.svelte for why. `proxyImages` is the
+        // only remaining image setting and it only decides HOW an image is
+        // fetched; `remote` here is used purely to show the "proxied" badge.
+        proxyActive = settings.proxyImages && remote;
 
         // Sanitize
-        const safe = sanitizeHtml(html || '', { allowRemoteImages: shouldAllow });
+        const safe = sanitizeHtml(html || '', { allowRemoteImages: true });
         const theme: 'light' | 'dark' = document.documentElement.classList.contains('dark') ? 'dark' : 'light';
         const baseDoc = buildIframeSrcDoc(safe, theme);
         iframeSrc = baseDoc;
         proxiedSrcDoc = null;
 
-        // Proxy images if allowed and enabled
-        if (shouldAllow && settings.proxyImages && remote && isProxyHealthy() && html) {
+        // Route remote images through our proxy so the sender's CDN never
+        // sees the reader's IP.
+        if (settings.proxyImages && remote && isProxyHealthy() && html) {
             if (proxyAbort) proxyAbort.abort();
             const ctrl = new AbortController();
             proxyAbort = ctrl;
@@ -209,31 +203,6 @@
         iframeEl.style.height = Math.max(contentHeight, availableHeight) + 'px';
     }
 
-    function loadRemoteImages() {
-        allowImages = true;
-        const html = msg?.html;
-        const theme: 'light' | 'dark' = document.documentElement.classList.contains('dark') ? 'dark' : 'light';
-        const safe = sanitizeHtml(html || '', { allowRemoteImages: true });
-        iframeSrc = buildIframeSrcDoc(safe, theme);
-        proxiedSrcDoc = null;
-        if (settings.proxyImages && html) {
-            if (proxyAbort) proxyAbort.abort();
-            const ctrl = new AbortController();
-            proxyAbort = ctrl;
-            proxyImagesInHtml(iframeSrc, ctrl.signal).then((rewritten) => {
-                if (ctrl.signal.aborted) return;
-                proxiedSrcDoc = rewritten;
-            }).catch(() => {});
-        }
-    }
-
-    function trustSender() {
-        const fromAddr = msg?.envelope.from?.[0]?.address;
-        if (!fromAddr) return;
-        trustImagesFromSender(fromAddr);
-        loadRemoteImages();
-        showToast('success', 'Images from this sender will load automatically');
-    }
 
     async function toggleStar() {
         if (!msg) return;
@@ -435,21 +404,13 @@
                 </div>
             </div>
 
-            <div class="msg-content" class:blur-remote={hasRemote && !allowImages} class:blurred={phishingResult?.isPhishing && !phishingDismissed}>
+            <div class="msg-content" class:blurred={phishingResult?.isPhishing && !phishingDismissed}>
                 {#if msg.html}
                     <iframe bind:this={iframeEl} srcdoc={proxiedSrcDoc ?? iframeSrc} title="Message body" sandbox="allow-same-origin" frameborder="0" onload={resizeIframe}></iframe>
                 {:else if msg.text}
                     <pre bind:this={preEl}>{msg.text}</pre>
                 {:else}
                     <p class="muted">(no body)</p>
-                {/if}
-                {#if hasRemote && !allowImages}
-                    <div class="remote-overlay">
-                        <Icon name="eyeOff" size={28} />
-                        <p>Remote content blocked</p>
-                        <button type="button" class="mbtn mbtn-primary" onclick={loadRemoteImages}>Load remote content</button>
-                        <button type="button" class="mbtn mbtn-ghost" onclick={trustSender}>Always allow from this sender</button>
-                    </div>
                 {/if}
                 {#if proxyActive}
                     <div class="proxy-badge">
@@ -674,13 +635,6 @@
         color: var(--text-primary);
         position: relative;
     }
-    .msg-content.blur-remote iframe,
-    .msg-content.blur-remote pre {
-        filter: blur(6px);
-        opacity: 0.5;
-        user-select: none;
-        pointer-events: none;
-    }
     .msg-content iframe {
         width: 100%;
         min-height: 300px;
@@ -695,24 +649,6 @@
         font-size: 15px;
         line-height: 1.5;
         max-width: 760px;
-    }
-    .remote-overlay {
-        position: absolute;
-        inset: 0;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        gap: 10px;
-        padding: 24px;
-        text-align: center;
-        color: var(--text-secondary);
-    }
-    .remote-overlay p {
-        margin: 0;
-        font-size: 15px;
-        font-weight: 600;
-        color: var(--text-primary);
     }
     .proxy-badge {
         position: absolute;
@@ -913,11 +849,6 @@
         font-weight: 700;
         color: #4c1d95;
     }
-    .phishing-sub {
-        margin: 0;
-        font-size: 13px;
-        color: #6b21a8;
-    }
     .phishing-reasoning {
         margin: 0;
         font-size: 14px;
@@ -934,17 +865,6 @@
     }
     .phishing-indicators li {
         margin-bottom: 4px;
-    }
-    .phishing-spinner {
-        width: 28px;
-        height: 28px;
-        border: 3px solid rgba(147, 51, 234, 0.2);
-        border-top-color: #7c3aed;
-        border-radius: 50%;
-        animation: spin 800ms linear infinite;
-    }
-    @keyframes spin {
-        to { transform: rotate(360deg); }
     }
     .msg-content.blurred iframe,
     .msg-content.blurred pre {

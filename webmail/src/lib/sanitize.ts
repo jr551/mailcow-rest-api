@@ -87,7 +87,65 @@ export function placeholderRemoteImages(html: string): string {
     );
 }
 
-export function buildIframeSrcDoc(html: string, theme: 'light' | 'dark'): string {
+// A <script> that reports link clicks to the parent window and swallows the
+// navigation, so the webmail can confirm before the user leaves.
+//
+// WHY A SCRIPT AT ALL: the body renders in a sandboxed iframe that owns its
+// own document. Without `allow-scripts` that document is completely inert —
+// no listener can run, no navigation can be cancelled, and the only signal
+// out is the frame navigating away, which by definition has already lost the
+// user's click. There is no script-free way to intercept a click in a frame
+// we cannot reach into. So the frame is given `allow-scripts` and NOT
+// `allow-same-origin`, which is the pair that matters: the frame keeps an
+// opaque origin, so this script (and anything else that ran there) cannot
+// read our DOM, cookies, storage or origin, and can only postMessage.
+//
+// HONEST LIMITS, stated because this is easy to oversell:
+//   - `allow-scripts` is a real posture change. It is a mitigation for a
+//     sanitizer bypass, not the boundary. The boundary is still the opaque
+//     origin plus the sanitizer.
+//   - A frame with a sanitizer bypass could forge a link-check message from
+//     the same source, because the nonce lives in this document's text. The
+//     caller cross-checks `event.source` as well, and neither check is a
+//     security boundary on its own — a prompt the user reads is a UX guard,
+//     not a guarantee.
+//   - Sender-authored script is stripped by sanitizeHtml before this runs,
+//     and inline on* handlers by HANDLER_ATTR, so the only script in the
+//     frame is this one in the ordinary case.
+//
+// The nonce exists to reject messages from any *other* frame on the page
+// (there are several: the .eml preview renders its own iframe) rather than to
+// defend against a compromised one.
+//
+// DELIBERATELY NOT INTERCEPTED: clicks with a modifier held, and middle
+// click. Ctrl/Cmd/Shift-click is an explicit "open this elsewhere" gesture
+// and blocking it makes the browser feel broken; the user still has the URL
+// on screen and can copy it.
+export function linkCheckShim(nonce: string): string {
+    return `<script>(function(){
+var N=${JSON.stringify(nonce)};
+function report(e){
+  var t=e.target;
+  var a=t&&t.closest?t.closest('a[href]'):null;
+  if(!a)return;
+  var href;
+  try{href=new URL(a.getAttribute('href'),document.baseURI).href;}catch(_){return;}
+  if(href.indexOf('http:')!==0&&href.indexOf('https:')!==0)return;
+  var label=(a.textContent||'').replace(/\\s+/g,' ').trim();
+  if(label.length>140)label=label.slice(0,140);
+  e.preventDefault();
+  e.stopPropagation();
+  parent.postMessage({__linkcheck:1,token:N,url:href,label:label},'*');
+}
+document.addEventListener('click',report,true);
+document.addEventListener('auxclick',function(e){if(e.button===1)report(e);},true);
+}());</script>`;
+}
+
+// `shim` is the link-click reporter (see linkCheckShim). Optional and
+// off by default so every other caller — and the .eml preview frame, which
+// has no prompt to offer — gets exactly the document it got before.
+export function buildIframeSrcDoc(html: string, theme: 'light' | 'dark', shim = ''): string {
     const fg = theme === 'dark' ? '#e8eaef' : '#0f1115';
     const bg = theme === 'dark' ? '#16191f' : '#ffffff';
     const link = theme === 'dark' ? '#88aef5' : '#1f5cdb';
@@ -146,6 +204,6 @@ export function buildIframeSrcDoc(html: string, theme: 'light' | 'dark'): string
     pre { white-space: pre-wrap; word-wrap: break-word; font-family: ui-monospace, SFMono-Regular, monospace; font-size: 13px; }
     table { max-width: 100%; }
     hr { border: 0; border-top: 1px solid ${border}; }
-</style>
+</style>${shim}
 </head><body>${html}</body></html>`;
 }

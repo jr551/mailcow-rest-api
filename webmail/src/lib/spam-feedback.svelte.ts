@@ -123,14 +123,6 @@ export function removeTrustedDomain(domain: string) {
     write(_state);
 }
 
-export function clearFeedback() {
-    _state.trustedDomains = [];
-    _state.trustedAddresses = [];
-    _state.spamDomains = [];
-    _state.spamAddresses = [];
-    write(_state);
-}
-
 /** Snapshot for sending to the server. Returns undefined when every
  *  list is empty so we don't bloat the request body. */
 export function feedbackPayload(): SpamFeedback | undefined {

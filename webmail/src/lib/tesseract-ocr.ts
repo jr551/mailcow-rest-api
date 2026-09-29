@@ -51,10 +51,6 @@ export async function warmupTesseract(): Promise<void> {
     await workerPromise;
 }
 
-export function isTesseractWarm(): boolean {
-    return warmedUp;
-}
-
 /** Terminate the worker and free its memory. Call this when the user
  *  disables the OCR feature in Settings. */
 export async function teardownTesseract(): Promise<void> {

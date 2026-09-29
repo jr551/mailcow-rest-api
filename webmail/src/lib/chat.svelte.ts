@@ -15,7 +15,7 @@ import {
     settings, setLlm, setUseCustomLlm, setDensity, setListFilter,
     setAiSystemPrompt, setAccountChipDisplay,
     setDefaultFromAddress, setDisplayName, setPageSize,
-    setAlwaysAllowImages, setGroupThreads, setProxyImages, setPermanentSignIn,
+    setGroupThreads, setProxyImages, setPermanentSignIn,
     setPhishingScan, setTrackOpensDefault, setAiSuggestSubjectOnBlur,
     setPhishingScanTimeoutSec, setPhishingScanPromptAddendum,
     setPhishingScanConfidenceFloor, setTesseractOcrInstalled,
@@ -93,7 +93,7 @@ export const DESTRUCTIVE_TOOLS = new Set([
     'send_message', 'delete_message', 'add_mail_rule', 'block_sender'
 ]);
 
-export const GRANTABLE_CAPABILITIES = ['accessEmail', 'accessAllChats', 'webSearch'] as const;
+const GRANTABLE_CAPABILITIES = ['accessEmail', 'accessAllChats', 'webSearch'] as const;
 export type GrantableCapability = typeof GRANTABLE_CAPABILITIES[number];
 
 /** Tools that should be available even when the user hasn't toggled on the
@@ -481,7 +481,7 @@ export const TOOLS: ToolDef[] = [
                 'accountChipDisplay (email|name),',
                 'defaultFromAddress (string), displayName (string),',
                 'pageSize (1..1000 or "unlimited"), aiSystemPrompt (string),',
-                'alwaysAllowImages (bool), groupThreads (bool), proxyImages (bool),',
+                'groupThreads (bool), proxyImages (bool),',
                 'permanentSignIn (bool), phishingScan (bool), trackOpensDefault (bool),',
                 'aiSuggestSubjectOnBlur (bool), phishingScanTimeoutSec (1..60),',
                 'phishingScanPromptAddendum (string ≤500), phishingScanConfidenceFloor (0..1),',
@@ -624,7 +624,7 @@ async function rest(path: string, init: RequestInit = {}): Promise<unknown> {
     return ct.includes('json') ? res.json() : res.text();
 }
 
-export async function execTool(name: string, args: Record<string, unknown>): Promise<unknown> {
+async function execTool(name: string, args: Record<string, unknown>): Promise<unknown> {
     switch (name) {
         case 'list_mailboxes':
             return rest(`/v1/mailboxes${args.counts ? '?counts=true' : ''}`);
@@ -773,7 +773,6 @@ export async function execTool(name: string, args: Record<string, unknown>): Pro
                 defaultFromAddress: settings.defaultFromAddress,
                 displayName: settings.displayName,
                 pageSize: settings.pageSize,
-                alwaysAllowImages: settings.alwaysAllowImages,
                 groupThreads: settings.groupThreads,
                 proxyImages: settings.proxyImages,
                 permanentSignIn: settings.permanentSignIn,
@@ -842,7 +841,6 @@ export async function execTool(name: string, args: Record<string, unknown>): Pro
                         setPageSize(value as number | 'unlimited'); return { ok: true };
                     }
                     throw new Error('pageSize must be a positive number ≤ 1000 or "unlimited"');
-                case 'alwaysAllowImages': setAlwaysAllowImages(bool(value)); return { ok: true };
                 case 'groupThreads': setGroupThreads(bool(value)); return { ok: true };
                 case 'proxyImages': setProxyImages(bool(value)); return { ok: true };
                 case 'permanentSignIn': setPermanentSignIn(bool(value)); return { ok: true };

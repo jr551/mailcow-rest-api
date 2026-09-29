@@ -50,19 +50,20 @@
         return `${label} · expires ${relativeTime(new Date(expiresAt).toISOString())}`;
     }
 
-    import { onMount, tick } from 'svelte';
+    import { onMount } from 'svelte';
     import {
-        settings, capabilities, setLlm, setUseCustomLlm, setAiFeatures, setDensity, setAlwaysAllowImages, setGroupThreads, setProxyImages, setPermanentSignIn, setPhishingScan, setTrackOpensDefault, setAiSuggestSubjectOnBlur, setPhishingScanTimeoutSec, setPhishingScanPromptAddendum, setPhishingScanConfidenceFloor,
-        remoteImagesBlockedFor,
+        settings, capabilities, setLlm, setUseCustomLlm, setAiFeatures, setDensity, setGroupThreads, setProxyImages, setPermanentSignIn, setPhishingScan, setTrackOpensDefault, setAiSuggestSubjectOnBlur, setPhishingScanTimeoutSec, setPhishingScanPromptAddendum, setPhishingScanConfidenceFloor,
         setAiSystemPrompt, setAccountChipDisplay,
         aiModels, aiModelsSignature, clearAiModels, loadAiModels,
         setDefaultFromAddress, setDisplayName, deriveNameFromAddress, setPageSize,
         setTesseractOcrInstalled, setPhishingScanOcrInline,
         setSpamSuggest, setSpamSuggestConfidenceFloor, setSpamSweepBatchSize, setAiSortSweepSpam,
-        setVipAddresses, setPreSendCheck, setComposeHistorySummary,
-        setCalendarTicker, setCalendarTickerTitles, setWeatherChipOutlook
+        setVipAddresses, setPreSendCheck, setComposeHistorySummary, setAiSuggestReply,
+        aiAvailable,
+        setCalendarTicker, setCalendarTickerTitles, setWeatherChipOutlook, setLinkSafetyCheck
     } from '../lib/settings.svelte';
     import { warmupTesseract, teardownTesseract } from '../lib/tesseract-ocr';
+    import { linkCheckConfigured } from '../lib/virustotal';
     import { showToast } from '../lib/store.svelte';
     import { summarizeMessage } from '../lib/api';
     import { privacySummary } from '../lib/privacy-facts';
@@ -75,8 +76,8 @@
     import { authState, getSession, isRemembered, forgetSavedCreds } from '../lib/auth.svelte';
     import {
         sounds, setMuted, playNotify,
-        SOUND_EVENTS, setEventPack, resetSoundProfile, previewPack,
-        type SoundPack
+        SOUND_EVENTS, SOUND_PACKS, SOUND_STYLES, packsInStyle,
+        setEventPack, resetSoundProfile, previewPack
     } from '../lib/sounds.svelte';
     import { gravatarPref, setGravatarEnabled, clearAvatarCache, myAvatars, setMyAvatar, clearMyAvatar } from '../lib/avatars.svelte';
     import { spamFeedback, markTrusted, removeTrusted, removeTrustedDomain } from '../lib/spam-feedback.svelte';
@@ -100,6 +101,10 @@
         deleteOutboundWebhook, testOutboundWebhook, isOutboundWebhooksUnavailable,
         type OutboundWebhook, type TestSendResult
     } from '../lib/outbound-webhooks';
+    import {
+        parseHeaderLines, formatHeaderLines, MASKED_VALUE,
+        type HeaderLineError
+    } from '../lib/webhook-header-lines';
     import Icon from './Icon.svelte';
     import Avatar from './Avatar.svelte';
     import { ensureCountry, geoipCache, flagEmoji } from '../lib/geoip.svelte';
@@ -270,11 +275,13 @@
     // the inbox AI-sort button.
 
     // --- Privacy panel derived state -----------------------------------------------
-    // What the image gate is actually doing for this account. Derived, never
-    // read from the migration marker, so the panel cannot tell a migrated
-    // user their images are blocked when they are not. Defaults to `true`
-    // (the conservative reading) until the first capability probe lands.
-    const imagesBlocked = $derived(remoteImagesBlockedFor(true));
+    // There is no "are images blocked?" question left to answer: remote
+    // images are always allowed, and `settings.proxyImages` — which defaults
+    // true and is migrated forward for every upgrading profile — is the only
+    // thing that decides how they are fetched. Derived directly from the
+    // setting so the state line below always describes what is happening
+    // now, with no migration marker in the chain to go stale.
+    const imagesProxied = $derived(settings.proxyImages);
     // The AI claims, rebuilt whenever the provider wiring changes (the 30s
     // capability probe assigns capabilities.aiConfig, and settings.llm is
     // user-editable), so the copy can never describe a stale route.
@@ -679,41 +686,58 @@
     let owKeep = $state(true);
     let owPrepend = $state('');
     let owSaving = $state(false);
-    // Custom request headers for the next webhook: editable name/value rows.
-    // Seeded with Authorization because that's the overwhelming use case;
-    // values are write-only — the server masks them forever after creation.
-    let owHeaderRows = $state<{ name: string; value: string }[]>([{ name: 'Authorization', value: '' }]);
-    // Focus hand-off for the header editor's add/remove buttons.
+    // Custom request headers for the next webhook, as raw `Name: value`
+    // lines in one box.
     //
-    // Both operations add or destroy the element the button was next to, and
-    // the browser's default focus recovery on DOM removal is "move to
-    // <body>": deleting the row above left the caret nowhere and shifted the
-    // whole dialog's tab order. `pendingHeaderFocus` says where the caret
-    // should land instead — the new row's name field after Add, or the
-    // adjacent row after Remove — and the $effect below applies it once the
-    // list has actually re-rendered.
-    let pendingHeaderFocus = $state<{ row: number; field: 'name' | 'value' } | null>(null);
-    $effect(() => {
-        const t = pendingHeaderFocus;
-        if (!t) return;
-        // The query has to resolve after the each-block re-renders, and the
-        // effect must not keep itself alive by reading the ref before tick.
-        pendingHeaderFocus = null;
-        void tick().then(() => {
-            // HTMLInputElement, not HTMLElement: these are text inputs and
-            // select() is how the caret lands with the new row's existing
-            // text pre-selected, ready to be replaced.
-            const el = document.querySelector<HTMLInputElement>(
-                `[data-testid="ow-header-${t.field}-${t.row}"]`
-            );
-            el?.focus();
-            el?.select();
-        });
-    });
+    // This replaces a name/value repeater, and the reason is the input, not
+    // the aesthetics: nobody configuring a webhook is composing two fields,
+    // they are holding one line somebody else wrote them —
+    // `Authorization: Bearer crsr_…` — and the repeater made them re-type
+    // it, then press "Add header", for every one. Parsing at submit keeps
+    // the box a plain textarea (native multi-line paste, native undo,
+    // native caret) and leaves nothing to get wrong per row.
+    let owHeaderText = $state('');
+    // Per-line problems, resolved only on submit or on demand.
+    //
+    // Deliberately NOT a $derived: the box is typed into continuously, and
+    // a live "line 2 is reserved" while the user is still halfway through
+    // typing `Content-Type` is noise, not help. The same reasons the old
+    // row UI was replaced apply to error timing. Re-checked on every
+    // input so the moment they fix a line the message goes away.
+    let owHeaderErrors = $state<HeaderLineError[]>([]);
+    let owHeaderIgnored = $state<HeaderLineError[]>([]);
+    function recheckOwHeaders() {
+        const p = parseHeaderLines(owHeaderText);
+        owHeaderErrors = p.errors;
+        owHeaderIgnored = p.ignored;
+        return p;
+    }
     // The signing secret comes back exactly once, on creation. Hold it so the
     // user can copy it — the server never lists it again.
     let owNewSecret = $state<{ id: string; secret: string } | null>(null);
 
+    // Per-webhook header editing.
+    //
+    // The stored list cannot be edited in place for credentials — the
+    // server returns `{ Authorization: '•••' }` and keeps the real value
+    // forever — so editing a stored webhook is necessarily "retype the
+    // values you want to keep, the rest are dropped on save". That is a
+    // contract, not a limitation of this UI, and the editor says so while
+    // it is open instead of after the save has already discarded something.
+    let owEditId = $state<string | null>(null);
+    let owEditText = $state('');
+    let owEditErrors = $state<HeaderLineError[]>([]);
+    let owEditSaving = $state(false);
+    function openOwHeaderEditor(w: OutboundWebhook) {
+        owEditId = w.id;
+        owEditText = formatHeaderLines(w.headers);
+        owEditErrors = [];
+    }
+    function closeOwHeaderEditor() {
+        owEditId = null;
+        owEditText = '';
+        owEditErrors = [];
+    }
     // Per-webhook state for the panel below. With a 100-webhook limit a flat
     // list is unusable, so the list is filterable and the result of the last
     // test send is kept per webhook — a test is the answer to "why isn't this
@@ -945,15 +969,30 @@
     async function doCreateOutboundWebhook() {
         const url = owUrl.trim();
         if (!url) { showToast('error', 'Webhook URL is required'); return; }
+        // Parse BEFORE saving, and refuse on a bad line.
+        //
+        // The server would reject the same thing with a 400 naming one
+        // header, but by then the user has been told nothing about WHICH
+        // line of ten is wrong. Here the message list is per line and the
+        // box keeps the text, so the fix is an edit rather than a retype.
+        const parsed = recheckOwHeaders();
+        if (parsed.errors.length) {
+            showToast('error', `${parsed.errors.length} header line${parsed.errors.length === 1 ? '' : 's'} can't be sent — see below the box`);
+            return;
+        }
+        // Nothing parsed at all but the box has text: the user pasted a
+        // block we could not read. Sending the webhook with no headers
+        // would deliver unauthenticated POSTs to a receiver that expects
+        // an Authorization header, so stop and say so instead.
+        if (parsed.ignored.length && parsed.empty) {
+            showToast('error', 'No header lines found — each line needs "Name: value"');
+            return;
+        }
         owSaving = true;
         try {
-            // Rows → map; blank names are dropped, both sides trimmed. An
-            // empty map is passed as undefined so the field stays absent.
-            const headers: Record<string, string> = {};
-            for (const r of owHeaderRows) {
-                const name = r.name.trim();
-                if (name) headers[name] = r.value.trim();
-            }
+            // Text lines → map at the last possible moment. An empty map is
+            // passed as undefined so the field stays absent server-side.
+            const headers: Record<string, string> = parsed.headers;
             const w = await createOutboundWebhook({
                 url,
                 label: owLabel.trim() || url,
@@ -964,7 +1003,14 @@
             outboundHooks = [...outboundHooks, w];
             owNewSecret = w.secret ? { id: w.id, secret: w.secret } : null;
             owUrl = ''; owLabel = ''; owPrepend = '';
-            owHeaderRows = [{ name: 'Authorization', value: '' }];
+            // Reset to blank, not to a seeded Authorization row: the old
+            // repeater's seed existed so a half-filled row had a name in
+            // it, and a paste box has no equivalent. Leaving the previous
+            // webhook's bearer token sitting in the form was the one thing
+            // that must not survive a successful create.
+            owHeaderText = '';
+            owHeaderErrors = [];
+            owHeaderIgnored = [];
             if (!ruleActionWebhookId) ruleActionWebhookId = w.id;
             showToast('success', 'Webhook added');
         } catch (err) {
@@ -982,6 +1028,30 @@
         } catch (err) {
             const msg = err instanceof ApiError ? (err.detail || err.title) : (err as Error).message;
             showToast('error', msg);
+        }
+    }
+
+    async function doSaveOwHeaders(w: OutboundWebhook) {
+        // `masked: 'reject'` — this save REPLACES the stored map wholesale
+        // (the server's update treats any provided map as a full replace),
+        // so a `•••` that got through would overwrite a working credential
+        // with a literal bullet string and the receiver would start
+        // rejecting every delivery. Refuse it in the box instead, where
+        // the line is visible, rather than after the write.
+        const parsed = parseHeaderLines(owEditText, { masked: 'reject' });
+        owEditErrors = parsed.errors;
+        if (parsed.errors.length) return;
+        owEditSaving = true;
+        try {
+            await doUpdateOutboundWebhook(w, {
+                // null clears; the API distinguishes "unchanged" from
+                // "empty", and an empty box means the user wants the
+                // headers gone, not left as they are.
+                headers: Object.keys(parsed.headers).length ? parsed.headers : {}
+            });
+            closeOwHeaderEditor();
+        } finally {
+            owEditSaving = false;
         }
     }
 
@@ -1114,6 +1184,26 @@
             showToast('info', 'Install prompt is not available right now. Check the browser address bar.');
         }
     }
+
+    // Whether the server has a VirusTotal key. Probed once, on mount.
+    // `linkCheckProbed` is separate from the value because "not probed yet"
+    // and "probed, no key" must not render the same line: the first would
+    // tell a correctly-configured server it has no key, which is worse than
+    // saying nothing for a moment.
+    // `vtConfigured` rather than `linkCheckConfigured`, which is the imported
+    // probe — a state variable and a function cannot share a name in one
+    // component scope.
+    let vtConfigured = $state<boolean | null>(null);
+    let linkCheckProbed = $state(false);
+    $effect(() => {
+        let live = true;
+        linkCheckConfigured().then((ok) => {
+            if (!live) return;
+            vtConfigured = ok;
+            linkCheckProbed = true;
+        });
+        return () => { live = false; };
+    });
 
     const PRESETS: { value: string; label: string; help: string }[] = [
         { value: 'mistral', label: 'Mistral', help: 'api.mistral.ai · default for OCR + chat' },
@@ -1782,52 +1872,50 @@
                         <h4><Icon name="eye" size={13} /> Image handling</h4>
 
                         <!-- The state line describes what THIS profile is
-                             actually doing, never what the default is.
-                             remoteImagesBlockedFor() is the same predicate the
-                             two message readers use, so this cannot claim
-                             "blocked" for a migrated user whose images still
-                             load. See settings.svelte.ts
-                             migrateRemoteImagesDefault. -->
+                             actually doing. There is no blocking state any
+                             more, so there is nothing to derive but the one
+                             setting that remains — and the copy is written to
+                             be true in BOTH of its branches, including the
+                             honest limit of what proxying hides. See
+                             privacy-facts.ts for the citable version of the
+                             same claim. -->
                         <p class="muted small privacy-state" data-testid="privacy-image-state">
-                            <Icon name={imagesBlocked ? 'lock' : 'info'} size={12} />
-                            {#if imagesBlocked}
-                                Remote images are <strong>blocked</strong>. You will see a
-                                “Load remote content” prompt on messages that contain them.
+                            <Icon name={imagesProxied ? 'shield' : 'info'} size={12} />
+                            {#if imagesProxied}
+                                Remote images <strong>always load</strong>, and are fetched
+                                through <code>/v1/proxy/image</code> so the sender’s CDN
+                                never sees your IP address, user-agent, or connection time.
                             {:else}
-                                Remote images are <strong>loading automatically</strong>, so senders
-                                can tell when you open a message. Turn on “Always allow” below
-                                only if you are happy with that.
+                                Remote images <strong>always load</strong>, but this browser
+                                fetches them <strong>directly from the sender</strong>, which
+                                does see your IP address. Turn the proxy back on below.
                             {/if}
                         </p>
 
-                        <div class="form-row" style="padding:0;border:none;background:none;">
-                            <div class="row-text">
-                                <strong>Always allow remote images</strong>
-                                <span class="muted">
-                                    Load images for every message with no prompt. Off means each
-                                    message asks first — and you can tick “remember this sender”
-                                    to stop being asked for that person for 30 days.
-                                </span>
-                            </div>
-                            <label class="toggle compact">
-                                <input
-                                    type="checkbox"
-                                    checked={settings.alwaysAllowImages}
-                                    onchange={(e) => setAlwaysAllowImages((e.currentTarget as HTMLInputElement).checked)}
-                                    data-testid="settings-always-allow-images"
-                                />
-                                <span>{settings.alwaysAllowImages ? 'On' : 'Off'}</span>
-                            </label>
-                        </div>
+                        <!-- What the proxy does NOT hide, stated here rather
+                             than left to be assumed. A tracking pixel still
+                             reaches the sender's host through us and still
+                             records that this mailbox opened this message,
+                             when; the proxy also caches the response for 24h
+                             (src/routes/image-proxy.js:193), widening that
+                             window rather than narrowing it. Overstating
+                             this is precisely how a privacy panel starts
+                             lying. -->
+                        <p class="muted small">
+                            Be clear about what that does and does not achieve: it hides
+                            <em>who</em> fetched an image, not <em>that you read the message</em>.
+                            The sender still records the open, and can often tell it came from
+                            us rather than from you. Images are also cached on our server for
+                            24 hours, and fetches are subject to a daily cap.
+                        </p>
+
                         <div class="form-row">
                             <div class="row-text">
-                                <strong>Route allowed images through the privacy proxy</strong>
+                                <strong>Load images through the privacy proxy</strong>
                                 <span class="muted">
-                                    Fetches images you <em>have</em> allowed via /v1/proxy/image so
-                                    the sender's CDN never sees your IP, user-agent, or
-                                    connection time. This hides who fetched an image — not the
-                                    fact that you read the message, which the sender still learns
-                                    from the request itself. Subject to the server-side daily cap.
+                                    Recommended. On = your browser never contacts the sender’s image
+                                    host directly. Off = images still load, but from your own
+                                    connection, which gives away your IP address.
                                 </span>
                             </div>
                             <label class="toggle compact" class:spy-on={settings.proxyImages}>
@@ -1856,9 +1944,16 @@
                     <div class="card" data-testid="settings-ai-privacy">
                         <h4><Icon name="sparkles" size={13} /> What the AI can see</h4>
                         <p class="muted small">
-                            Your AI features send real parts of your mail to a language model, so
-                            it is worth being precise about what. Right now they reach
-                            <strong>{aiPrivacy.destination}</strong>.
+                            {#if settings.aiFeatures}
+                                Your AI features send real parts of your mail to a language model, so
+                                it is worth being precise about what. Right now they reach
+                                <strong>{aiPrivacy.destination}</strong>.
+                            {:else}
+                                AI features are off, so nothing from your mail is being sent
+                                anywhere. The list below is what would leave the browser if you
+                                turned them back on — they would reach
+                                <strong>{aiPrivacy.destination}</strong>.
+                            {/if}
                         </p>
                         <ul class="privacy-facts">
                             {#each aiPrivacy.facts as fact (fact.id)}
@@ -2059,6 +2154,65 @@
                                 <span>{settings.tesseractOcrInstalled ? 'On' : 'Off'}</span>
                             </label>
                         </div>
+                    </div>
+
+                    <!-- Link safety. Sits in the same section as the scam
+                         scan because it is the same kind of thing: a
+                         pre-flight check on a message before you act on it.
+                         It is NOT a sub-toggle of the scan above — it works
+                         with AI features off — so it is its own card rather
+                         than a knob inside that one. -->
+                    <div class="card">
+                        <h4><Icon name="shield" size={13} /> Link safety</h4>
+                        {#if !settings.aiFeatures}
+                            <p class="muted small" data-testid="settings-linkcheck-ai-off">
+                                Unavailable while AI features are off. Link checking asks a
+                                third party about the links you open, so it is treated the
+                                same way as the other AI-adjacent features.
+                            </p>
+                        {:else}
+                            {#if linkCheckProbed && !vtConfigured}
+                                <p class="muted small" data-testid="settings-linkcheck-nokey">
+                                    This server has no VirusTotal key configured, so nothing is
+                                    being checked. Set <code>VIRUSTOTAL_API_KEY</code> on the
+                                    server and restart it to turn this on. Until then links open
+                                    normally, without a prompt.
+                                </p>
+                            {/if}
+                            <div class="form-row" style="padding:0;border:none;background:none;">
+                                <div class="row-text">
+                                    <strong>Check links before opening them</strong>
+                                    <span class="muted">
+                                        Clicking a link in a message asks this server to look the
+                                        destination up with VirusTotal first, and shows you the
+                                        result before anything opens. The server holds the API key;
+                                        the browser never sees it.
+                                        <br /><br />
+                                        <strong>What this gives up:</strong> every link you click is
+                                        sent to VirusTotal. That is a privacy leak of its own — if
+                                        the message is hostile, a link unique to you turns into a
+                                        record that you opened it, held by a third party. It is the
+                                        same trade the image proxy makes, pointed at a different host.
+                                        <br /><br />
+                                        <strong>What it does not give you:</strong> a clean result is
+                                        not a guarantee. It means nobody has objected to that exact
+                                        link yet, and a link can be flagged after you have already
+                                        opened it. Links nobody has ever scanned report as unchecked,
+                                        never as safe. Turning AI features off switches this off too.
+                                    </span>
+                                </div>
+                                <label class="toggle compact">
+                                    <input
+                                        type="checkbox"
+                                        checked={settings.linkSafetyCheck}
+                                        disabled={!settings.aiFeatures}
+                                        onchange={(e) => setLinkSafetyCheck((e.currentTarget as HTMLInputElement).checked)}
+                                        data-testid="settings-link-safety"
+                                    />
+                                    <span>{settings.linkSafetyCheck ? 'On' : 'Off'}</span>
+                                </label>
+                            </div>
+                        {/if}
                     </div>
 
                     <div class="card">
@@ -2742,6 +2896,12 @@
 
                     <div class="card">
                         <h4><Icon name="bell" size={13} /> Per-event sounds</h4>
+                        <p class="muted small" style="margin-top:0;">
+                            Two knockoff families, grouped. Outlook is restrained and stays out of
+                            your way; Gmail is warmer and more percussive, so it gets noticed.
+                            Both are approximations, not recordings — the webmail ships no audio
+                            files. Picking a pack also plays it.
+                        </p>
                         <ul class="sound-rows">
                             {#each SOUND_EVENTS as ev (ev.id)}
                                 <li class="sound-row">
@@ -2749,15 +2909,46 @@
                                         <strong>{ev.label}</strong>
                                         <span class="muted small">{ev.description}</span>
                                     </div>
-                                    <div class="sound-pills" role="radiogroup" aria-label={ev.label}>
-                                        {#each ['chime', 'soft', 'sci-fi', 'silent'] as pack (pack)}
-                                            <button
-                                                type="button"
-                                                class="sound-pill"
-                                                class:active={sounds.profile[ev.id] === pack}
-                                                onclick={() => { setEventPack(ev.id, pack as SoundPack); previewPack(pack as SoundPack); }}
-                                                data-testid={`settings-sound-${ev.id}-${pack}`}
-                                            >{pack === 'sci-fi' ? 'Sci-fi' : pack[0].toUpperCase() + pack.slice(1)}</button>
+                                    <!-- SOUND_STYLES/packsInStyle, not a literal
+                                         list: this used to hardcode the four original
+                                         ids, so 'ting' and 'blip' existed in the
+                                         module and in the stored profile but could
+                                         never be picked here. Grouping is PRESENTATION
+                                         ONLY — every pack stays visible and
+                                         reachable at once rather than hiding behind
+                                         a style selector, because a style switch
+                                         would strand a profile that already mixes
+                                         families (and would have made the newest
+                                         packs unreachable by default). -->
+                                    <div class="sound-groups">
+                                        {#each SOUND_STYLES as styleDef (styleDef.id)}
+                                            {@const group = packsInStyle(styleDef.id)}
+                                            {#if group.length}
+                                                <div class="sound-group">
+                                                    <span class="sound-group-lbl" title={styleDef.blurb}>
+                                                        {styleDef.label}
+                                                    </span>
+                                                    <div
+                                                        class="sound-pills"
+                                                        role="radiogroup"
+                                                        aria-label={`${ev.label} — ${styleDef.label}`}
+                                                        data-testid={`settings-sound-${ev.id}-group-${styleDef.id}`}
+                                                    >
+                                                        {#each group as pack (pack.id)}
+                                                            <button
+                                                                type="button"
+                                                                role="radio"
+                                                                class="sound-pill"
+                                                                class:active={sounds.profile[ev.id] === pack.id}
+                                                                aria-checked={sounds.profile[ev.id] === pack.id}
+                                                                title={pack.blurb}
+                                                                onclick={() => { setEventPack(ev.id, pack.id); previewPack(pack.id); }}
+                                                                data-testid={`settings-sound-${ev.id}-${pack.id}`}
+                                                            >{pack.label}</button>
+                                                        {/each}
+                                                    </div>
+                                                </div>
+                                            {/if}
                                         {/each}
                                     </div>
                                 </li>
@@ -2805,23 +2996,42 @@
                         </p>
                     {/if}
 
-                    <!-- Standalone control rather than one more row in a
-                         provider card: flipping it removes most of the
-                         UI, so it must not read as "another setting". The
-                         label names the consequence, not the state. -->
-                    <label class="toggle" style="margin-top:12px;">
-                        <input
-                            type="checkbox"
-                            checked={settings.aiFeatures}
-                            onchange={(e) => setAiFeatures((e.currentTarget as HTMLInputElement).checked)}
-                            data-testid="settings-ai-features"
-                        />
-                        <span>Turn off all AI features</span>
-                    </label>
-                    <p class="muted small" style="margin:-4px 0 8px 26px;">
-                        Hides the AI tab, chat bot, AI panel, voice chat, AI sort, inbox briefing
-                        and every AI suggestion. Your provider settings below are kept.
-                    </p>
+                    <!-- Master switch, stated as STATE not as an action.
+
+                         It used to be a bare checkbox labelled "Turn off
+                         all AI features" with `checked={aiFeatures}` — so
+                         with AI on, the box was ticked AND the text read
+                         as an instruction to untick it. Two sentences
+                         disagreeing on screen, on the one control that
+                         governs every other AI surface.
+
+                         Now it matches the convention the rest of this
+                         panel uses (see proxyImages at ~L1906 and every
+                         other `.toggle.compact`): the label names the
+                         subject, the pill states On/Off. The consequence
+                         lives in the sub-line, where it can be two
+                         sentences long without fighting the control. -->
+                    <div class="form-row ai-master-row">
+                        <div class="row-text">
+                            <strong>AI features</strong>
+                            <span class="muted">
+                                Master switch for every AI surface. Off hides the AI tab, chat bot,
+                                AI panel, voice chat, AI sort, inbox briefing, reply suggestions
+                                and every other AI entry point — nothing is sent to a model. Your
+                                provider settings below are kept, so turning it back on needs no
+                                reconfiguration.
+                            </span>
+                        </div>
+                        <label class="toggle compact">
+                            <input
+                                type="checkbox"
+                                checked={settings.aiFeatures}
+                                onchange={(e) => setAiFeatures((e.currentTarget as HTMLInputElement).checked)}
+                                data-testid="settings-ai-features"
+                            />
+                            <span>{settings.aiFeatures ? 'On' : 'Off'}</span>
+                        </label>
+                    </div>
 
                 {#if capabilities.caps && !capabilities.caps.configured}
                     <div class="banner warn">
@@ -2949,6 +3159,14 @@
                                     oninput={(e) => setLlm({ model: (e.currentTarget as HTMLInputElement).value })}
                                     data-testid="settings-model"
                                 />
+                                <!-- Everything below the input spans the value
+                                     column. The row is a `96px 1fr` grid, so
+                                     each additional child would otherwise be
+                                     auto-placed into the 96px label column —
+                                     which is why the status hint renders one
+                                     word per line. A nested grid carries the
+                                     same two columns instead. -->
+                                <div class="row-body">
                                 <!-- Free-form input still wins: a gateway may
                                      serve a model it doesn't advertise, and an
                                      operator's private deployment will never
@@ -2964,10 +3182,66 @@
                                         <option value={m.id}>{m.owned_by ? `${m.id} — ${m.owned_by}` : m.id}</option>
                                     {/each}
                                 </datalist>
+                                <!-- Grouped choices, on top of the datalist.
+                                     The datalist is the field's own suggestion
+                                     mechanism and cannot express headings, so
+                                     the Free / Value surfaces get real buttons
+                                     below. They are *also* still in the
+                                     datalist: a surface is a model id, and the
+                                     datalist must keep offering it for typing. -->
+                                {#if aiModels.groups.some((g) => g.models.length > 0)}
+                                    <div class="model-groups" data-testid="settings-model-groups">
+                                        {#each aiModels.groups as g (g.modelId)}
+                                            <div class="model-group">
+                                                <span class="model-group-label">{g.label}</span>
+                                                <div class="chip-list">
+                                                    {#each g.models as m (m.id)}
+                                                        <button
+                                                            type="button"
+                                                            class="model-group-chip"
+                                                            class:selected={settings.llm.model === m.id}
+                                                            onclick={() => setLlm({ model: m.id })}
+                                                            title={m.id}
+                                                            data-testid={`settings-model-group-${g.modelId.split('/').pop()}`}
+                                                        >{m.id}</button>
+                                                    {/each}
+                                                </div>
+                                                {#if !g.membershipKnown}
+                                                    <!-- Say what we do not know
+                                                         rather than implying an
+                                                         exhaustive list: this
+                                                         gateway publishes the
+                                                         surface but not what is
+                                                         behind it. -->
+                                                    <span class="model-group-note">Select {g.modelId} to use this surface.</span>
+                                                {/if}
+                                            </div>
+                                        {/each}
+                                    </div>
+                                {/if}
+                                <!-- OSS / no-key case: no gateway, so no groups
+                                     and no catalog. An empty bordered box would
+                                     read as a broken control, so say the one
+                                     thing that actually helps. -->
+                                {#if aiModels.loaded && !aiModels.loading && !aiModels.error && aiModels.models.length === 0}
+                                    <p class="hint" data-testid="settings-model-empty">
+                                        This install has no AI provider configured, so there are no
+                                        models to choose from. Add an OpenAI-compatible endpoint
+                                        and API key above, or type any model name here.
+                                    </p>
+                                {/if}
                                 <!-- State is stated out loud. A silently empty
                                      dropdown is indistinguishable from a gateway
                                      that simply has no models, and the user is
-                                     left guessing which one it is. -->
+                                     left guessing which one it is.
+
+                                     The zero-model branch is suppressed while the
+                                     empty-state paragraph above is showing:
+                                     both would say the same thing, and two
+                                     consecutive lines reading "no models… you
+                                     can still type a model name" is noise. The
+                                     testid stays on the element either way, so
+                                     nothing observes a missing node. -->
                                 <div class="hint" data-testid="settings-model-status">
                                     {#if aiModels.loading}
                                         <span class="spinner"></span> Loading models from the gateway…
@@ -2976,10 +3250,11 @@
                                     {:else if !aiModels.loaded}
                                         Open the provider's model list…
                                     {:else if aiModels.models.length === 0}
-                                        The gateway returned no models. You can still type a model name.
+                                        <!-- replaced by settings-model-empty -->
                                     {:else}
                                         {aiModels.models.length} model{aiModels.models.length === 1 ? '' : 's'} available from this gateway.
                                     {/if}
+                                </div>
                                 </div>
                             </div>
                         </div>
@@ -3023,6 +3298,36 @@
                     data-testid="settings-system-prompt"
                     class="prompt-area"
                 ></textarea>
+
+                <h4 class="appearance-skin-title" style="margin-top: 12px;">Reply suggestions</h4>
+                <p class="muted small">
+                    When you open a Reply, the AI drafts an opening you can accept, edit
+                    or throw away. It runs in the background — typing is never interrupted.
+                </p>
+                <div class="form-row">
+                    <div class="row-text">
+                        <strong>Suggest a reply when I hit Reply</strong>
+                        <span class="muted">
+                            {#if !aiAvailable()}
+                                No model configured yet, so this stays disabled.
+                            {:else}
+                                One draft per reply you open. The suggestion sits above the editor until
+                                you accept, ignore or refresh it — nothing reaches your message until you
+                                press Accept, and what you've already typed is always kept.
+                            {/if}
+                        </span>
+                    </div>
+                    <label class="toggle compact">
+                        <input
+                            type="checkbox"
+                            checked={settings.aiSuggestReply}
+                            disabled={!aiAvailable()}
+                            onchange={(e) => setAiSuggestReply((e.currentTarget as HTMLInputElement).checked)}
+                            data-testid="settings-ai-suggest-reply"
+                        />
+                        <span>{settings.aiSuggestReply ? 'On' : 'Off'}</span>
+                    </label>
+                </div>
 
                 <h4 class="appearance-skin-title" style="margin-top: 12px;">Voice chat</h4>
                 <p class="muted small">
@@ -3448,6 +3753,55 @@
                         Point a mail rule's "Send to external webhook" action at one of these; the
                         payload carries the parsed headers, the body, and gzip+base64 attachments.
                     </p>
+
+                    <!-- The header editor, shared by the create form and the per-webhook
+                         editor below.
+
+                         One implementation, not two, because the two boxes have to agree:
+                         they share a parser, they share the exact same failure mode (a
+                         line that cannot go on the wire), and a user who learns the
+                         create box has to unlearn nothing to use the other one. The
+                         `id` parameter is what makes the <label> real rather than
+                         decorative — a placeholder is not an accessible name, and it
+                         disappears the moment the box has content, which is always. -->
+                    {#snippet owHeaderBox(id: string, value: string, onInput: (v: string) => void, errors: HeaderLineError[], ignored: HeaderLineError[], helpId: string)}
+                        <label class="ow-headers-label" for={`${id}-headers`}>Request headers, one per line</label>
+                        <textarea
+                            id={`${id}-headers`}
+                            class="ow-headers-input"
+                            rows="4"
+                            spellcheck="false"
+                            autocomplete="off"
+                            autocapitalize="off"
+                            placeholder={'Authorization: Bearer …\nX-Api-Key: …'}
+                            aria-describedby={helpId}
+                            aria-invalid={errors.length ? 'true' : undefined}
+                            {value}
+                            oninput={(e) => onInput((e.currentTarget as HTMLTextAreaElement).value)}
+                            data-testid={`${id}-headers`}
+                        ></textarea>
+                        <p class="muted small" id={helpId}>
+                            Paste the header lines as they are — <code>Authorization: Bearer …</code>.
+                            One per line; blank lines and <code>#</code> comments are ignored.
+                            Values are stored encrypted and never shown again.
+                        </p>
+                        <!-- Per line, addressed by its number in the box, so a bad line
+                             is a thing you can find rather than a form that failed.
+                             role="alert" so a screen reader announces it when the
+                             validation runs on save. -->
+                        {#if errors.length}
+                            <ul class="ow-headers-errors" role="alert" data-testid={`${id}-header-errors`}>
+                                {#each errors as e (e.line + e.message)}
+                                    <li><strong>Line {e.line}:</strong> {e.message}</li>
+                                {/each}
+                            </ul>
+                        {/if}
+                        {#if ignored.length}
+                            <p class="muted small" data-testid={`${id}-header-ignored`}>
+                                Ignored: {ignored.map((e) => `line ${e.line} (${e.message})`).join('; ')}
+                            </p>
+                        {/if}
+                    {/snippet}
                     {#if owNewSecret}
                         <div class="card" data-testid="ow-secret-card">
                             <h4><Icon name="key" size={13} /> Signing secret — shown once</h4>
@@ -3552,75 +3906,12 @@
                                     <span class="muted small"><input type="checkbox" bind:checked={owKeep} data-testid="ow-keep" /> keep the message in the mailbox after sending</span>
                                 </label>
                                 <!-- Stacked rather than a plain .rule-row: the header editor is
-                                     several rows tall, and .rule-row is a two-column grid whose
-                                     second track is sized for a single control. -->
+                                     a multi-line box, and .rule-row is a two-column grid
+                                     whose second track is sized for a single control. -->
                                 <div class="rule-row rule-row-stack">
                                     <span class="rule-label">Headers</span>
                                     <div class="ow-headers">
-                                        {#each owHeaderRows as row, i}
-                                            <div class="ow-header-row">
-                                                <!-- aria-label, not just the placeholder: a placeholder
-                                                     is not an accessible name (it vanishes as soon
-                                                     as the field has a value, so a screen-reader
-                                                     user tabbing a filled row hears an unlabelled
-                                                     text box), and both fields repeat across
-                                                     every row — "Header name" alone can't say
-                                                     WHICH row. Every other control in this
-                                                     form is a real <label>; these two can't be,
-                                                     because the <label> would have to wrap the
-                                                     whole two-input row to reach both. -->
-                                                <input
-                                                    type="text"
-                                                    placeholder="Header name"
-                                                    aria-label={`Header name, row ${i + 1}`}
-                                                    bind:value={row.name}
-                                                    data-testid={`ow-header-name-${i}`}
-                                                />
-                                                <input
-                                                    type="text"
-                                                    placeholder="Value"
-                                                    aria-label={`Header value, row ${i + 1}`}
-                                                    bind:value={row.value}
-                                                    data-testid={`ow-header-value-${i}`}
-                                                />
-                                                <button
-                                                    type="button"
-                                                    class="rule-remove"
-                                                    aria-label={`Remove header ${row.name || `row ${i + 1}`}`}
-                                                    title="Remove header"
-                                                    disabled={owHeaderRows.length === 1}
-                                                    onclick={() => {
-                                                        owHeaderRows = owHeaderRows.filter((_, j) => j !== i);
-                                                        // Focus the row that took this one's place, or
-                                                        // the one below it when the last row went.
-                                                        const landing = Math.min(i, owHeaderRows.length - 1);
-                                                        if (landing >= 0) pendingHeaderFocus = { row: landing, field: 'name' };
-                                                    }}
-                                                    data-testid={`ow-header-remove-${i}`}
-                                                ><Icon name="trash" size={12} /></button>
-                                            </div>
-                                        {/each}
-                                        <div class="ow-headers-actions">
-                                            <button
-                                                type="button"
-                                                class="btn"
-                                                onclick={() => {
-                                                    owHeaderRows = [...owHeaderRows, { name: '', value: '' }];
-                                                    // Land in the field just created, not back on
-                                                    // "Add header" — otherwise adding three headers
-                                                    // takes six presses of Tab to fill in.
-                                                    pendingHeaderFocus = { row: owHeaderRows.length - 1, field: 'name' };
-                                                }}
-                                                data-testid="ow-header-add"
-                                            >Add header</button>
-                                            <!-- Header values are write-only: the server stores them
-                                                 encrypted and only ever returns masked values. -->
-                                            <span class="muted small">
-                                                Sent with every delivery POST (e.g. Authorization: Bearer …).
-                                                Stored encrypted and never shown again — to change them later,
-                                                delete and recreate the webhook.
-                                            </span>
-                                        </div>
+                                        {@render owHeaderBox('ow', owHeaderText, (v) => { owHeaderText = v; recheckOwHeaders(); }, owHeaderErrors, owHeaderIgnored, 'ow-headers-help')}
                                     </div>
                                 </div>
                                 <div class="rule-actions">
@@ -3660,14 +3951,84 @@
                                                         keep message in mailbox
                                                     </label>
                                                 </div>
-                                                {#if w.headers && Object.keys(w.headers).length}
+                                                {#if owEditId === w.id}
+                                                    <!-- Editing a stored webhook's headers.
+
+                                                         The box is seeded by formatHeaderLines from
+                                                         the server's response, which is names with
+                                                         '•••' values and nothing else. Saving is a
+                                                         FULL REPLACE, so a save that left the
+                                                         bullets in place would replace a working
+                                                         bearer token with the literal string '•••'
+                                                         and the receiver would 401 every delivery
+                                                         with nothing on screen to explain it. So:
+                                                         the mask is spelled out as a mask, the
+                                                         parser refuses to send it, and the note
+                                                         says plainly that a value nobody can read
+                                                         back has to be retyped. -->
+                                                    <div class="ow-headers ow-headers-edit" data-testid={`ow-headers-editor-${w.id}`}>
+                                                        {@render owHeaderBox(`ow-${w.id}`, owEditText, (v) => { owEditText = v; owEditErrors = parseHeaderLines(v, { masked: 'reject' }).errors; }, owEditErrors, [], `ow-${w.id}-headers-help`)}
+                                                        <p class="ow-headers-mask-note">
+                                                            <Icon name="alertCircle" size={12} />
+                                                            <!-- One <span> for the whole sentence.
+                                                                 The <p> is display:flex so the icon
+                                                                 can sit beside the text, which makes
+                                                                 every bare text node AND every <code>
+                                                                 a flex item — left unwrapped, the
+                                                                 prose flowed as three ragged columns
+                                                                 instead of one paragraph. -->
+                                                            <span>
+                                                                Saved values are write-only: the server keeps them
+                                                                encrypted and can never show them again, so a stored
+                                                                header comes back as <code>{MASKED_VALUE}</code>. A
+                                                                line still showing <code>{MASKED_VALUE}</code> is the
+                                                                real stored secret, not an empty field — to change it,
+                                                                type a fresh value over the whole line; to drop the
+                                                                header, delete the line.
+                                                            </span>
+                                                        </p>
+                                                        <div class="ow-headers-edit-actions">
+                                                            <button
+                                                                type="button"
+                                                                class="btn btn-primary"
+                                                                disabled={owEditSaving}
+                                                                onclick={() => doSaveOwHeaders(w)}
+                                                                data-testid={`ow-headers-save-${w.id}`}
+                                                            >{owEditSaving ? 'Saving…' : 'Save headers'}</button>
+                                                            <button
+                                                                type="button"
+                                                                class="btn btn-ghost"
+                                                                onclick={closeOwHeaderEditor}
+                                                                data-testid={`ow-headers-cancel-${w.id}`}
+                                                            >Cancel</button>
+                                                        </div>
+                                                    </div>
+                                                {:else if w.headers && Object.keys(w.headers).length}
                                                     <!-- Values are masked server-side ('•••'); only the
-                                                         names are meaningful. To change them, recreate. -->
+                                                         names are meaningful. The editor below is the
+                                                         honest way to change them: the values have to
+                                                         be retyped because the server will not give
+                                                         them back, and the editor says so while it is
+                                                         still open. -->
                                                     <div class="rule-clause muted small" data-testid={`ow-headers-${w.id}`}>
                                                         Headers: {Object.keys(w.headers).join(', ')}
+                                                        <button
+                                                            type="button"
+                                                            class="btn btn-ghost"
+                                                            onclick={() => openOwHeaderEditor(w)}
+                                                            data-testid={`ow-headers-edit-${w.id}`}
+                                                        >Edit</button>
                                                     </div>
                                                 {:else}
-                                                    <div class="rule-clause muted small">Headers: none</div>
+                                                    <div class="rule-clause muted small">
+                                                        Headers: none
+                                                        <button
+                                                            type="button"
+                                                            class="btn btn-ghost"
+                                                            onclick={() => openOwHeaderEditor(w)}
+                                                            data-testid={`ow-headers-edit-${w.id}`}
+                                                        >Add</button>
+                                                    </div>
                                                 {/if}
                                                 <input
                                                     type="text"
@@ -4159,7 +4520,6 @@
         color: var(--text-primary);
         font-size: 13px;
     }
-    .ap-useip { align-self: flex-start; font-size: 11px; padding: 3px 8px; }
     .ap-error { color: var(--danger); margin: 0; }
 
     .ap-token {
@@ -4718,6 +5078,80 @@
         padding-left: 106px;
         margin-top: -4px;
     }
+    /* The Model row carries a field plus a datalist, grouped chips, an empty
+       state and a status line — five children, which is four too many for a
+       two-column grid, and every one past the second is auto-placed into the
+       96px label cell. That is what made the status line wrap one word per
+       line. Nesting the trailing blocks in their own single-column grid and
+       pinning it to column 2 places every one of them deliberately. */
+    .row-body {
+        grid-column: 2;
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 8px;
+        min-width: 0;
+    }
+    /* .hint carries a 106px left gutter so it aligns under a field that lives
+       in a two-column row. Inside .row-body the block is ALREADY in the value
+       column, so that gutter would indent the text a second time; cancel it. */
+    .row-body .hint { padding-left: 0; margin-top: 0; }
+    /* Grouped model choices. Lives in .row-body's single column, so it lines
+       up with the field's value column rather than under the label. */
+    .model-groups {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+    }
+    .model-group {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+    }
+    .model-group-label {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--text-secondary);
+    }
+    .model-group-note {
+        font-size: 11px;
+        color: var(--text-tertiary);
+    }
+    .model-group-chip {
+        font: inherit;
+        font-size: 12px;
+        font-family: var(--font-mono, monospace);
+        padding: 4px 9px;
+        border-radius: 999px;
+        border: 1px solid var(--border-subtle);
+        background: var(--bg-base);
+        color: var(--text-secondary);
+        cursor: pointer;
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        transition: border-color var(--transition-fast), background-color var(--transition-fast), color var(--transition-fast);
+    }
+    .model-group-chip:hover {
+        border-color: color-mix(in srgb, var(--accent) 35%, var(--border-subtle));
+        background: color-mix(in srgb, var(--accent) 6%, var(--bg-base));
+        color: var(--text-primary);
+    }
+    /* The selected state is accent-filled rather than a border change: with a
+       577-model catalog these chips sit in a dense row and a one-pixel hint is
+       easy to lose, while the filled chip is the same shape the user clicked
+       everywhere else in Settings. */
+    .model-group-chip.selected {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: var(--text-on-accent);
+        font-weight: 600;
+    }
+    @media (prefers-reduced-motion: reduce) {
+        .model-group-chip { transition: none; }
+    }
     .actions {
         display: flex;
         align-items: center;
@@ -4740,6 +5174,16 @@
         flex-wrap: wrap;
     }
     .form-row + .form-row { border-top: 1px solid var(--border-subtle); }
+    /* The AI master switch leads the section and is the only control that
+       removes most of the UI, so it gets a top rule of its own rather
+       than borrowing the "another row in a list" treatment the .form-row
+       pairs below it use. */
+    .ai-master-row {
+        margin: 0 0 4px;
+        padding: 12px 0;
+        border-top: 1px solid var(--border-subtle);
+    }
+    .ai-master-row + .form-row { border-top: none; padding-top: 0; }
     .row-text {
         flex: 1;
         display: flex;
@@ -4900,6 +5344,20 @@
     }
     .sound-row:last-child { border-bottom: none; }
     .sound-meta { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    /* Each style gets its own block, so the two families read as two
+       labelled groups rather than one undifferentiated wall of pills.
+       .sound-groups is a column because the row is a 1fr/auto grid —
+       stacking keeps the label column from being squeezed to nothing. */
+    .sound-groups { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+    .sound-group { display: flex; align-items: center; gap: 6px; }
+    .sound-group-lbl {
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--text-tertiary);
+        white-space: nowrap;
+    }
     .sound-pills { display: inline-flex; gap: 4px; flex-shrink: 0; }
     .sound-pill {
         padding: 4px 10px;
@@ -4919,6 +5377,8 @@
     }
     @media (max-width: 560px) {
         .sound-row { grid-template-columns: 1fr; }
+        .sound-groups { align-items: stretch; }
+        .sound-group { flex-wrap: wrap; }
         .sound-pills { flex-wrap: wrap; }
     }
     .filter-block { padding: 10px 0; border-top: 1px solid var(--border-subtle); }
@@ -5057,31 +5517,89 @@
         align-items: start;
         grid-template-columns: 100px 1fr;
     }
-    .ow-headers {
+    /* The paste box. One block: a real <label> above a monospaced textarea,
+     * the format hint under it, and the per-line error list below that.
+     * min-width: 0 so the monospaced textarea can shrink inside the
+     * 1fr grid track instead of forcing the dialog wider. */
+    .ow-headers { min-width: 0; }
+    .ow-headers-label {
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--text-tertiary);
+    }
+    .ow-headers-input {
+        width: 100%;
+        /* Monospaced because the content IS a wire format: a bearer token
+         * read in a proportional face hides the characters that matter,
+         * and these lines are compared by eye against a provider's docs. */
+        font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+        font-size: 12px;
+        line-height: 1.5;
+        padding: 7px 9px;
+        background: var(--bg-base);
+        color: var(--text-primary);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-sm);
+        /* resize: vertical only — a horizontally resizable textarea
+         * fights the two-column .rule-row grid instead of helping. */
+        resize: vertical;
+        white-space: pre;
+        overflow-wrap: normal;
+        overflow-x: auto;
+    }
+    .ow-headers-input:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 1px;
+    }
+    .ow-headers p code {
+        font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    }
+    /* Per-line errors. Indented with a left rule rather than a background
+     * wash: the box itself is the thing being complained about, and a red
+     * panel around it hides the lines it is talking about. */
+    .ow-headers-errors {
+        margin: 0;
+        padding: 0 0 0 10px;
+        list-style: none;
+        border-left: 2px solid var(--danger);
+        color: var(--danger);
+        font-size: 11.5px;
         display: flex;
         flex-direction: column;
-        gap: 6px;
+        gap: 3px;
     }
-    .ow-header-row {
+    /* The write-only contract, stated where the masks are visible. Warm
+     * neutral rather than a warning colour: nothing is wrong, the value is
+     * simply unreadable, and a red box here would read as an error state
+     * on a form that is working exactly as designed. */
+    .ow-headers-mask-note {
         display: flex;
+        align-items: flex-start;
         gap: 6px;
-        align-items: center;
+        margin: 0;
+        font-size: 11.5px;
+        line-height: 1.45;
+        color: var(--text-secondary);
+        background: var(--bg-surface-alt);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-sm);
+        padding: 6px 8px;
     }
-    /* Name and value share the row 1:2 so a long bearer token has room
-     * without pushing the remove button off the end. */
-    .ow-header-row input { min-width: 0; }
-    .ow-header-row input:first-of-type { flex: 1; }
-    .ow-header-row input:last-of-type { flex: 2; }
-    .ow-header-row .rule-remove { flex: none; }
-    /* Add button and its explanation on one line, button leading. */
-    .ow-headers-actions {
-        display: flex;
-        align-items: baseline;
-        gap: 10px;
-        flex-wrap: wrap;
+    .ow-headers-mask-note :global(svg) { flex: none; margin-top: 2px; }
+    /* The prose span is the one text flex item; the <code> elements are
+     * inside it, so they flow as inline text and the sentence wraps as a
+     * paragraph. flex: 1 also gives it min-width: 0, so a long unmasked
+     * token inside it cannot stretch the card. */
+    .ow-headers-mask-note > span { flex: 1; min-width: 0; }
+    .ow-headers-mask-note code {
+        font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+        background: var(--bg-base);
+        border-radius: var(--radius-xs);
+        padding: 0 3px;
     }
-    .ow-headers-actions .btn { flex: none; }
-    .ow-headers-actions .muted { flex: 1; min-width: 220px; }
+    .ow-headers-edit { margin-top: 6px; }
+    .ow-headers-edit-actions { display: flex; gap: 6px; }
+    .ow-headers-edit-actions .btn { flex: none; }
     .rule-row select, .rule-row input {
         padding: 5px 8px;
         font-size: 12px;

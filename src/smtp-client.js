@@ -69,4 +69,7 @@ async function sendMessage({ smtpConfig, user, pass, from, to, cc, bcc, subject,
     }
 }
 
-module.exports = { sendMessage, createSmtpTransporter, generateMessageId };
+module.exports = {
+    sendMessage,
+    generateMessageId
+};
