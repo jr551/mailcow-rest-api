@@ -51,7 +51,7 @@
     import { getShortcuts, blockSender as apiBlockSender, type Shortcut } from '../lib/api';
     import { shortcutsItems, embeddedShortcut, popupShortcut } from '../lib/shortcuts-store';
     import { probeCapabilities, settings, setHideSidebar } from '../lib/settings.svelte';
-    import { skinState } from '../lib/skins.svelte';
+    import { SKINS, skinState } from '../lib/skins.svelte';
     import { initImapSync, newThread as newAiThread, appendMessage as appendAiMessage, requestAutoSend as requestAutoSendAi } from '../lib/ai-threads.svelte';
     import { toggleSelected, clearSelection, selectAllVisible } from '../lib/store.svelte';
     import * as cache from '../lib/cache';
@@ -196,26 +196,24 @@
     let sentExpanded = $state<string | null>(null);
     let myAvatar = $derived((authState.activeUser ? myAvatars.map[authState.activeUser.toLowerCase()] : null) || null);
 
-    // The Outlook skins carry no ambient top-bar chips: their extras CSS
-    // hides .weather-wrap outright. That rule can't reach the options menu,
-    // which is a sibling of the wrapper, so gating in CSS alone leaves an
-    // orphaned dropdown floating over the header. Resolve visibility in
-    // Svelte instead — the Outlook skins need their own opt-in, off unless
-    // the user asks for it.
-    //
-    // Both `outlook` and `outlook-dark` count as Outlook here. Hardcoding a
-    // single id meant the new dark skin bypassed the gate entirely and the
-    // opt-in setting silently did nothing on it.
-    const OUTLOOK_SKINS = new Set(['outlook', 'outlook-dark']);
+    // Some skins declare `hidesAmbientChips`: their extras CSS hides
+    // .weather-wrap outright because that chrome has no room for a chip.
+    // CSS alone can't do the whole job — the chip's options menu is a
+    // SIBLING of the wrapper, not a child, so gating in CSS leaves an
+    // orphaned dropdown floating over the header. Resolve it in Svelte too,
+    // and let the skin declare the flag rather than hardcoding an id set
+    // here (a hardcoded list silently rots the moment a skin is added).
+    const activeSkin = $derived(SKINS.find((s) => s.id === skinState.skinId));
+    const skinHidesAmbientChips = $derived(activeSkin?.hidesAmbientChips === true);
+    // `weatherChipOutlook` is the opt-in that lets a user who wants the chip
+    // keep it even on a skin whose chrome hides it.
     let weatherChipVisible = $derived(
-        settings.weatherChip &&
-        (!OUTLOOK_SKINS.has(skinState.skinId) || settings.weatherChipOutlook)
+        settings.weatherChip && (!skinHidesAmbientChips || settings.weatherChipOutlook)
     );
-    // OWA's topbar carries no ambient chips. The skin CSS hides the ticker,
-    // but the caret button is a sibling of the pill, so it stayed visible and
-    // opened an orphan menu over the header — gate the mount as well.
+    // The calendar ticker has no opt-in — same orphan-menu problem, and the
+    // caret button that opens it is a sibling of the pill.
     let calendarTickerVisible = $derived(
-        settings.calendarTicker && !OUTLOOK_SKINS.has(skinState.skinId)
+        settings.calendarTicker && !skinHidesAmbientChips
     );
 
     // Server health ping. Round-trip /health every 15 s and surface the
@@ -1577,18 +1575,18 @@
             {:else}
                 <LatencyChip />
             {/if}
-            <!-- The Outlook skin hides the chip with its extras CSS. That
-                 * rule only covers .weather-wrap, so the chip's options
-                 * menu (a sibling of the wrapper) would survive as an
-                 * orphan floating over the OWA header. Gate the whole
-                 * gadget on a per-skin opt-in instead, so the skin's
-                 * chrome stays honest about what it carries. -->
+            <!-- A skin that hides the ambient chips does it with CSS that
+                 * only covers .weather-wrap, so the chip's options menu (a
+                 * sibling of the wrapper) would survive as an orphan
+                 * floating over the header. Gate the whole gadget on the
+                 * skin's declared flag instead, so the chrome stays honest
+                 * about what it carries. -->
             {#if weatherChipVisible}
                 <WeatherChip
                     latitude={settings.weatherLatitude}
                     longitude={settings.weatherLongitude}
                     units={settings.weatherUnits}
-                    forceVisible={OUTLOOK_SKINS.has(skinState.skinId)}
+                    forceVisible={skinHidesAmbientChips}
                 />
             {/if}
             {#if calendarTickerVisible}

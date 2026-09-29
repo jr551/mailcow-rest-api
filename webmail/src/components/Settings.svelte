@@ -1,3 +1,30 @@
+<script lang="ts" module>
+    // Which section the dialog was last showing. The component is torn down
+    // and rebuilt every time Settings opens (Layout unmounts it on close), so
+    // component state cannot remember anything — without this, reopening
+    // Settings always dumps the user back on Account and they re-navigate
+    // from the top of the rail every single time.
+    //
+    // Module scope rather than localStorage: this is a UI navigation
+    // convenience for the current tab, not a preference worth persisting to
+    // disk or leaking between browsers.
+    //
+    // Keyed BY USER, because this module outlives a sign-out. The app keeps
+    // running for multi-account sessions — Layout's logout() drops one session
+    // and switches to another with no reload — so a single "last section"
+    // hands account A's navigation state (Security, say) to account B, who
+    // was never there. A per-user map keeps each account's rail position its
+    // own, and an unknown account gets the default.
+    const NO_USER = '';
+    const lastSectionByUser = new Map<string, string>();
+    function rememberedSection(user: string | null | undefined): string {
+        return lastSectionByUser.get(user == null ? NO_USER : user.toLowerCase()) ?? 'account';
+    }
+    function rememberSection(user: string | null | undefined, id: string) {
+        lastSectionByUser.set(user == null ? NO_USER : user.toLowerCase(), id);
+    }
+</script>
+
 <script lang="ts">
     // Session status wording.
     //
@@ -23,7 +50,7 @@
         return `${label} · expires ${relativeTime(new Date(expiresAt).toISOString())}`;
     }
 
-    import { onMount } from 'svelte';
+    import { onMount, tick } from 'svelte';
     import {
         settings, capabilities, setLlm, setUseCustomLlm, setAiFeatures, setDensity, setAlwaysAllowImages, setGroupThreads, setProxyImages, setPermanentSignIn, setPhishingScan, setTrackOpensDefault, setAiSuggestSubjectOnBlur, setPhishingScanTimeoutSec, setPhishingScanPromptAddendum, setPhishingScanConfidenceFloor,
         setAiSystemPrompt, setAccountChipDisplay,
@@ -33,7 +60,6 @@
         setVipAddresses, setPreSendCheck, setComposeHistorySummary,
         setCalendarTicker, setCalendarTickerTitles, setWeatherChipOutlook
     } from '../lib/settings.svelte';
-    import { runSpamSweep, bulkMove, type SweepCandidate } from '../lib/spam-sweep';
     import { warmupTesseract, teardownTesseract } from '../lib/tesseract-ocr';
     import { showToast } from '../lib/store.svelte';
     import { summarizeMessage } from '../lib/api';
@@ -81,7 +107,7 @@
         | 'account' | 'security'
         | 'notifications' | 'ai' | 'sounds' | 'appearance' | 'calendar' | 'people'
         | 'message-list' | 'reading-pane' | 'privacy' | 'compose' | 'smart-suggestions'
-        | 'attachments' | 'mail-rules' | 'conditional-formatting' | 'sweep' | 'junk'
+        | 'mail-rules' | 'sweep' | 'junk'
         | 'filters' | 'forwarding' | 'outbound-hooks';
     type CategoryId = 'account' | 'general' | 'email' | 'calendar' | 'people';
 
@@ -125,9 +151,7 @@
                 { id: 'privacy', label: 'Images & privacy', icon: 'shield', keywords: 'remote image proxy ip tracking' },
                 { id: 'compose', label: 'Compose', icon: 'pencil', keywords: 'write send tracker display name from address' },
                 { id: 'smart-suggestions', label: 'Smart suggestions', icon: 'sparkles', keywords: 'subject proofread history summary pre-send' },
-                { id: 'attachments', label: 'Attachments', icon: 'paperclip', keywords: 'file download link preview' },
                 { id: 'mail-rules', label: 'Rules', icon: 'filter', keywords: 'sieve block redirect forward copy fileinto move folder stop' },
-                { id: 'conditional-formatting', label: 'Conditional formatting', icon: 'palette', keywords: 'tone formatting colour' },
                 { id: 'sweep', label: 'Sweep', icon: 'filter', keywords: 'spam trash batch bulk classify' },
                 { id: 'junk', label: 'Junk email', icon: 'shieldAlert', keywords: 'scam phishing ocr trusted spam quarantine' },
                 { id: 'filters', label: 'Message handling', icon: 'filter', keywords: 'block allow sender recipient catchall' },
@@ -149,87 +173,70 @@
         }
     ];
 
-    let activeSection = $state<SectionId>('account');
+    // Restore wherever THIS USER left off; see the module-scope note above.
+    //
+    // Validated against the registry, not just cast. The content pane is an
+    // if/else-if chain with NO terminal else, so an id that no longer exists
+    // renders a completely blank pane — and the rail highlights nothing
+    // either, leaving the user stranded in a dialog they cannot read. That is
+    // not hypothetical: the 'attachments' and 'conditional-formatting'
+    // sections were deleted from this build, and a remembered id pointing at
+    // either one is exactly this case. Fall back to the first section so a
+    // stale id can never blank the dialog.
+    const FIRST_SECTION = CATEGORIES[0].sections[0].id;
+    function isSectionId(id: string): id is SectionId {
+        return CATEGORIES.some((c) => c.sections.some((sec) => sec.id === id));
+    }
+    const initialSection = rememberedSection(authState.activeUser);
+    let activeSection = $state<SectionId>(
+        isSectionId(initialSection) ? initialSection : FIRST_SECTION
+    );
     let settingsSearch = $state('');
+
+    // Which category owns the open section, for the breadcrumb. Derived from
+    // the registry rather than stored, so a section that moves between
+    // categories can't leave a stale label behind.
+    const activeCategory = $derived(
+        CATEGORIES.find((c) => c.sections.some((s) => s.id === activeSection))
+    );
+    const activeCategoryLabel = $derived(activeCategory?.label ?? '');
 
     // The rail's search box filters sections in *every* category, and a hit
     // outside the current category switches to the category that owns it —
     // otherwise typing "sieve" would show a match the user cannot open.
+    // Category labels are searchable too, so "email" surfaces the whole group.
     const searchHits = $derived.by(() => {
         const q = settingsSearch.trim().toLowerCase();
         if (!q) return null;
-        return CATEGORIES.map((c) => ({
-            cat: c,
-            sections: c.sections.filter((s) => `${s.label} ${s.keywords}`.toLowerCase().includes(q))
-        })).filter((r) => r.sections.length);
+        return CATEGORIES.map((c) => {
+            // A category-name hit keeps every section: the user asked for the
+            // group, not one row inside it.
+            const catMatch = `${c.label} ${c.id}`.toLowerCase().includes(q);
+            return {
+                cat: c,
+                sections: catMatch
+                    ? c.sections
+                    : c.sections.filter((s) => `${s.label} ${s.keywords}`.toLowerCase().includes(q))
+            };
+        }).filter((r) => r.sections.length);
     });
 
     function selectSection(s: SectionDef) {
         activeSection = s.id;
+        rememberSection(authState.activeUser, s.id);
     }
 
-    // Sweep state lives at the top so the runner survives tab switches.
-    let sweepRunning = $state(false);
-    let sweepProgressText = $state('');
-    let sweepResults = $state<SweepCandidate[] | null>(null);
-    let sweepDestSpam = $state<string | null>(null);
-    let sweepDestTrash = $state<string | null>(null);
-    let sweepAbort: AbortController | null = null;
-    let sweepBulkBusy = $state(false);
+    // IMAP/SMTP details for the "connect a device" card. These were {@const}
+    // tags inside a now-removed {#if true} wrapper; a const tag needs a block
+    // parent, and there is no condition left to provide one.
+    const deviceEmail = $derived(authState.activeUser || 'you@example.com');
+    const deviceDomain = $derived(deviceEmail.split('@')[1] || 'example.com');
 
-    async function startSweep() {
-        if (sweepRunning) return;
-        sweepRunning = true;
-        sweepResults = null;
-        sweepProgressText = 'Starting…';
-        sweepAbort?.abort();
-        sweepAbort = new AbortController();
-        try {
-            const out = await runSpamSweep({
-                signal: sweepAbort.signal,
-                onProgress: (p) => {
-                    sweepProgressText = `Scanned ${p.scanned}/${p.total} — ${p.flagged} flagged`;
-                }
-            });
-            sweepResults = out.candidates;
-            sweepDestSpam = out.spamPath;
-            sweepDestTrash = out.trashPath;
-            sweepProgressText = `Done. ${out.candidates.length} flagged.`;
-        } catch (err) {
-            sweepProgressText = (err as Error).message || 'Sweep failed';
-        } finally {
-            sweepRunning = false;
-        }
-    }
-
-    function cancelSweep() {
-        sweepAbort?.abort();
-        sweepRunning = false;
-        sweepProgressText = 'Cancelled.';
-    }
-
-    async function applySweep(kind: 'spam' | 'phishing') {
-        if (!sweepResults || sweepBulkBusy) return;
-        const dest = kind === 'spam' ? sweepDestSpam : sweepDestTrash;
-        if (!dest) {
-            showToast('error', kind === 'spam' ? 'No Spam folder found.' : 'No Trash folder found.');
-            return;
-        }
-        const items = sweepResults
-            .filter((c) => kind === 'spam' ? c.isSpam && !c.isPhishing : c.isPhishing)
-            .map((c) => ({ path: c.path, uid: c.uid }));
-        if (items.length === 0) return;
-        sweepBulkBusy = true;
-        try {
-            const r = await bulkMove(items, dest);
-            showToast('success', `Moved ${r.moved} message${r.moved === 1 ? '' : 's'} to ${dest}${r.failed ? ` (${r.failed} failed)` : ''}.`);
-            // Drop the moved rows from the result list so the user doesn't
-            // see "5 flagged" while they're already gone.
-            sweepResults = sweepResults.filter((c) => !items.some((i) => i.uid === c.uid));
-        } finally {
-            sweepBulkBusy = false;
-        }
-    }
+    // The Sweep section is a pair of toggles for the inbox AI-sort sweep. The
+    // runner that used to live here (scan, list results, bulk-move to
+    // Spam/Trash) was removed from the template and never called, so it and
+    // its .sweep-* styling were dead weight; the sweep itself still runs from
+    // the inbox AI-sort button.
 
 
     // --- Collapsible section state -------------------------------------------------
@@ -554,6 +561,33 @@
     // Seeded with Authorization because that's the overwhelming use case;
     // values are write-only — the server masks them forever after creation.
     let owHeaderRows = $state<{ name: string; value: string }[]>([{ name: 'Authorization', value: '' }]);
+    // Focus hand-off for the header editor's add/remove buttons.
+    //
+    // Both operations add or destroy the element the button was next to, and
+    // the browser's default focus recovery on DOM removal is "move to
+    // <body>": deleting the row above left the caret nowhere and shifted the
+    // whole dialog's tab order. `pendingHeaderFocus` says where the caret
+    // should land instead — the new row's name field after Add, or the
+    // adjacent row after Remove — and the $effect below applies it once the
+    // list has actually re-rendered.
+    let pendingHeaderFocus = $state<{ row: number; field: 'name' | 'value' } | null>(null);
+    $effect(() => {
+        const t = pendingHeaderFocus;
+        if (!t) return;
+        // The query has to resolve after the each-block re-renders, and the
+        // effect must not keep itself alive by reading the ref before tick.
+        pendingHeaderFocus = null;
+        void tick().then(() => {
+            // HTMLInputElement, not HTMLElement: these are text inputs and
+            // select() is how the caret lands with the new row's existing
+            // text pre-selected, ready to be replaced.
+            const el = document.querySelector<HTMLInputElement>(
+                `[data-testid="ow-header-${t.field}-${t.row}"]`
+            );
+            el?.focus();
+            el?.select();
+        });
+    });
     // The signing secret comes back exactly once, on creation. Hold it so the
     // user can copy it — the server never lists it again.
     let owNewSecret = $state<{ id: string; secret: string } | null>(null);
@@ -1022,7 +1056,7 @@
                     {/if}
                     {#each searchHits as r (r.cat.id)}
                         <div class="rail-group">
-                            <div class="rail-cat muted">{r.cat.label}</div>
+                            <div class="rail-cat muted" data-testid={`settings-group-${r.cat.id}`}>{r.cat.label}</div>
                             {#each r.sections as s (s.id)}
                                 <button
                                     type="button"
@@ -1042,7 +1076,7 @@
                 {:else}
                     {#each CATEGORIES as cat (cat.id)}
                         <div class="rail-group">
-                            <div class="rail-cat muted">{cat.label}</div>
+                            <div class="rail-cat muted" data-testid={`settings-group-${cat.id}`}>{cat.label}</div>
                             {#each cat.sections as s (s.id)}
                                 <button
                                     type="button"
@@ -1063,6 +1097,26 @@
             </aside>
 
             <div class="panel">
+                <!-- The rail is a flat wall of ~20 rows; without this the open
+                     section loses its context the moment the dialog is wide. -->
+                <nav class="crumb" aria-label="Settings location" data-testid="settings-breadcrumb">
+                    <span class="crumb-group">{activeCategoryLabel}</span>
+                    <!-- Decorative breadcrumb divider. Icon.svelte already sets
+                         aria-hidden when no `title` is passed, which is the case
+                         here — spelling it out anyway would be redundant, so
+                         the real gap was the current page below. -->
+                    <Icon name="chevronRight" size={12} />
+                    <!-- aria-current marks which crumb is the page you're on.
+                         Without it the two spans are an undifferentiated pair of
+                         text and a screen reader announces "Account Mail, Mail,
+                         Mail" with no idea the second one is where you are. The
+                         tab panel it mirrors already says so via aria-selected
+                         on the rail button; this is the same information for
+                         the reading order. -->
+                    <span class="crumb-here" aria-current="page">
+                        {CATEGORIES.flatMap((c) => c.sections).find((s) => s.id === activeSection)?.label}
+                    </span>
+                </nav>
             {#if activeSection === 'account'}
                 <section class="tab-section" data-testid="settings-account">
                     <div class="profile-card">
@@ -2204,10 +2258,11 @@
 
                 <div class="form-row">
                     <div class="row-text">
-                        <strong>Weather chip on Outlook themes</strong>
+                        <strong>Weather chip in the top bar</strong>
                         <span class="muted">
-                            The Outlook skins hide the weather chip to match the real client's
-                            chrome. Turn this on to keep it in the top bar anyway. Other themes
+                            The Outlook skin leaves the top bar clear to match the real
+                            client's chrome, so the weather chip is hidden there by
+                            default. Turn this on to keep it anyway. Other skins always
                             follow the general weather setting.
                         </span>
                     </div>
@@ -2224,8 +2279,8 @@
 
                 <h4 class="appearance-skin-title" data-testid="settings-skins">Accent &amp; skin</h4>
                 <p class="muted small">
-                    Pick a colour skin or dial in your own accent and semantic colours.
-                    Your dark/light theme keeps working — skins only retint the palette.
+                    Pick a skin, then layer any accent colour you like over it.
+                    Your dark/light theme keeps working — this only retints the palette.
                 </p>
                 <div class="skins-grid" role="radiogroup" aria-label="Skin">
                     {#each SKINS as s (s.id)}
@@ -2247,15 +2302,15 @@
                         </button>
                     {/each}
 
-                    <label class="skin-tile custom" class:active={skinState.skinId === 'custom'}>
+                    <label class="skin-tile custom" class:active={skinState.accentOverride !== null}>
                         <span
                             class="swatch"
                             style={`background:${skinState.customAccent}`}
                             aria-hidden="true"
                         ></span>
                         <span class="skin-meta">
-                            <strong>Custom</strong>
-                            <span class="muted small">Pick any hue — derived shades fill in.</span>
+                            <strong>Accent colour</strong>
+                            <span class="muted small">Layer any hue over this skin.</span>
                         </span>
                         <input
                             type="color"
@@ -2267,7 +2322,9 @@
                     </label>
                 </div>
 
-                {#if skinState.skinId === 'custom'}
+                <!-- Shown once the user has either layered an accent or touched a
+                     semantic colour: before that the chips would be noise. -->
+                {#if skinState.accentOverride !== null || skinState.semanticsEdited}
                     <div class="semantic-colours" data-testid="semantic-colours">
                         <h4 class="appearance-skin-title">Semantic colours</h4>
                         <p class="muted small">Override the accent-derived defaults for errors, successes, warnings and stars.</p>
@@ -2896,23 +2953,6 @@
                     </div>
                 </div>
                 </section>
-            {:else if activeSection === 'attachments'}
-                <section class="tab-section" data-testid="settings-attachments">
-                    <h3>Attachments</h3>
-                    <p class="muted small">
-                        Downloads, inline previews, and image handling use their defaults —
-                        remote-image blocking lives under <em>Images &amp; privacy</em>. Nothing to
-                        configure here yet.
-                    </p>
-                </section>
-            {:else if activeSection === 'conditional-formatting'}
-                <section class="tab-section" data-testid="settings-conditional-formatting">
-                    <h3>Conditional formatting</h3>
-                    <p class="muted small">
-                        Outlook-style colour rules for list rows (e.g. "make mail from my boss
-                        purple") aren't implemented yet — this space is reserved for them.
-                    </p>
-                </section>
             {:else if activeSection === 'forwarding'}
                 <section class="tab-section" data-testid="settings-forwarding">
                     <h3>Forwarding and IMAP</h3>
@@ -2922,10 +2962,7 @@
                         <p class="muted small">
                             Use these settings to add this account to Apple Mail, Outlook, Thunderbird, or any IMAP client.
                         </p>
-                        {#if true}
-                            {@const deviceEmail = authState.activeUser || 'you@example.com'}
-                            {@const deviceDomain = deviceEmail.split('@')[1] || 'example.com'}
-                            <div class="device-config">
+                        <div class="device-config">
                             <div class="config-block">
                                 <strong>Incoming (IMAP)</strong>
                                 <div class="config-row"><span>Server</span><code>mail.{deviceDomain}</code></div>
@@ -2953,7 +2990,6 @@
                                 <Icon name="copy" size={11} /> Copy all
                             </button>
                         </div>
-                        {/if}
                     </div>
 
                 </section>
@@ -3123,51 +3159,76 @@
                                     <span class="rule-label">Keep</span>
                                     <span class="muted small"><input type="checkbox" bind:checked={owKeep} data-testid="ow-keep" /> keep the message in the mailbox after sending</span>
                                 </label>
-                                <div class="rule-row">
+                                <!-- Stacked rather than a plain .rule-row: the header editor is
+                                     several rows tall, and .rule-row is a two-column grid whose
+                                     second track is sized for a single control. -->
+                                <div class="rule-row rule-row-stack">
                                     <span class="rule-label">Headers</span>
-                                    <div style="flex:1;display:flex;flex-direction:column;gap:6px;">
+                                    <div class="ow-headers">
                                         {#each owHeaderRows as row, i}
-                                            <div style="display:flex;gap:6px;">
+                                            <div class="ow-header-row">
+                                                <!-- aria-label, not just the placeholder: a placeholder
+                                                     is not an accessible name (it vanishes as soon
+                                                     as the field has a value, so a screen-reader
+                                                     user tabbing a filled row hears an unlabelled
+                                                     text box), and both fields repeat across
+                                                     every row — "Header name" alone can't say
+                                                     WHICH row. Every other control in this
+                                                     form is a real <label>; these two can't be,
+                                                     because the <label> would have to wrap the
+                                                     whole two-input row to reach both. -->
                                                 <input
                                                     type="text"
                                                     placeholder="Header name"
+                                                    aria-label={`Header name, row ${i + 1}`}
                                                     bind:value={row.name}
                                                     data-testid={`ow-header-name-${i}`}
-                                                    style="flex:1;min-width:0;"
                                                 />
                                                 <input
                                                     type="text"
                                                     placeholder="Value"
+                                                    aria-label={`Header value, row ${i + 1}`}
                                                     bind:value={row.value}
                                                     data-testid={`ow-header-value-${i}`}
-                                                    style="flex:2;min-width:0;"
                                                 />
                                                 <button
                                                     type="button"
                                                     class="rule-remove"
-                                                    aria-label="Remove header"
+                                                    aria-label={`Remove header ${row.name || `row ${i + 1}`}`}
                                                     title="Remove header"
                                                     disabled={owHeaderRows.length === 1}
-                                                    onclick={() => { owHeaderRows = owHeaderRows.filter((_, j) => j !== i); }}
+                                                    onclick={() => {
+                                                        owHeaderRows = owHeaderRows.filter((_, j) => j !== i);
+                                                        // Focus the row that took this one's place, or
+                                                        // the one below it when the last row went.
+                                                        const landing = Math.min(i, owHeaderRows.length - 1);
+                                                        if (landing >= 0) pendingHeaderFocus = { row: landing, field: 'name' };
+                                                    }}
                                                     data-testid={`ow-header-remove-${i}`}
                                                 ><Icon name="trash" size={12} /></button>
                                             </div>
                                         {/each}
-                                        <div>
+                                        <div class="ow-headers-actions">
                                             <button
                                                 type="button"
                                                 class="btn"
-                                                onclick={() => { owHeaderRows = [...owHeaderRows, { name: '', value: '' }]; }}
+                                                onclick={() => {
+                                                    owHeaderRows = [...owHeaderRows, { name: '', value: '' }];
+                                                    // Land in the field just created, not back on
+                                                    // "Add header" — otherwise adding three headers
+                                                    // takes six presses of Tab to fill in.
+                                                    pendingHeaderFocus = { row: owHeaderRows.length - 1, field: 'name' };
+                                                }}
                                                 data-testid="ow-header-add"
                                             >Add header</button>
+                                            <!-- Header values are write-only: the server stores them
+                                                 encrypted and only ever returns masked values. -->
+                                            <span class="muted small">
+                                                Sent with every delivery POST (e.g. Authorization: Bearer …).
+                                                Stored encrypted and never shown again — to change them later,
+                                                delete and recreate the webhook.
+                                            </span>
                                         </div>
-                                        <!-- Header values are write-only: the server stores them
-                                             encrypted and only ever returns masked values. -->
-                                        <span class="muted small">
-                                            Sent with every delivery POST (e.g. Authorization: Bearer …).
-                                            Stored encrypted and never shown again — to change them later,
-                                            delete and recreate the webhook.
-                                        </span>
                                     </div>
                                 </div>
                                 <div class="rule-actions">
@@ -3224,8 +3285,8 @@
                 <section class="tab-section" data-testid="settings-calendar">
                     <h3>Calendar</h3>
                     <p class="muted small">
-                        The next-event ticker in the desktop top bar. Outlook skins
-                        leave the top bar clear, so the ticker stays hidden there.
+                        The next-event ticker in the desktop top bar. The Outlook skin
+                        leaves the top bar clear, so the ticker stays hidden there.
                     </p>
 
                     <div class="card">
@@ -3400,6 +3461,25 @@
         overflow-y: auto;
         min-width: 0;
     }
+    /* Group / section trail. Pulls up against the panel padding so it reads
+     * as chrome above the section rather than another setting inside it. */
+    .crumb {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        margin: -6px 0 14px;
+        font-size: 11px;
+        color: var(--text-tertiary);
+    }
+    .crumb-group {
+        text-transform: uppercase;
+        letter-spacing: 0.07em;
+        font-weight: 700;
+    }
+    .crumb-here {
+        color: var(--text-secondary);
+        font-weight: 600;
+    }
     .tab-section { display: flex; flex-direction: column; gap: 14px; }
     .tab-section > h3 {
         margin: 0;
@@ -3541,7 +3621,7 @@
         font-variant-numeric: tabular-nums;
         color: var(--accent-text);
     }
-    .fuel-card.lvl-warn .fuel-pct { color: #d18c1d; }
+    .fuel-card.lvl-warn .fuel-pct { color: var(--warning); }
     .fuel-card.lvl-danger .fuel-pct { color: var(--danger); }
     .fuel-bar {
         position: relative;
@@ -3555,7 +3635,7 @@
         display: block;
         height: 100%;
         position: relative;
-        background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 50%, #d268f4));
+        background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 50%, var(--warning)));
         /* Width comes in over ~700ms so the bar visibly fills on first paint
          * (looks intentional, not janky). */
         transition: width 700ms cubic-bezier(0.2, 0.7, 0.2, 1);
@@ -3581,7 +3661,7 @@
         60%  { transform: translateX(180%); }
         100% { transform: translateX(180%); }
     }
-    .fuel-card.lvl-warn .fuel-bar span { background: linear-gradient(90deg, #f6b94d, #d18c1d); box-shadow: 0 0 8px rgba(209, 140, 29, 0.5); }
+    .fuel-card.lvl-warn .fuel-bar span { background: linear-gradient(90deg, color-mix(in srgb, var(--warning) 60%, var(--bg-base)), var(--warning)); box-shadow: 0 0 8px color-mix(in srgb, var(--warning) 50%, transparent); }
     .fuel-card.lvl-danger .fuel-bar span { background: linear-gradient(90deg, #ef6464, var(--danger)); box-shadow: 0 0 8px color-mix(in srgb, var(--danger) 60%, transparent); }
     /* Unlimited: the fill is a moving stripe pattern instead of a fixed
      * percentage, signalling "no cap" without lying with a 100% bar. */
@@ -4041,13 +4121,6 @@
     }
     .test-result.ok { color: var(--success); }
     .test-result.err { color: var(--danger); }
-    .section {
-        padding: 4px 0 16px;
-    }
-    .section + .section {
-        border-top: 1px solid var(--border-subtle);
-        padding-top: 16px;
-    }
     .form-row {
         display: flex;
         align-items: center;
@@ -4081,78 +4154,6 @@
         .toggle.spy-on span { animation: none; }
     }
     .sound-controls { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
-    .quota {
-        display: flex;
-        flex-direction: column;
-        align-items: flex-end;
-        gap: 4px;
-        flex: 0 0 auto;
-        min-width: 200px;
-    }
-    .quota-bar {
-        width: 200px;
-        height: 6px;
-        background: var(--bg-base);
-        border-radius: 3px;
-        overflow: hidden;
-        border: 1px solid var(--border-subtle);
-    }
-    .quota-bar span {
-        display: block;
-        height: 100%;
-        background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 50%, #d268f4));
-        transition: width 220ms cubic-bezier(0.2, 0.7, 0.2, 1);
-    }
-    .quota-text { font-size: 11px; }
-    .alias-list { padding: 8px 0; }
-    .alias-list .list-head {
-        font-size: 11px;
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        color: var(--text-tertiary);
-        margin-bottom: 6px;
-    }
-    .alias-list ul {
-        list-style: none;
-        margin: 0;
-        padding: 0;
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-    }
-    .alias-list .alias-addr {
-        font-family: var(--font-mono);
-        font-size: 12px;
-        background: var(--bg-base);
-        padding: 2px 8px;
-        border-radius: var(--radius-xs);
-        display: inline-block;
-        max-width: 100%;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-    .logins li {
-        display: grid;
-        grid-template-columns: 8px 1fr auto auto auto;
-        gap: 8px;
-        align-items: center;
-        font-size: 12px;
-    }
-    .logins .status {
-        width: 8px; height: 8px; border-radius: 50%;
-        background: var(--text-tertiary);
-    }
-    .logins .status.ok { background: var(--success); }
-    .logins .status.fail { background: var(--danger); }
-    .logins .login-time { color: var(--text-secondary); }
-    .logins .badge {
-        font-size: 10px;
-        padding: 1px 6px;
-        background: var(--bg-tag);
-        border-radius: 8px;
-    }
     /* Phishing scan extra knobs that appear under the on/off toggle. */
     .phish-knobs {
         margin-top: 10px;
@@ -4199,53 +4200,6 @@
         outline: none;
         border-color: var(--accent);
     }
-    .sweep-block {
-        margin-top: 6px;
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-    }
-    .sweep-row {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        flex-wrap: wrap;
-    }
-    .sweep-status { font-variant-numeric: tabular-nums; }
-    .sweep-list {
-        list-style: none;
-        margin: 0;
-        padding: 6px 0 0;
-        max-height: 240px;
-        overflow-y: auto;
-        border-top: 1px dashed var(--border-subtle);
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-    }
-    .sweep-list li {
-        display: grid;
-        grid-template-columns: auto 1fr auto;
-        gap: 8px;
-        align-items: center;
-        font-size: 12.5px;
-        padding: 4px 6px;
-        border-radius: var(--radius-sm);
-    }
-    .sweep-list li:hover { background: var(--bg-hover); }
-    .sweep-tag {
-        font-size: 10.5px;
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-        padding: 2px 7px;
-        border-radius: 999px;
-    }
-    .sweep-tag.spam { background: rgba(245, 158, 11, 0.18); color: #b45309; }
-    .sweep-tag.phish { background: rgba(147, 51, 234, 0.18); color: #6b21a8; }
-    .sweep-from { font-size: 11.5px; max-width: 200px; }
-    .sweep-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
-    .sweep-empty { margin: 6px 0 0; }
     .push-actions { display: flex; gap: 6px; flex-wrap: wrap; }
     .push-diag-list {
         list-style: none;
@@ -4275,7 +4229,7 @@
     }
     .push-diag-list li.ok::before {
         content: '✓';
-        color: #059669;
+        color: var(--success);
     }
     .push-diag-list li.neutral { color: var(--text-tertiary); }
     .push-diag-list li.neutral::before { content: '·'; color: var(--text-tertiary); }
@@ -4407,6 +4361,37 @@
         letter-spacing: 0.04em;
         font-size: 11px;
     }
+    /* Stacked variant: the label sits on its own line above a tall editor,
+     * and centres on the first row rather than floating mid-block. */
+    .rule-row-stack {
+        align-items: start;
+        grid-template-columns: 100px 1fr;
+    }
+    .ow-headers {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+    }
+    .ow-header-row {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+    }
+    /* Name and value share the row 1:2 so a long bearer token has room
+     * without pushing the remove button off the end. */
+    .ow-header-row input { min-width: 0; }
+    .ow-header-row input:first-of-type { flex: 1; }
+    .ow-header-row input:last-of-type { flex: 2; }
+    .ow-header-row .rule-remove { flex: none; }
+    /* Add button and its explanation on one line, button leading. */
+    .ow-headers-actions {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+    .ow-headers-actions .btn { flex: none; }
+    .ow-headers-actions .muted { flex: 1; min-width: 220px; }
     .rule-row select, .rule-row input {
         padding: 5px 8px;
         font-size: 12px;
@@ -4471,7 +4456,7 @@
     .rule-card:hover { box-shadow: var(--shadow-sm); }
     .rule-card.rule-discard { border-left-color: var(--danger); }
     .rule-card.rule-redirect { border-left-color: var(--accent); }
-    .rule-card.rule-copy { border-left-color: #d18c1d; }
+    .rule-card.rule-copy { border-left-color: var(--warning); }
     .rule-card-head {
         display: flex;
         align-items: center;
@@ -4553,7 +4538,26 @@
     }
     .rule-badge.rule-discard { background: var(--danger-soft); color: var(--danger); }
     .rule-badge.rule-redirect { background: var(--accent-soft); color: var(--accent-text); }
-    .rule-badge.rule-copy { background: color-mix(in srgb, #d18c1d 14%, var(--bg-surface-alt)); color: #d18c1d; }
+    .rule-badge.rule-copy { background: color-mix(in srgb, var(--warning) 14%, var(--bg-surface-alt)); color: var(--warning); }
+
+    /* Free-text prefix prepended to webhook payloads. It shipped with a class
+     * and no rule, so it rendered as a bare unstyled text box inside the
+     * webhook card. Match the .rule-clause inputs it sits next to. */
+    .ow-prepend-edit {
+        width: 100%;
+        font-family: inherit;
+        font-size: 12px;
+        padding: 5px 8px;
+        background: var(--bg-surface-alt);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-xs);
+        color: var(--text-primary);
+    }
+    .ow-prepend-edit:focus {
+        outline: none;
+        border-color: var(--accent);
+    }
+    .ow-prepend-edit::placeholder { color: var(--text-tertiary); }
 
     .alias-rows {
         list-style: none;

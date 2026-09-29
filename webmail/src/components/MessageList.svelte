@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { tick } from 'svelte';
     import { ui, toggleSelected, selectAllVisible, clearSelection } from '../lib/store.svelte';
     import { formatDate, senderShort, isTrackingEmail, isNotificationMessage, isSmsMessage } from '../lib/format';
     import { capabilities } from '../lib/settings.svelte';
@@ -17,6 +18,8 @@
     import { listMailboxes, modifyFlags } from '../lib/api';
     import { showToast } from '../lib/store.svelte';
     import EventsScanPanel from './EventsScanPanel.svelte';
+    import MenuSubmenu, { type SubmenuItem } from './MenuSubmenu.svelte';
+    import RuleFromMessageDialog from './RuleFromMessageDialog.svelte';
 
     interface ScanState { scanned: number; total: number; reason: string }
     interface Props {
@@ -48,14 +51,194 @@
 
     // Right-click context menu on a row.
     let ctx = $state<{ uid: number; x: number; y: number } | null>(null);
+    // The row to hand focus back to when the menu closes. Without a
+    // keyboard path into the menu, closeCtx just nulled `ctx` and focus
+    // stayed wherever the pointer happened to be; now that the menu is
+    // reachable with Shift+F10 the focus has to come home too.
+    let ctxRow: HTMLElement | null = null;
+    // $state, not a plain let: the menu is torn down and rebuilt on every
+    // open, and closeCtx reads this to decide whether focus was inside it
+    // when the menu went away. A non-reactive binding would keep pointing at
+    // the detached <ul> from the previous open.
+    let ctxEl: HTMLUListElement | null = $state(null);
+
     function openCtx(e: MouseEvent, uid: number) {
         e.preventDefault();
         e.stopPropagation();
         ctx = { uid, x: e.clientX, y: e.clientY };
+        ctxRow = e.currentTarget as HTMLElement;
+        // Deliberately does NOT move focus. The pointer user never had focus
+        // in this menu before the keyboard path existed, and pulling it in
+        // on every right-click would change existing behaviour (and flash a
+        // focus ring at a menu the user is driving with a pointer).
+        // focusCtxItem is the keyboard opener's job.
     }
-    function closeCtx() { ctx = null; }
+    /**
+     * Close the menu, handing focus back to its row if — and only if —
+     * focus was inside the menu when it closed.
+     *
+     * The guard is load-bearing twice over:
+     *   - this runs from <svelte:window onclick>, so it fires for clicks
+     *     ANYWHERE in the app. Unconditionally refocusing the row would
+     *     yank focus off whatever the user actually just clicked.
+     *   - a right-click-opened menu never has focus in it (see openCtx), so
+     *     a pointer dismissal leaves focus exactly where it was, as before.
+     * A keyboard-opened one does, so Escape, Tab, and picking an item all
+     * return the user to the row they started from.
+     */
+    function closeCtx() {
+        const wasOpen = !!ctx;
+        // Read BEFORE nulling `ctx` — `ctxEl` is bound to the menu element,
+        // which Svelte only unmounts after this handler returns.
+        const focusInMenu = !!ctxEl && ctxEl.contains(document.activeElement as Node);
+        ctx = null;
+        if (wasOpen && focusInMenu && ctxRow?.isConnected) ctxRow.focus();
+        ctxRow = null;
+    }
+
+    /** This menu's own items, minus the submenu's — those have their own
+     *  key handling and must not have focus stolen by the parent walk. */
+    function ctxItems(): HTMLElement[] {
+        if (!ctxEl) return [];
+        return Array.from(
+            ctxEl.querySelectorAll<HTMLElement>('button[role="menuitem"]:not(:disabled)')
+        ).filter((b) => !b.closest('.submenu'));
+    }
+
+    function focusCtxItem(i: number) {
+        const b = ctxItems();
+        if (b.length) b[Math.max(0, Math.min(i, b.length - 1))].focus();
+    }
+
+    /**
+     * APG menu pattern: ArrowDown/ArrowUp walk the items, Home/End jump to
+     * the ends. MenuSubmenu owns its own panel's arrows, so anything from
+     * inside a .submenu is left alone — it stops at the trigger too, and
+     * the parent walk would then yank focus straight back out of the
+     * submenu the user just opened.
+     */
+    function ctxMenuKey(e: KeyboardEvent) {
+        if (!ctx || (e.target as HTMLElement)?.closest?.('.submenu')) return;
+        const b = ctxItems();
+        if (!b.length) return;
+        const i = b.indexOf(document.activeElement as HTMLElement);
+        // Per APG, the menu owns these keys while it is open: both
+        // preventDefault (don't scroll) and stopPropagation (don't let
+        // Layout's global arrow handling steal the key — see the comment
+        // on the <svelte:window> handler below).
+        switch (e.key) {
+            case 'ArrowDown':
+                e.preventDefault();
+                e.stopPropagation();
+                focusCtxItem(i === -1 ? 0 : i + 1);
+                break;
+            case 'ArrowUp':
+                e.preventDefault();
+                e.stopPropagation();
+                focusCtxItem(i <= 0 ? b.length - 1 : i - 1);
+                break;
+            case 'Home':
+                e.preventDefault();
+                e.stopPropagation();
+                focusCtxItem(0);
+                break;
+            case 'End':
+                e.preventDefault();
+                e.stopPropagation();
+                focusCtxItem(b.length - 1);
+                break;
+            case 'Tab':
+                // Menu buttons are natively focusable, so an unhandled Tab
+                // walks the focus ring THROUGH a menu that stays on screen.
+                closeCtx();
+                break;
+        }
+    }
+
+    /**
+     * Keyboard equivalent of right-click: open the row's context menu
+     * anchored to the row, because there is otherwise no way to reach it
+     * without a pointer. The menu used to be right-click only, which made
+     * every action in it — including "Create rule from message" — invisible
+     * to keyboard and switch users.
+     *
+     * Shift+F10 is the de-facto key for this (it's what the Windows
+     * context-menu key, and most web apps, bind); the Menu key is the other
+     * half of the same chord and is what the APG's menu-button example
+     * accepts. Both are offered because which one fires is browser/OS
+     * dependent.
+     *
+     * Anchoring: a keyboard menu has no cursor, so `e.clientX/Y` would place
+     * it at the last physical mouse position, which can be metres away from
+     * the row. Anchor to the row's own rect instead.
+     */
+    function openCtxKeyboard(e: KeyboardEvent, uid: number) {
+        if (e.key !== 'F10' && e.key !== 'ContextMenu') return;
+        if (!e.shiftKey && e.key !== 'ContextMenu') return;
+        const el = e.currentTarget as HTMLElement;
+        const r = el.getBoundingClientRect();
+        e.preventDefault();
+        e.stopPropagation();
+        // Clamped to the viewport so a row scrolled near an edge doesn't
+        // open a menu that's half off-screen.
+        ctx = {
+            uid,
+            x: Math.min(r.left + 24, window.innerWidth - 240),
+            y: Math.min(r.bottom + 4, window.innerHeight - 80)
+        };
+        ctxRow = el;
+        void tick().then(() => focusCtxItem(0));
+    }
     function rowOf(uid: number) {
         return ui.messages.find((m) => m.uid === uid);
+    }
+
+    // Folder destinations for the context menu's Move submenu. Deliberately
+    // NOT capped: the list used to be truncated to 8 with a silent
+    // `.slice(0, 8)`, which hid every folder past the 8th with no
+    // indication that more existed. MenuSubmenu renders the whole thing in a
+    // scrolling, edge-flipping panel, so there is no reason to hide any.
+    let moveTargets = $derived<SubmenuItem[]>(
+        ui.mailboxes
+            .filter((mb) => mb.path !== ui.selectedPath)
+            .map((mb) => ({ key: mb.path, label: mb.name || mb.path }))
+    );
+
+    // Pick a Move destination. With more than one row selected this moves the
+    // whole selection, matching the pre-submenu behaviour.
+    async function moveTo(dest: string) {
+        const target = ctx?.uid;
+        if (target == null) return;
+        const bulkN = ui.selected.has(target) ? ui.selected.size : 0;
+        closeCtx();
+        if (bulkN > 1) {
+            await bulkMoveSelected(dest);
+        } else {
+            onMove?.(target, dest);
+        }
+    }
+
+    // "Create rule from message" — right-clicked a message, built a Sieve
+    // rule from its headers. Holding the message object (not just the uid)
+    // is what lets the dialog prefill from envelope data the list already
+    // has, with no extra fetch. Null means the dialog isn't open.
+    let ruleFromMessage = $state<MessageListItem | null>(null);
+    function openRuleFromMessage(m: MessageListItem) {
+        ruleFromMessage = m;
+    }
+
+    /**
+     * True while the Move submenu's folder panel is showing.
+     *
+     * The submenu sets `data-submenu-open` on its root <li> precisely so
+     * this menu can implement a two-stage Escape without owning the
+     * submenu's internal state. MessageList's window handler runs in the
+     * CAPTURE phase, which fires before the submenu's own keydown handler,
+     * so it has to stand down explicitly while the submenu is open —
+     * otherwise the first Escape would close the whole context menu.
+     */
+    function submenuOpen() {
+        return !!document.querySelector('.msg-ctx [data-submenu-open="true"]');
     }
 
     // Infinite-scroll trigger — calls onLoadMore when the user scrolls
@@ -976,7 +1159,7 @@
                         }}
                         ondragend={() => { delete document.body.dataset.draggingUids; }}
                         onclick={() => { if (isThread) toggleThread(t.id); selectRow(headMsg.uid); }}
-                        onkeydown={(e) => rowKey(e, headMsg.uid)}
+                        onkeydown={(e) => { rowKey(e, headMsg.uid); openCtxKeyboard(e, headMsg.uid); }}
                         oncontextmenu={(e) => openCtx(e, headMsg.uid)}
                         data-testid={`msg-row-${headMsg.uid}`}
                     >
@@ -1117,7 +1300,7 @@
                                         role="button"
                                         tabindex="0"
                                         onclick={() => selectRow(childMsg.uid)}
-                                        onkeydown={(e) => rowKey(e, childMsg.uid)}
+                                        onkeydown={(e) => { rowKey(e, childMsg.uid); openCtxKeyboard(e, childMsg.uid); }}
                                         oncontextmenu={(e) => openCtx(e, childMsg.uid)}
                                         data-testid={`msg-row-child-${childMsg.uid}`}
                                     >
@@ -1188,6 +1371,16 @@
         onClose={() => (eventsScanOpen = false)}
     />
 
+    <!-- Mounted only while a message is held, so the dialog's onMount
+         (which probes the rules API, outbound webhooks and the mailbox
+         list) fires once per open rather than on every list render. -->
+    {#if ruleFromMessage}
+        <RuleFromMessageDialog
+            message={ruleFromMessage}
+            onClose={() => (ruleFromMessage = null)}
+        />
+    {/if}
+
     <!-- Slow folder-switch overlay. Frosted glass over the rows area so
          the user can't confuse leftover mail from the previous folder with
          what's about to load. Only renders after ~280ms of loading — fast
@@ -1203,10 +1396,48 @@
     {/if}
 </section>
 
+<!-- Escape handling for the whole context menu.
+
+     Two things make this fiddly:
+       1. Layout registers a document-level Escape handler that clears the
+          selection and closes the reading pane. Without capture phase, our
+          Escape and Layout's both run and one Escape press nukes three
+          things. Capturing here gets in front of it.
+       2. Capture runs BEFORE the submenu's own Escape handler, so this
+          handler would otherwise always win and close the entire menu on
+          the first press — killing the two-stage close. Hence the
+          `submenuOpen()` guard: while the folder submenu is open we return
+          untouched and let MenuSubmenu consume the key at the target.
+
+     Net behaviour: Escape in the submenu closes the submenu only; Escape
+     anywhere else in the menu closes the whole menu. Svelte allows one
+     <svelte:window> per component, so this shares the element that already
+     handled click/right-click dismissal. -->
 <svelte:window
     onclick={closeCtx}
     oncontextmenu={(e) => {
         if (ctx && !(e.target as HTMLElement)?.closest?.('.row')) closeCtx();
+    }}
+    onkeydowncapture={(e) => {
+        if (!ctx) return;
+        if (e.key === 'Escape') {
+            // Stand down while the folder submenu is showing so MenuSubmenu
+            // can consume it at the target (its own handler runs after this
+            // capture pass). The second Escape — submenu now shut, guard now
+            // false — falls through and closes the whole menu.
+            if (submenuOpen()) return;
+            e.preventDefault();
+            e.stopPropagation();
+            closeCtx();
+            return;
+        }
+        // Arrow/Home/End are stopPropagation'd inside ctxMenuKey because
+        // Layout registers a BUBBLE-phase keydown on document that uses
+        // ArrowUp/ArrowDown to move the message selection. preventDefault
+        // alone would NOT stop it: the event still reaches document's
+        // bubble listener, so a single ArrowDown would both walk the menu
+        // and change which message is open behind it.
+        ctxMenuKey(e);
     }}
 />
 
@@ -1218,6 +1449,8 @@
         <ul
             class="msg-ctx"
             role="menu"
+            bind:this={ctxEl}
+            aria-label="Message actions"
             style={`top: ${ctx.y}px; left: ${ctx.x}px;`}
             onclick={(e) => e.stopPropagation()}
             oncontextmenu={(e) => e.preventDefault()}
@@ -1236,22 +1469,30 @@
             <li><button type="button" role="menuitem" onclick={() => { onArchive(ctx!.uid); closeCtx(); }}>
                 <Icon name="archive" size={12} /> Archive
             </button></li>
+            <!-- `openRuleFromMessage(m)` must run BEFORE `closeCtx()`. The other
+                 items in this menu call closeCtx() last, and that order matters:
+                 closeCtx() nulls `ctx` synchronously, so a handler that reads
+                 ctx afterwards throws "Cannot read properties of null". Passing
+                 the already-resolved `m` first sidesteps that entirely. -->
+            <li><button type="button" role="menuitem" onclick={() => { openRuleFromMessage(m); closeCtx(); }}>
+                <Icon name="filter" size={12} /> Create rule from message
+            </button></li>
             {#if onMove && ui.mailboxes.length}
                 {@const bulkN = ui.selected.has(ctx.uid) ? ui.selected.size : 0}
-                <li class="sub-head">{bulkN > 1 ? `Move ${bulkN} selected to…` : 'Move to…'}</li>
-                {#each ui.mailboxes.filter((mb) => mb.path !== ui.selectedPath).slice(0, 8) as mb (mb.path)}
-                    <li><button type="button" role="menuitem" onclick={async () => {
-                        const dest = mb.path;
-                        closeCtx();
-                        if (bulkN > 1) {
-                            await bulkMoveSelected(dest);
-                        } else {
-                            onMove!(ctx!.uid, dest);
-                        }
-                    }}>
-                        <Icon name="folder" size={12} /> {mb.name || mb.path}
-                    </button></li>
-                {/each}
+                <!-- The folder list lives in a submenu, NOT inline. Dumping
+                     every folder into the parent made the context menu taller
+                     than the message list it was opened from; one chevron row
+                     keeps the menu a fixed handful of actions no matter how
+                     many mailboxes the account has. The submenu renders the
+                     full list (no .slice cap) in a scrolling, edge-flipping
+                     panel — see MenuSubmenu.svelte. -->
+                <MenuSubmenu
+                    label={bulkN > 1 ? `Move ${bulkN} selected to…` : 'Move to…'}
+                    icon="move"
+                    items={moveTargets}
+                    onSelect={moveTo}
+                    testid="ctx-move"
+                />
             {/if}
             <li class="sep"></li>
             {#if onBlockSender}
@@ -1938,14 +2179,6 @@
     }
     .msg-ctx li { list-style: none; }
     .msg-ctx li.sep { height: 1px; margin: 4px 0; background: var(--border-subtle); }
-    .msg-ctx li.sub-head {
-        padding: 8px 10px 4px;
-        font-size: 10px;
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        color: var(--text-tertiary);
-    }
     .msg-ctx button {
         display: flex;
         align-items: center;

@@ -1,16 +1,21 @@
-// User-selectable visual skins. Two flavours:
+// User-selectable visual skins.
 //
-//   1. Light "accent" skins (default, iceberg, forest, sunset, etc.) only
-//      override the *accent* family of CSS vars. Light/dark mode still drives
-//      the surfaces and text — these skins respect both modes.
+// Two skins ship: Outlook and Gmail. Both are FULL skins — they define the
+// entire palette (surfaces, text, borders, accent family, semantics, fonts,
+// radii, shadows) rather than just tinting the accent, so they look the same
+// regardless of the user's light/dark setting. `mobile/app.css` declares no
+// custom properties of its own, which means a full skin's vars are the ONLY
+// palette mobile sees: a partial skin would leave the mobile app unstyled.
 //
-//   2. "Full" skins (cat themes, retro themes) override the entire palette
-//      including backgrounds, text, borders, fonts, radii and shadows. They
-//      look the same regardless of the user's light/dark setting because
-//      they bake their own complete palette.
+// On top of whichever skin is active the user can layer a single accent hex
+// (`accentOverride`). That is a layer, not a replacement — it re-derives the
+// accent family over the skin's own surfaces, so retinting Outlook purple
+// keeps Outlook's chrome, type and shape.
 //
-// User can also pick a custom accent hue — that's stored separately and
-// derived live from a single hex.
+// Free-form user CSS (`customCss`) is injected after the per-skin extras so
+// it always wins over both.
+
+import { isDark, onEffectiveThemeChange } from './theme.svelte';
 
 const STORAGE_KEY = 'webmail.skin.v1';
 
@@ -19,1088 +24,75 @@ export interface Skin {
     label: string;
     description: string;
     swatch: string;          // small hex preview shown in the picker
-    /** Full skins are opinionated palettes that ignore light/dark mode. */
-    full?: boolean;
     vars: Record<string, string>;
-    /** Optional fancy bits that only load when this skin is active:
-     *  - fonts: Google Font href URLs (loaded as <link rel="stylesheet">).
-     *  - css: extra CSS pasted into a per-skin <style>. Use `:root` and
-     *    standard selectors freely — only present while this skin is on.
-     */
+    /** The same skin in dark mode: surfaces, borders, text and shadows
+     *  re-expressed for a dark pane, written INSTEAD of `vars` whenever the
+     *  effective theme is dark. A skin without this keeps its light palette
+     *  and effectively ignores the light/dark toggle.
+     *
+     *  Deliberately excludes the accent family and the semantic colours.
+     *  The accent family is the user-owned layer (see accentOverrideVars)
+     *  and the semantics have their own override path — letting darkVars
+     *  restate them would put a skin and the accent layer in a fight over
+     *  the same properties, and the layer must always win. */
+    darkVars?: Record<string, string>;
+    /** Extra CSS pasted into a per-skin <style>. Use `:root` and standard
+     *  selectors freely — only present while this skin is on. This is where
+     *  a skin does the work a var swap cannot: structural chrome, row
+     *  behaviour, one-off button shapes. */
     extras?: {
-        fonts?: string[];
         css?: string;
     };
-    /** Mobile address-bar / browser chrome colour. Defaults to --bg-base
-     *  for full skins; accent-only skins fall back to whatever the
-     *  underlying light/dark theme resolves to. */
+    /** Mobile address-bar / browser chrome colour. */
     themeColor?: string;
+    /** True when the skin's own chrome has no room for the ambient top-bar
+     *  chips (Gmail's white topbar is already busy). The chips are hidden in
+     *  the skin's extras CSS, but CSS alone can't reach the options menu —
+     *  a sibling of the wrapper, not a child — so Layout also reads this and
+     *  skips mounting them. See Layout.svelte's weatherChipVisible. */
+    hidesAmbientChips?: boolean;
 }
-
-// Helpful palette builders for the retro themes ----------------------------
-// All retro themes share the same chunky-square chrome: zero radius, no soft
-// shadows, just a thin hard line.
-const SQUARE_CHROME = {
-    '--radius-xs': '0px',
-    '--radius-sm': '0px',
-    '--radius-md': '0px',
-    '--radius-lg': '0px',
-    '--radius-xl': '0px',
-    '--shadow-sm': '0 0 0 1px rgba(0,0,0,0.4)',
-    '--shadow-md': '2px 2px 0 rgba(0,0,0,0.5)',
-    '--shadow-lg': '3px 3px 0 rgba(0,0,0,0.6)',
-    '--pill-padding': '2px 8px'
-};
-
-const MONO_FONT = `'IBM Plex Mono', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace`;
 
 // Skin applied when the user has never picked one (and the fallback when a
 // stored skin id no longer exists). Outlook is the shipping default.
 const DEFAULT_SKIN_ID = 'outlook';
 
+// Accent used before the user has ever dialled one in. Matches the Outlook
+// command bar so a fresh install and the first picker render agree.
+const DEFAULT_ACCENT = '#0078d4';
+
+// Rules BOTH shipped skins carry, verbatim. These are not styling choices so
+// much as structural agreements: neither Outlook-on-the-web nor Gmail marks an
+// unread row with a dot (they use an edge bar and a bold sender respectively),
+// and neither client has a counterpart for the push-to-talk mic FAB. Copy-
+// pasting them into each skin's extras is how two entries end up disagreeing
+// about the same selector, so they are declared once here and appended to
+// every skin's CSS.
+const SHARED_EXTRAS = `
+    .voice-fab { display: none !important; }
+    .row .unread-dot { display: none !important; }
+`;
+
 export const SKINS: Skin[] = [
-    {
-        id: 'default',
-        label: 'Indigo',
-        description: 'Calm indigo — the original.',
-        swatch: '#5b8def',
-        vars: {
-            '--accent': '#5b8def',
-            '--accent-hover': '#4977dc',
-            '--accent-soft': '#e6efff',
-            '--accent-text': '#1f5cdb',
-            '--unread-dot': '#5b8def',
-            '--danger': '#c0392b',
-            '--danger-soft': '#fde0db',
-            '--success': '#2d9560',
-            '--success-soft': '#dff5e8',
-            '--warning': '#c98b15',
-            '--warning-soft': '#fbf2da',
-            '--star': '#f0a821'
-        }
-    },
-    {
-        id: 'iceberg',
-        label: 'Iceberg',
-        description: 'Cool teal — quiet but distinctive.',
-        swatch: '#14b8a6',
-        vars: {
-            '--accent': '#14b8a6',
-            '--accent-hover': '#0d9488',
-            '--accent-soft': '#ccfbf1',
-            '--accent-text': '#0f766e',
-            '--unread-dot': '#14b8a6',
-            '--danger': '#e05252',
-            '--danger-soft': '#fce8e8',
-            '--success': '#0d9488',
-            '--success-soft': '#ccfbf1',
-            '--warning': '#d97706',
-            '--warning-soft': '#fef3c7',
-            '--star': '#f59e0b'
-        }
-    },
-    {
-        id: 'forest',
-        label: 'Forest',
-        description: 'Earthy green — easy on the eyes.',
-        swatch: '#16a34a',
-        vars: {
-            '--accent': '#16a34a',
-            '--accent-hover': '#15803d',
-            '--accent-soft': '#dcfce7',
-            '--accent-text': '#15803d',
-            '--unread-dot': '#16a34a',
-            '--danger': '#b91c1c',
-            '--danger-soft': '#fee2e2',
-            '--success': '#15803d',
-            '--success-soft': '#dcfce7',
-            '--warning': '#a16207',
-            '--warning-soft': '#fef9c3',
-            '--star': '#eab308'
-        }
-    },
-    {
-        id: 'sunset',
-        label: 'Sunset',
-        description: 'Warm coral — playful and bright.',
-        swatch: '#f97316',
-        vars: {
-            '--accent': '#f97316',
-            '--accent-hover': '#ea580c',
-            '--accent-soft': '#ffedd5',
-            '--accent-text': '#c2410c',
-            '--unread-dot': '#f97316',
-            '--danger': '#dc2626',
-            '--danger-soft': '#fee2e2',
-            '--success': '#16a34a',
-            '--success-soft': '#dcfce7',
-            '--warning': '#eab308',
-            '--warning-soft': '#fef9c3',
-            '--star': '#fbbf24'
-        }
-    },
-    {
-        id: 'royal',
-        label: 'Royal',
-        description: 'Deep purple — Proton-flavoured.',
-        swatch: '#8b5cf6',
-        vars: {
-            '--accent': '#8b5cf6',
-            '--accent-hover': '#7c3aed',
-            '--accent-soft': '#ede9fe',
-            '--accent-text': '#6d28d9',
-            '--unread-dot': '#8b5cf6',
-            '--danger': '#ef4444',
-            '--danger-soft': '#fee2e2',
-            '--success': '#10b981',
-            '--success-soft': '#d1fae5',
-            '--warning': '#f59e0b',
-            '--warning-soft': '#fef3c7',
-            '--star': '#fbbf24'
-        }
-    },
-    {
-        id: 'slate',
-        label: 'Slate',
-        description: 'Monochrome — accent fades into the chrome.',
-        swatch: '#475569',
-        vars: {
-            '--accent': '#475569',
-            '--accent-hover': '#334155',
-            '--accent-soft': '#e2e8f0',
-            '--accent-text': '#1e293b',
-            '--unread-dot': '#475569',
-            '--danger': '#991b1b',
-            '--danger-soft': '#fee2e2',
-            '--success': '#166534',
-            '--success-soft': '#dcfce7',
-            '--warning': '#854d0e',
-            '--warning-soft': '#fef9c3',
-            '--star': '#ca8a04'
-        }
-    },
-    {
-        id: 'rose',
-        label: 'Rose',
-        description: 'Pink accent — warm and friendly.',
-        swatch: '#ec4899',
-        vars: {
-            '--accent': '#ec4899',
-            '--accent-hover': '#db2777',
-            '--accent-soft': '#fce7f3',
-            '--accent-text': '#be185d',
-            '--unread-dot': '#ec4899',
-            '--danger': '#dc2626',
-            '--danger-soft': '#fee2e2',
-            '--success': '#059669',
-            '--success-soft': '#d1fae5',
-            '--warning': '#d97706',
-            '--warning-soft': '#fef3c7',
-            '--star': '#f59e0b'
-        }
-    },
-    {
-        id: 'ember',
-        label: 'Ember',
-        description: 'Crimson — bold, high-contrast.',
-        swatch: '#dc2626',
-        vars: {
-            '--accent': '#dc2626',
-            '--accent-hover': '#b91c1c',
-            '--accent-soft': '#fee2e2',
-            '--accent-text': '#991b1b',
-            '--unread-dot': '#dc2626',
-            '--danger': '#b91c1c',
-            '--danger-soft': '#fee2e2',
-            '--success': '#16a34a',
-            '--success-soft': '#dcfce7',
-            '--warning': '#ca8a04',
-            '--warning-soft': '#fef3c7',
-            '--star': '#fbbf24'
-        }
-    },
-    {
-        id: 'midnight',
-        label: 'Midnight',
-        description: 'Navy and gold — refined and serious.',
-        swatch: '#1e3a8a',
-        vars: {
-            '--accent': '#3b82f6',
-            '--accent-hover': '#2563eb',
-            '--accent-soft': '#dbeafe',
-            '--accent-text': '#1e40af',
-            '--unread-dot': '#3b82f6',
-            '--danger': '#ef4444',
-            '--danger-soft': '#fee2e2',
-            '--success': '#10b981',
-            '--success-soft': '#d1fae5',
-            '--warning': '#f59e0b',
-            '--warning-soft': '#fef3c7',
-            '--star': '#fbbf24'
-        }
-    },
-    {
-        id: 'lemon',
-        label: 'Lemon',
-        description: 'Zesty lime on charcoal — high energy.',
-        swatch: '#84cc16',
-        vars: {
-            '--accent': '#84cc16',
-            '--accent-hover': '#65a30d',
-            '--accent-soft': '#ecfccb',
-            '--accent-text': '#3f6212',
-            '--unread-dot': '#84cc16',
-            '--danger': '#f43f5e',
-            '--danger-soft': '#ffe4e6',
-            '--success': '#10b981',
-            '--success-soft': '#d1fae5',
-            '--warning': '#f97316',
-            '--warning-soft': '#ffedd5',
-            '--star': '#eab308'
-        }
-    },
-    {
-        id: 'berry',
-        label: 'Berry',
-        description: 'Plum and raspberry — rich and moody.',
-        swatch: '#a855f7',
-        vars: {
-            '--accent': '#a855f7',
-            '--accent-hover': '#9333ea',
-            '--accent-soft': '#f3e8ff',
-            '--accent-text': '#6b21a8',
-            '--unread-dot': '#a855f7',
-            '--danger': '#e11d48',
-            '--danger-soft': '#ffe4e6',
-            '--success': '#10b981',
-            '--success-soft': '#d1fae5',
-            '--warning': '#f59e0b',
-            '--warning-soft': '#fef3c7',
-            '--star': '#fbbf24'
-        }
-    },
-    {
-        id: 'ocean',
-        label: 'Ocean',
-        description: 'Deep cyan and coral — tropical contrast.',
-        swatch: '#06b6d4',
-        vars: {
-            '--accent': '#06b6d4',
-            '--accent-hover': '#0891b2',
-            '--accent-soft': '#cffafe',
-            '--accent-text': '#155e75',
-            '--unread-dot': '#06b6d4',
-            '--danger': '#f43f5e',
-            '--danger-soft': '#ffe4e6',
-            '--success': '#22c55e',
-            '--success-soft': '#dcfce7',
-            '--warning': '#f97316',
-            '--warning-soft': '#ffedd5',
-            '--star': '#fbbf24'
-        }
-    },
-    {
-        id: 'neon',
-        label: 'Neon',
-        description: 'Electric magenta — high visibility, cyberpunk energy.',
-        swatch: '#ff00ff',
-        vars: {
-            '--accent': '#d946ef',
-            '--accent-hover': '#c026d3',
-            '--accent-soft': '#fae8ff',
-            '--accent-text': '#a21caf',
-            '--unread-dot': '#d946ef',
-            '--danger': '#ef4444',
-            '--danger-soft': '#fee2e2',
-            '--success': '#22c55e',
-            '--success-soft': '#dcfce7',
-            '--warning': '#f59e0b',
-            '--warning-soft': '#fef3c7',
-            '--star': '#fbbf24'
-        }
-    },
-    {
-        id: 'candy',
-        label: 'Candy',
-        description: 'Pastel pink and mint — soft, playful, friendly.',
-        swatch: '#f472b6',
-        vars: {
-            '--accent': '#f472b6',
-            '--accent-hover': '#ec4899',
-            '--accent-soft': '#fce7f3',
-            '--accent-text': '#be185d',
-            '--unread-dot': '#f472b6',
-            '--danger': '#ef4444',
-            '--danger-soft': '#fee2e2',
-            '--success': '#34d399',
-            '--success-soft': '#d1fae5',
-            '--warning': '#fbbf24',
-            '--warning-soft': '#fef9c3',
-            '--star': '#f59e0b'
-        }
-    },
-    {
-        id: 'earth',
-        label: 'Earth',
-        description: 'Terracotta and sage — warm, natural, grounded.',
-        swatch: '#c2410c',
-        vars: {
-            '--accent': '#c2410c',
-            '--accent-hover': '#9a3412',
-            '--accent-soft': '#ffedd5',
-            '--accent-text': '#7c2d12',
-            '--unread-dot': '#c2410c',
-            '--danger': '#b91c1c',
-            '--danger-soft': '#fee2e2',
-            '--success': '#15803d',
-            '--success-soft': '#dcfce7',
-            '--warning': '#a16207',
-            '--warning-soft': '#fef9c3',
-            '--star': '#ca8a04'
-        }
-    },
-    {
-        id: 'vampire',
-        label: 'Vampire',
-        description: 'Crimson on charcoal — dark, dramatic, gothic.',
-        swatch: '#e11d48',
-        vars: {
-            '--accent': '#e11d48',
-            '--accent-hover': '#be123c',
-            '--accent-soft': '#ffe4e6',
-            '--accent-text': '#9f1239',
-            '--unread-dot': '#e11d48',
-            '--danger': '#dc2626',
-            '--danger-soft': '#fee2e2',
-            '--success': '#16a34a',
-            '--success-soft': '#dcfce7',
-            '--warning': '#d97706',
-            '--warning-soft': '#fef3c7',
-            '--star': '#fbbf24'
-        }
-    },
-
-    // ─── Cats (full luxury palettes) ──────────────────────────────────────
-    {
-        id: 'persian',
-        label: 'Persian',
-        description: 'Pearl, cream and champagne gold — opulent salon.',
-        swatch: '#c9a961',
-        full: true,
-        extras: {
-            fonts: [
-                'https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Inter:wght@400;500;600&display=swap'
-            ],
-            css: `
-                /* Subtle damask wash on the page background. */
-                body {
-                    background:
-                        radial-gradient(circle at 15% 10%, rgba(201,169,97,0.08), transparent 55%),
-                        radial-gradient(circle at 85% 85%, rgba(201,169,97,0.06), transparent 55%),
-                        var(--bg-base) !important;
-                }
-                /* Body copy stays sans-serif; headings/labels go full Garamond. */
-                body, input, textarea, select, button { font-family: 'Inter', system-ui, sans-serif !important; }
-                h1, h2, h3, h4, .brand, [data-theme-display],
-                .skin-label, .compose-subject input, .message-subject {
-                    font-family: 'Cormorant Garamond', 'Georgia', serif !important;
-                    letter-spacing: 0.01em;
-                }
-            `
-        },
-        vars: {
-            '--bg-base': '#f3ead6',
-            '--bg-surface': '#fffaee',
-            '--bg-surface-alt': '#f7eecf',
-            '--bg-elevated': '#ffffff',
-            '--bg-hover': '#f0e3b8',
-            '--bg-active': '#e8d59a',
-            '--bg-selected': '#f5e6b8',
-            '--bg-overlay': 'rgba(60, 40, 10, 0.45)',
-            '--bg-input': '#fffaee',
-            '--bg-tag': '#f0e3b8',
-            '--text-primary': '#3d2c0a',
-            '--text-secondary': '#6b4f12',
-            '--text-tertiary': '#826b33',
-            '--text-on-accent': '#fffaee',
-            '--text-link': '#7a5e22',
-            '--border-subtle': '#e9dab7',
-            '--border-soft': '#d6c397',
-            '--border-strong': '#b8a06b',
-            '--border-focus': '#c9a961',
-            '--accent': '#c9a961',
-            '--accent-hover': '#a88a44',
-            '--accent-soft': '#faf3df',
-            '--accent-text': '#7a5e22',
-            '--unread-dot': '#c9a961',
-            '--danger': '#9a3412',
-            '--danger-soft': '#fde4d3',
-            '--success': '#7d9b76',
-            '--success-soft': '#eaf3e7',
-            '--warning': '#b45309',
-            '--warning-soft': '#fef3c7',
-            '--star': '#f59e0b',
-            '--font-sans': `'Cormorant Garamond', 'Georgia', 'Times New Roman', serif`,
-            '--radius-xs': '6px',
-            '--radius-sm': '8px',
-            '--radius-md': '14px',
-            '--radius-lg': '20px',
-            '--radius-xl': '28px',
-            '--shadow-sm': '0 1px 3px rgba(120, 90, 30, 0.18)',
-            '--shadow-md': '0 8px 22px rgba(120, 90, 30, 0.22), 0 2px 6px rgba(120, 90, 30, 0.10)',
-            '--shadow-lg': '0 26px 60px rgba(120, 90, 30, 0.34), 0 8px 18px rgba(120, 90, 30, 0.18)'
-        }
-    },
-    {
-        id: 'bengal',
-        label: 'Bengal',
-        description: 'Copper, amber and deep coffee — wild luxury.',
-        swatch: '#c87532',
-        full: true,
-        vars: {
-            '--bg-base': '#1c1410',
-            '--bg-surface': '#2a1f18',
-            '--bg-surface-alt': '#241a13',
-            '--bg-elevated': '#34281e',
-            '--bg-hover': '#3d3024',
-            '--bg-active': '#4a3a2a',
-            '--bg-selected': '#4d2f15',
-            '--bg-overlay': 'rgba(0, 0, 0, 0.7)',
-            '--bg-input': '#16100c',
-            '--bg-tag': '#3d3024',
-            '--text-primary': '#f5e9d4',
-            '--text-secondary': '#d6b896',
-            '--text-tertiary': '#a08767',
-            '--text-on-accent': '#1c1410',
-            '--text-link': '#e69b58',
-            '--border-subtle': '#3d2f24',
-            '--border-soft': '#4d3d2f',
-            '--border-strong': '#6b5440',
-            '--border-focus': '#c87532',
-            '--accent': '#c87532',
-            '--accent-hover': '#e69b58',
-            '--accent-soft': '#3d2516',
-            '--accent-text': '#e69b58',
-            '--unread-dot': '#c87532',
-            '--danger': '#ef6a52',
-            '--danger-soft': '#3a1810',
-            '--success': '#9bc06f',
-            '--success-soft': '#1f2a14',
-            '--warning': '#e6a456',
-            '--warning-soft': '#352510',
-            '--star': '#f0c14b',
-            '--shadow-sm': '0 1px 2px rgba(0, 0, 0, 0.6)',
-            '--shadow-md': '0 8px 20px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.4)',
-            '--shadow-lg': '0 26px 60px rgba(0, 0, 0, 0.7), 0 8px 18px rgba(0, 0, 0, 0.45)'
-        }
-    },
-    {
-        id: 'russian-blue',
-        label: 'Russian Blue',
-        description: 'Silver-blue with jade eyes — quiet aristocracy.',
-        swatch: '#6b8caf',
-        full: true,
-        vars: {
-            '--bg-base': '#e8edf2',
-            '--bg-surface': '#ffffff',
-            '--bg-surface-alt': '#f0f4f8',
-            '--bg-elevated': '#ffffff',
-            '--bg-hover': '#dde4ec',
-            '--bg-active': '#cfd9e4',
-            '--bg-selected': '#dbe7f3',
-            '--bg-overlay': 'rgba(30, 45, 65, 0.5)',
-            '--bg-input': '#ffffff',
-            '--bg-tag': '#dde4ec',
-            '--text-primary': '#1f2937',
-            '--text-secondary': '#475569',
-            '--text-tertiary': '#64748b',
-            '--text-on-accent': '#ffffff',
-            '--text-link': '#3e5573',
-            '--border-subtle': '#d6dde6',
-            '--border-soft': '#bcc7d4',
-            '--border-strong': '#94a3b8',
-            '--border-focus': '#6b8caf',
-            '--accent': '#6b8caf',
-            '--accent-hover': '#547092',
-            '--accent-soft': '#e7eef6',
-            '--accent-text': '#3e5573',
-            '--unread-dot': '#7ab38a',
-            '--danger': '#be123c',
-            '--danger-soft': '#ffe4e6',
-            '--success': '#7ab38a',
-            '--success-soft': '#dff5e8',
-            '--warning': '#b45309',
-            '--warning-soft': '#fef3c7',
-            '--star': '#7ab38a',
-            '--shadow-sm': '0 1px 2px rgba(60, 80, 100, 0.10)',
-            '--shadow-md': '0 6px 18px rgba(60, 80, 100, 0.14)',
-            '--shadow-lg': '0 22px 50px rgba(60, 80, 100, 0.22)'
-        }
-    },
-    {
-        id: 'siamese',
-        label: 'Siamese',
-        description: 'Cream and chocolate with sapphire eyes.',
-        swatch: '#1e40af',
-        full: true,
-        vars: {
-            '--bg-base': '#f3e6c4',
-            '--bg-surface': '#fffaee',
-            '--bg-surface-alt': '#f7eccd',
-            '--bg-elevated': '#ffffff',
-            '--bg-hover': '#ebd9a8',
-            '--bg-active': '#dcc88a',
-            '--bg-selected': '#dbe4ff',
-            '--bg-overlay': 'rgba(60, 36, 16, 0.5)',
-            '--bg-input': '#fffaee',
-            '--bg-tag': '#ebd9a8',
-            '--text-primary': '#3d2410',
-            '--text-secondary': '#6b4423',
-            '--text-tertiary': '#8b6841',
-            '--text-on-accent': '#fffaee',
-            '--text-link': '#1e40af',
-            '--border-subtle': '#e5d2a8',
-            '--border-soft': '#d0b884',
-            '--border-strong': '#a98c5a',
-            '--border-focus': '#1e40af',
-            '--accent': '#1e40af',
-            '--accent-hover': '#1e3a8a',
-            '--accent-soft': '#dbeafe',
-            '--accent-text': '#1e3a8a',
-            '--unread-dot': '#1e40af',
-            '--danger': '#9f1239',
-            '--danger-soft': '#ffe4e6',
-            '--success': '#047857',
-            '--success-soft': '#d1fae5',
-            '--warning': '#92400e',
-            '--warning-soft': '#fef3c7',
-            '--star': '#1e40af',
-            '--shadow-sm': '0 1px 3px rgba(80, 50, 15, 0.16)',
-            '--shadow-md': '0 8px 20px rgba(80, 50, 15, 0.20)',
-            '--shadow-lg': '0 24px 56px rgba(80, 50, 15, 0.30)'
-        }
-    },
-    {
-        id: 'tuxedo',
-        label: 'Tuxedo',
-        description: 'Black tie and gold leaf — formal occasion.',
-        swatch: '#c4a657',
-        full: true,
-        extras: {
-            fonts: [
-                'https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap'
-            ],
-            css: `
-                /* Faint gold radial spotlight to suggest a chandelier. */
-                body {
-                    background:
-                        radial-gradient(circle at 50% -10%, rgba(196,166,87,0.10), transparent 60%),
-                        radial-gradient(circle at 100% 100%, rgba(196,166,87,0.06), transparent 50%),
-                        var(--bg-base) !important;
-                }
-                body, input, textarea, select, button { font-family: 'Inter', system-ui, sans-serif !important; }
-                h1, h2, h3, h4, .brand, .compose-subject input, .message-subject {
-                    font-family: 'Cormorant Garamond', 'Didot', 'Georgia', serif !important;
-                    letter-spacing: 0.02em;
-                    font-weight: 500;
-                }
-                /* Gold hairline under headers. */
-                h1, h2 { border-bottom: 1px solid rgba(196,166,87,0.35); padding-bottom: 4px; }
-            `
-        },
-        vars: {
-            '--bg-base': '#0a0a0a',
-            '--bg-surface': '#141414',
-            '--bg-surface-alt': '#0f0f0f',
-            '--bg-elevated': '#1c1c1c',
-            '--bg-hover': '#1f1c12',
-            '--bg-active': '#2a2410',
-            '--bg-selected': '#3a2f0d',
-            '--bg-overlay': 'rgba(0, 0, 0, 0.85)',
-            '--bg-input': '#0a0a0a',
-            '--bg-tag': '#1f1c12',
-            '--text-primary': '#f5f0e0',
-            '--text-secondary': '#c4a657',
-            '--text-tertiary': '#98844f',
-            '--text-on-accent': '#0a0a0a',
-            '--text-link': '#facc15',
-            '--border-subtle': '#1f1c12',
-            '--border-soft': '#3a2f0d',
-            '--border-strong': '#6b541e',
-            '--border-focus': '#c4a657',
-            '--accent': '#c4a657',
-            '--accent-hover': '#facc15',
-            '--accent-soft': '#2a2410',
-            '--accent-text': '#facc15',
-            '--unread-dot': '#c4a657',
-            '--danger': '#f87171',
-            '--danger-soft': '#3a1410',
-            '--success': '#86efac',
-            '--success-soft': '#0d2a14',
-            '--warning': '#fcd34d',
-            '--warning-soft': '#3a2810',
-            '--star': '#facc15',
-            '--font-sans': `'Cormorant Garamond', 'Georgia', 'Didot', serif`,
-            '--shadow-sm': '0 1px 2px rgba(0, 0, 0, 0.7)',
-            '--shadow-md': '0 8px 20px rgba(0, 0, 0, 0.65), 0 2px 6px rgba(0, 0, 0, 0.5)',
-            '--shadow-lg': '0 28px 60px rgba(0, 0, 0, 0.85), 0 8px 18px rgba(0, 0, 0, 0.6)'
-        }
-    },
-
-    // ─── Retro computers (full square-chrome palettes) ────────────────────
-    {
-        id: 'amiga',
-        label: 'Amiga Workbench',
-        description: 'Workbench 1.x blue-gray with orange title bars.',
-        swatch: '#ff8800',
-        full: true,
-        extras: {
-            fonts: [
-                'https://fonts.googleapis.com/css2?family=VT323&display=swap'
-            ],
-            css: `
-                body, input, textarea, select, button {
-                    font-family: 'VT323', 'IBM Plex Mono', monospace !important;
-                    font-size: 16px !important;
-                }
-                /* Workbench dotted-pattern background. */
-                body {
-                    background:
-                        radial-gradient(rgba(0,0,0,0.18) 1px, transparent 1px) 0 0/4px 4px,
-                        var(--bg-base) !important;
-                }
-                /* Chunky black border on every card / surface. */
-                .card, .panel, .surface, .modal, .dialog, [class*='-card'], [class*='-panel'] {
-                    border: 2px solid #000 !important;
-                    border-radius: 0 !important;
-                }
-                input, textarea, select {
-                    border: 2px solid #000 !important;
-                    border-radius: 0 !important;
-                }
-                /* Buttons get the chunky outset bevel. */
-                .btn, button.btn-primary, button.btn-secondary {
-                    border: 2px solid #000 !important;
-                    border-radius: 0 !important;
-                    box-shadow: inset -2px -2px 0 #555, inset 2px 2px 0 #fff !important;
-                }
-                .btn:active { box-shadow: inset 2px 2px 0 #555, inset -2px -2px 0 #fff !important; transform: none !important; }
-                /* Workbench-style chunky square scrollbars. */
-                * { scrollbar-color: #000 #aaaaaa; scrollbar-width: auto; }
-                *::-webkit-scrollbar { width: 16px; height: 16px; background: #aaaaaa; }
-                *::-webkit-scrollbar-thumb { background: #000; border: 2px solid #aaaaaa; border-radius: 0; }
-                *::-webkit-scrollbar-corner { background: #aaaaaa; }
-            `
-        },
-        vars: {
-            ...SQUARE_CHROME,
-            '--bg-base': '#6e7e9e',
-            '--bg-surface': '#aaaaaa',
-            '--bg-surface-alt': '#999999',
-            '--bg-elevated': '#bbbbbb',
-            '--bg-hover': '#c4c4c4',
-            '--bg-active': '#888888',
-            '--bg-selected': '#ff8800',
-            '--bg-overlay': 'rgba(0, 0, 0, 0.6)',
-            '--bg-input': '#ffffff',
-            '--bg-tag': '#999999',
-            '--text-primary': '#000000',
-            '--text-secondary': '#000000',
-            '--text-tertiary': '#222222',
-            '--text-on-accent': '#000000',
-            '--text-link': '#0000aa',
-            '--border-subtle': '#000000',
-            '--border-soft': '#000000',
-            '--border-strong': '#000000',
-            '--border-focus': '#ff8800',
-            '--accent': '#ff8800',
-            '--accent-hover': '#cc6c00',
-            '--accent-soft': '#ffd9a8',
-            '--accent-text': '#000000',
-            '--unread-dot': '#ff8800',
-            '--danger': '#d22020',
-            '--danger-soft': '#f7c2c2',
-            '--success': '#218821',
-            '--success-soft': '#bce5bc',
-            '--warning': '#ff8800',
-            '--warning-soft': '#ffd9a8',
-            '--star': '#ffcc00',
-            '--font-sans': `'Topaz', 'IBM Plex Mono', ${MONO_FONT}`,
-            '--font-mono': `'Topaz', ${MONO_FONT}`
-        }
-    },
-    {
-        id: 'dos-amber',
-        label: 'DOS Amber',
-        description: 'Amber phosphor on black — warm CRT glow.',
-        swatch: '#ffb000',
-        full: true,
-        extras: {
-            fonts: [
-                'https://fonts.googleapis.com/css2?family=VT323&display=swap'
-            ],
-            css: `
-                body, input, textarea, select, button {
-                    font-family: 'VT323', 'IBM Plex Mono', monospace !important;
-                    font-size: 17px !important;
-                }
-                /* CRT scanlines + faint phosphor glow. */
-                body::before {
-                    content: '';
-                    position: fixed; inset: 0;
-                    pointer-events: none;
-                    background: repeating-linear-gradient(
-                        to bottom,
-                        rgba(255,176,0,0.04) 0,
-                        rgba(255,176,0,0.04) 1px,
-                        transparent 1px,
-                        transparent 3px
-                    );
-                    z-index: 9999;
-                }
-                body, .text-primary, h1, h2, h3, h4, .message-subject {
-                    text-shadow: 0 0 3px rgba(255,176,0,0.55), 0 0 8px rgba(255,176,0,0.25);
-                }
-                .card, .panel, .surface, [class*='-card'], [class*='-panel'] {
-                    border: 1px solid var(--border-soft) !important;
-                    border-radius: 0 !important;
-                }
-                /* Phosphor scrollbars. */
-                * { scrollbar-color: #ffb000 #000; scrollbar-width: thin; }
-                *::-webkit-scrollbar { width: 12px; height: 12px; background: #000; }
-                *::-webkit-scrollbar-thumb { background: #ffb000; border: 2px solid #000; border-radius: 0; box-shadow: 0 0 4px rgba(255,176,0,0.4); }
-                *::-webkit-scrollbar-corner { background: #000; }
-            `
-        },
-        vars: {
-            ...SQUARE_CHROME,
-            '--bg-base': '#000000',
-            '--bg-surface': '#000000',
-            '--bg-surface-alt': '#0a0600',
-            '--bg-elevated': '#110a00',
-            '--bg-hover': '#1a1000',
-            '--bg-active': '#221600',
-            '--bg-selected': '#ffb000',
-            '--bg-overlay': 'rgba(0, 0, 0, 0.92)',
-            '--bg-input': '#000000',
-            '--bg-tag': '#221600',
-            '--text-primary': '#ffb000',
-            '--text-secondary': '#cc8800',
-            '--text-tertiary': '#9f6f0f',
-            '--text-on-accent': '#000000',
-            '--text-link': '#ffd97a',
-            '--border-subtle': '#663700',
-            '--border-soft': '#885900',
-            '--border-strong': '#cc8800',
-            '--border-focus': '#ffb000',
-            '--accent': '#ffb000',
-            '--accent-hover': '#ffd97a',
-            '--accent-soft': '#332100',
-            '--accent-text': '#ffd97a',
-            '--unread-dot': '#ffb000',
-            '--danger': '#ff5050',
-            '--danger-soft': '#3a0a0a',
-            '--success': '#88dd88',
-            '--success-soft': '#0a2a0a',
-            '--warning': '#ffd97a',
-            '--warning-soft': '#332100',
-            '--star': '#ffd97a',
-            '--font-sans': MONO_FONT,
-            '--font-mono': MONO_FONT,
-            '--shadow-sm': '0 0 4px rgba(255, 176, 0, 0.4)',
-            '--shadow-md': '0 0 12px rgba(255, 176, 0, 0.5)',
-            '--shadow-lg': '0 0 28px rgba(255, 176, 0, 0.55)'
-        }
-    },
-    {
-        id: 'dos-green',
-        label: 'DOS Green',
-        description: 'Green phosphor — terminal nostalgia.',
-        swatch: '#2bd62b',
-        full: true,
-        extras: {
-            fonts: [
-                'https://fonts.googleapis.com/css2?family=VT323&display=swap'
-            ],
-            css: `
-                body, input, textarea, select, button {
-                    font-family: 'VT323', 'IBM Plex Mono', monospace !important;
-                    font-size: 17px !important;
-                }
-                body::before {
-                    content: '';
-                    position: fixed; inset: 0;
-                    pointer-events: none;
-                    background: repeating-linear-gradient(
-                        to bottom,
-                        rgba(43,214,43,0.05) 0,
-                        rgba(43,214,43,0.05) 1px,
-                        transparent 1px,
-                        transparent 3px
-                    );
-                    z-index: 9999;
-                }
-                body, .text-primary, h1, h2, h3, h4, .message-subject {
-                    text-shadow: 0 0 3px rgba(43,214,43,0.55), 0 0 8px rgba(43,214,43,0.25);
-                }
-                .card, .panel, .surface, [class*='-card'], [class*='-panel'] {
-                    border: 1px solid var(--border-soft) !important;
-                    border-radius: 0 !important;
-                }
-                * { scrollbar-color: #2bd62b #000; scrollbar-width: thin; }
-                *::-webkit-scrollbar { width: 12px; height: 12px; background: #000; }
-                *::-webkit-scrollbar-thumb { background: #2bd62b; border: 2px solid #000; border-radius: 0; box-shadow: 0 0 4px rgba(43,214,43,0.4); }
-                *::-webkit-scrollbar-corner { background: #000; }
-            `
-        },
-        vars: {
-            ...SQUARE_CHROME,
-            '--bg-base': '#000000',
-            '--bg-surface': '#000000',
-            '--bg-surface-alt': '#000a00',
-            '--bg-elevated': '#001000',
-            '--bg-hover': '#001a00',
-            '--bg-active': '#002a00',
-            '--bg-selected': '#2bd62b',
-            '--bg-overlay': 'rgba(0, 0, 0, 0.92)',
-            '--bg-input': '#000000',
-            '--bg-tag': '#001f00',
-            '--text-primary': '#2bd62b',
-            '--text-secondary': '#1ea71e',
-            '--text-tertiary': '#498549',
-            '--text-on-accent': '#000000',
-            '--text-link': '#aaff00',
-            '--border-subtle': '#0a3d0a',
-            '--border-soft': '#166316',
-            '--border-strong': '#1ea71e',
-            '--border-focus': '#2bd62b',
-            '--accent': '#2bd62b',
-            '--accent-hover': '#aaff00',
-            '--accent-soft': '#001a00',
-            '--accent-text': '#aaff00',
-            '--unread-dot': '#2bd62b',
-            '--danger': '#ff5050',
-            '--danger-soft': '#3a0a0a',
-            '--success': '#2bd62b',
-            '--success-soft': '#001a00',
-            '--warning': '#ffaa00',
-            '--warning-soft': '#2a1a00',
-            '--star': '#aaff00',
-            '--font-sans': MONO_FONT,
-            '--font-mono': MONO_FONT,
-            '--shadow-sm': '0 0 4px rgba(43, 214, 43, 0.4)',
-            '--shadow-md': '0 0 12px rgba(43, 214, 43, 0.5)',
-            '--shadow-lg': '0 0 28px rgba(43, 214, 43, 0.55)'
-        }
-    },
-    {
-        id: 'c64',
-        label: 'Commodore 64',
-        description: 'Light blue on navy — 8-bit royalty.',
-        swatch: '#7869c4',
-        full: true,
-        extras: {
-            fonts: [
-                'https://fonts.googleapis.com/css2?family=VT323&display=swap'
-            ],
-            css: `
-                body, input, textarea, select, button {
-                    font-family: 'VT323', 'IBM Plex Mono', monospace !important;
-                    font-size: 17px !important;
-                    text-transform: uppercase;
-                }
-                /* Iconic light-blue border around the whole screen. */
-                body {
-                    border: 12px solid #7869c4 !important;
-                    box-sizing: border-box;
-                }
-                /* Subtle scanlines for the CRT vibe. */
-                body::before {
-                    content: '';
-                    position: fixed; inset: 0;
-                    pointer-events: none;
-                    background: repeating-linear-gradient(
-                        to bottom,
-                        rgba(184,176,240,0.04) 0,
-                        rgba(184,176,240,0.04) 1px,
-                        transparent 1px,
-                        transparent 3px
-                    );
-                    z-index: 9999;
-                }
-                .card, .panel, .surface, [class*='-card'], [class*='-panel'] {
-                    border: 1px solid var(--border-soft) !important;
-                    border-radius: 0 !important;
-                }
-                * { scrollbar-color: #b8b0f0 #4641c4; scrollbar-width: auto; }
-                *::-webkit-scrollbar { width: 14px; height: 14px; background: #4641c4; }
-                *::-webkit-scrollbar-thumb { background: #b8b0f0; border: 2px solid #4641c4; border-radius: 0; }
-                *::-webkit-scrollbar-corner { background: #4641c4; }
-            `
-        },
-        vars: {
-            ...SQUARE_CHROME,
-            '--bg-base': '#7869c4',
-            '--bg-surface': '#4641c4',
-            '--bg-surface-alt': '#3d3aa8',
-            '--bg-elevated': '#5b51c9',
-            '--bg-hover': '#5b51c9',
-            '--bg-active': '#3d3aa8',
-            '--bg-selected': '#b8b0f0',
-            '--bg-overlay': 'rgba(20, 15, 60, 0.7)',
-            '--bg-input': '#3d3aa8',
-            '--bg-tag': '#5b51c9',
-            '--text-primary': '#dfdcf8',
-            '--text-secondary': '#ccc8f3',
-            '--text-tertiary': '#cdcae8',
-            '--text-on-accent': '#4641c4',
-            '--text-link': '#ffffff',
-            '--border-subtle': '#5b51c9',
-            '--border-soft': '#7869c4',
-            '--border-strong': '#b8b0f0',
-            '--border-focus': '#b8b0f0',
-            '--accent': '#b8b0f0',
-            '--accent-hover': '#ffffff',
-            '--accent-soft': '#5b51c9',
-            '--accent-text': '#ffffff',
-            '--unread-dot': '#b8b0f0',
-            '--danger': '#ff8a8a',
-            '--danger-soft': '#3a1818',
-            '--success': '#90ee90',
-            '--success-soft': '#1a3a1a',
-            '--warning': '#ffe066',
-            '--warning-soft': '#3a3018',
-            '--star': '#ffe066',
-            '--font-sans': MONO_FONT,
-            '--font-mono': MONO_FONT
-        }
-    },
-    {
-        id: 'win95',
-        label: 'Windows 95',
-        description: 'Teal desktop, silver chrome, navy selection.',
-        swatch: '#008080',
-        full: true,
-        extras: {
-            css: `
-                body, input, textarea, select, button {
-                    font-family: 'MS Sans Serif', 'Tahoma', 'Geneva', sans-serif !important;
-                    font-size: 12px !important;
-                }
-                /* Classic Plus! teal cloth pattern on the desktop. */
-                body {
-                    background:
-                        repeating-linear-gradient(45deg, rgba(255,255,255,0.04) 0 2px, transparent 2px 4px),
-                        var(--bg-base) !important;
-                }
-                /* Chiseled bevel — the signature Win95 look. */
-                .card, .panel, .surface, .modal, .dialog, [class*='-card'], [class*='-panel'] {
-                    border: none !important;
-                    border-radius: 0 !important;
-                    box-shadow:
-                        inset -1px -1px 0 #404040,
-                        inset 1px 1px 0 #ffffff !important;
-                }
-                input, textarea, select {
-                    border: none !important;
-                    border-radius: 0 !important;
-                    box-shadow:
-                        inset 1px 1px 0 #404040,
-                        inset -1px -1px 0 #ffffff !important;
-                    padding: 3px 5px !important;
-                }
-                .btn, button.btn-primary, button.btn-secondary {
-                    border: 1px solid #000 !important;
-                    border-radius: 0 !important;
-                    background: #c0c0c0 !important;
-                    color: #000 !important;
-                    box-shadow:
-                        inset -1px -1px 0 #404040,
-                        inset 1px 1px 0 #ffffff !important;
-                    padding: 4px 14px !important;
-                }
-                .btn:active {
-                    box-shadow:
-                        inset 1px 1px 0 #404040,
-                        inset -1px -1px 0 #ffffff !important;
-                    transform: none !important;
-                }
-                /* Iconic chunky Win95 scrollbar — silver thumb on a dotted track. */
-                * { scrollbar-color: #c0c0c0 #d4d0c8; scrollbar-width: auto; }
-                *::-webkit-scrollbar { width: 17px; height: 17px; background: #d4d0c8; }
-                *::-webkit-scrollbar-track {
-                    background:
-                        repeating-linear-gradient(45deg, #c0c0c0 0 1px, #d4d0c8 1px 2px);
-                }
-                *::-webkit-scrollbar-thumb {
-                    background: #c0c0c0;
-                    border-radius: 0;
-                    box-shadow:
-                        inset -1px -1px 0 #404040,
-                        inset 1px 1px 0 #ffffff,
-                        inset -2px -2px 0 #808080,
-                        inset 2px 2px 0 #dfdfdf;
-                }
-                *::-webkit-scrollbar-corner { background: #d4d0c8; }
-            `
-        },
-        vars: {
-            ...SQUARE_CHROME,
-            '--bg-base': '#008080',
-            '--bg-surface': '#c0c0c0',
-            '--bg-surface-alt': '#bcbcbc',
-            '--bg-elevated': '#c0c0c0',
-            '--bg-hover': '#d4d0c8',
-            '--bg-active': '#a0a0a0',
-            '--bg-selected': '#000080',
-            '--bg-overlay': 'rgba(0, 0, 0, 0.55)',
-            '--bg-input': '#ffffff',
-            '--bg-tag': '#d4d0c8',
-            '--text-primary': '#000000',
-            '--text-secondary': '#000000',
-            '--text-tertiary': '#3a3a3a',
-            '--text-on-accent': '#ffffff',
-            '--text-link': '#0000aa',
-            '--border-subtle': '#808080',
-            '--border-soft': '#404040',
-            '--border-strong': '#000000',
-            '--border-focus': '#000080',
-            '--accent': '#000080',
-            '--accent-hover': '#0000c8',
-            '--accent-soft': '#d4d0c8',
-            '--accent-text': '#000080',
-            '--unread-dot': '#000080',
-            '--danger': '#800000',
-            '--danger-soft': '#f4d6d6',
-            '--success': '#006400',
-            '--success-soft': '#d6ecd6',
-            '--warning': '#808000',
-            '--warning-soft': '#ececc7',
-            '--star': '#ffcc00',
-            '--font-sans': `'MS Sans Serif', 'Tahoma', 'Geneva', sans-serif`,
-            '--shadow-sm': 'inset -1px -1px 0 #404040, inset 1px 1px 0 #ffffff',
-            '--shadow-md': 'inset -1px -1px 0 #404040, inset 1px 1px 0 #ffffff, 2px 2px 0 rgba(0,0,0,0.4)',
-            '--shadow-lg': 'inset -1px -1px 0 #404040, inset 1px 1px 0 #ffffff, 4px 4px 0 rgba(0,0,0,0.5)'
-        }
-    },
-
-    // ─── Microsoft Outlook on the web (full spitting-image palette) ───────
-    // This is the default skin — see DEFAULT_SKIN_ID below.
+    // ─── Microsoft Outlook on the web ────────────────────────────────────
+    // The default skin — see DEFAULT_SKIN_ID above. Every colour is a real
+    // OWA/Fluent token, and nothing structural is baked in, so layering a
+    // different accent over it retints the whole chrome rather than just the
+    // buttons inside it.
     {
         id: 'outlook',
         label: 'Outlook',
         description: 'Microsoft Outlook on the web — azure chrome, Segoe UI, white surfaces.',
         swatch: '#0078d4',
-        full: true,
+        hidesAmbientChips: true,
         extras: {
             css: `
-                /* Azure command bar. The topbar is the OWA header: brand and
-                 * ghost icons go white, the search box becomes the white
-                 * OWA search field, the user chip already paints itself
-                 * with --bg-base (white) so it reads as the OWA avatar. */
+                /* Azure command bar. The bar paints from --accent and its
+                 * underline from the darker hover shade, so the accent
+                 * picker retints the chrome as a whole. */
                 .topbar {
-                    background: #0078d4 !important;
-                    border-bottom: 1px solid #106ebe !important;
+                    background: var(--accent) !important;
+                    border-bottom: 1px solid var(--accent-hover) !important;
                 }
                 .topbar .brand-mark { color: #fff !important; }
                 .topbar .brand-sub { color: rgba(255,255,255,0.75) !important; }
@@ -1112,13 +104,29 @@ export const SKINS: Skin[] = [
                     background: rgba(255,255,255,0.15) !important;
                     color: #fff !important;
                 }
+                /* The search box stays the white OWA field in every accent AND
+                 * in dark mode; only the scope toggle inside it takes the
+                 * accent colour.
+                 *
+                 * This block is deliberately NOT tokenised, even now that the
+                 * skin has a dark palette. OWA dark keeps a light input on the
+                 * accent bar, so the rendering is authentic — and the obvious
+                 * "fix" is a trap: --bg-input is #1b1b1b in the dark set, so
+                 * swapping the background to that token while leaving the text
+                 * at #242424 collapses the field to 1.11:1, versus the 15.52:1
+                 * measured here. Background, input text, placeholder and the
+                 * scope-button border all have to move together, or not at
+                 * all. Measured in a real browser at #ffffff / #242424. */
                 .topbar .search-wrap {
                     background: #ffffff !important;
                     border: 1px solid #ffffff !important;
                 }
                 .topbar .search-wrap input { color: #242424 !important; }
                 .topbar .search-wrap input::placeholder { color: #616161 !important; }
-                .topbar .search-scope-btn { color: #0078d4 !important; border-color: #c8c6c4 !important; }
+                .topbar .search-scope-btn {
+                    color: var(--accent-text) !important;
+                    border-color: #c8c6c4 !important;
+                }
                 .topbar .muted { color: rgba(255,255,255,0.85) !important; }
 
                 /* Signed-in user next to the brand, like OWA's header. */
@@ -1129,20 +137,17 @@ export const SKINS: Skin[] = [
                 }
                 .topbar .brand-user-emoji { font-size: 14px; }
 
-                /* OWA's header is sparse — no mic FAB; the Assistant button
-                 * stays. */
-                .voice-fab { display: none !important; }
-
                 /* OWA's topbar carries no ambient chips — weather and the
                  * calendar ticker stay hidden under this skin even when the
-                 * user has them enabled for other skins. */
+                 * user has them enabled. The skin's hidesAmbientChips flag
+                 * makes Layout skip mounting them at all; this rule covers
+                 * the opt-in case where the weather chip comes back. */
                 .topbar .weather-wrap, .topbar .cal-wrap { display: none !important; }
 
                 /* OWA marks unread rows with a blue edge bar and a blue
                  * bolded subject — no dot, no tint. */
                 .row.unread { box-shadow: inset 3px 0 0 var(--accent) !important; }
                 .row.unread .subject { color: var(--accent-text) !important; }
-                .row .unread-dot { display: none !important; }
 
                 /* OWA folder counts are plain blue numerals, not pills. */
                 .folder .count {
@@ -1158,7 +163,7 @@ export const SKINS: Skin[] = [
 
                 /* OWA is flat: rows, folders and buttons don't lift. */
                 .btn:hover, .row:hover, .folder:hover { transform: none !important; }
-            `
+            ` + SHARED_EXTRAS
         },
         themeColor: '#0078d4',
         vars: {
@@ -1184,6 +189,8 @@ export const SKINS: Skin[] = [
             '--border-subtle': '#ededed',
             '--border-soft': '#e0e0e0',
             '--border-strong': '#c8c6c4',
+            // Outlook ties the focus ring to its accent; the accent layer
+            // re-derives this so a re-tinted bar still has a matching ring.
             '--border-focus': '#0078d4',
 
             // Communication blue family: base, hover shade, pale wash,
@@ -1218,379 +225,310 @@ export const SKINS: Skin[] = [
             '--shadow-md': '0 3.2px 7.2px rgba(0, 0, 0, 0.132), 0 0.6px 1.8px rgba(0, 0, 0, 0.108)',
             '--shadow-lg': '0 12px 28px rgba(0, 0, 0, 0.24), 0 2px 8px rgba(0, 0, 0, 0.16)',
             '--pill-padding': '2px 8px'
-        }
-    },
-
-    // ─── Outlook on the web, dark mode ───────────────────────────────────
-    // The genuine counterpart of the skin above, not an inversion. OWA's
-    // dark theme keeps the *blue* command bar and swaps every neutral for
-    // the Fluent dark ramp (neutralLighter #1f1f1f family) — pure black
-    // reads as "OLED gimmick" rather than "Fluent", so the surfaces sit a
-    // hair above black and separate via the borders instead.
-    //
-    // Every non-colour decision (Segoe UI, near-square radii, the star red,
-    // the hidden voice FAB / ambient chips, the OWA structural rules) is
-    // mirrored from the light skin on purpose: the two must stay in sync
-    // as a pair or the picker starts offering two different-looking "Outlook".
-    {
-        id: 'outlook-dark',
-        label: 'Outlook Dark',
-        description: 'Microsoft Outlook on the web in dark mode — blue chrome over Fluent dark neutrals.',
-        swatch: '#1f2b3d',
-        full: true,
-        extras: {
-            css: `
-                /* Dark-mode OWA command bar. Darker and a touch deeper than
-                 * the light skin's #0078d4 so it doesn't glare against the
-                 * near-black panes below it, but still unmistakably the same
-                 * saturated OWA blue. */
-                .topbar {
-                    background: #0f6cbd !important;
-                    border-bottom: 1px solid #0a5a9e !important;
-                }
-                .topbar .brand-mark { color: #fff !important; }
-                .topbar .brand-sub { color: rgba(255,255,255,0.75) !important; }
-                .topbar .logo { background: rgba(255,255,255,0.18) !important; }
-                .topbar .btn-ghost,
-                .topbar .theme-toggle { color: #fff !important; }
-                .topbar .btn-ghost:hover,
-                .topbar .theme-toggle:hover {
-                    background: rgba(255,255,255,0.15) !important;
-                    color: #fff !important;
-                }
-                /* OWA's search field flips to the dark neutral instead of
-                 * staying white — a white box punched into a dark header is
-                 * the classic tell of a lazily inverted theme. */
-                .topbar .search-wrap {
-                    background: #1b1b1b !important;
-                    border: 1px solid #3b3a39 !important;
-                }
-                .topbar .search-wrap input { color: #f3f2f1 !important; }
-                .topbar .search-wrap input::placeholder { color: #8a8886 !important; }
-                .topbar .search-scope-btn { color: #60cdff !important; border-color: #3b3a39 !important; }
-                .topbar .muted { color: rgba(255,255,255,0.85) !important; }
-
-                /* Signed-in user next to the brand, like OWA's header. */
-                .topbar .brand-user {
-                    display: inline-flex !important;
-                    color: #fff !important;
-                    margin-left: 4px;
-                }
-                .topbar .brand-user-emoji { font-size: 14px; }
-
-                /* OWA's header is sparse — no mic FAB; the Assistant button
-                 * stays. */
-                .voice-fab { display: none !important; }
-
-                /* OWA's topbar carries no ambient chips — weather and the
-                 * calendar ticker stay hidden under this skin even when the
-                 * user has them enabled for other skins. The Layout's
-                 * weatherChipOutlook opt-in re-asserts .weather-wrap via the
-                 * scoped -forced class on every outlook-family skin
-                 * (light and dark alike). */
-                .topbar .weather-wrap, .topbar .cal-ticker { display: none !important; }
-
-                /* OWA marks unread rows with a blue edge bar and a blue
-                 * bolded subject — no dot, no tint. */
-                .row.unread { box-shadow: inset 3px 0 0 var(--accent) !important; }
-                .row.unread .subject { color: var(--accent-text) !important; }
-                .row .unread-dot { display: none !important; }
-
-                /* OWA folder counts are plain blue numerals, not pills. */
-                .folder .count {
-                    background: transparent !important;
-                    color: var(--accent) !important;
-                    padding: 0 !important;
-                    min-width: 0 !important;
-                }
-                .folder.active .count {
-                    background: transparent !important;
-                    color: var(--accent-text) !important;
-                }
-
-                /* OWA is flat: rows, folders and buttons don't lift. */
-                .btn:hover, .row:hover, .folder:hover { transform: none !important; }
-
-                /* Dark scrollbars: Fluent's dark track/thumb, otherwise the
-                 * browser paints a bright grey gutter against the panes. */
-                * { scrollbar-color: #3b3a39 #1b1b1b; }
-                *::-webkit-scrollbar-thumb { background: #3b3a39; }
-                *::-webkit-scrollbar-track { background: #1b1b1b; }
-            `
         },
-        themeColor: '#0f6cbd',
-        vars: {
-            // Fluent dark neutral ramp. The message list and folder pane
-            // share neutralLighter (#1f1f1f) so they read as one plane with
-            // a hairline between them; the reading pane drops a step to
-            // #1b1b1b because OWA insets it, giving the classic
-            // "list on a shelf, article in a well" depth without shadows.
+
+        // Fluent dark. The command bar stays the communication blue — OWA's
+        // dark theme does not neutralise it — and every neutral steps onto
+        // Fluent's neutralLighter ramp. Surfaces sit a hair ABOVE black
+        // rather than at it: pure black reads as an "OLED gimmick" instead
+        // of Fluent, and on a near-black pane a dark hairline is invisible,
+        // so the borders have to do the separating.
+        //
+        // No accent or semantic tokens: those are the user's layer.
+        darkVars: {
             '--bg-base': '#1f1f1f',
             '--bg-surface': '#1f1f1f',
             '--bg-surface-alt': '#252525',
             '--bg-elevated': '#2b2b2b',
             '--bg-hover': '#2a2a2a',
             '--bg-active': '#323232',
-            '--bg-selected': '#2b579a',
-            '--bg-overlay': 'rgba(0, 0, 0, 0.6)',
+            '--bg-selected': '#2b2b2b',
+            '--bg-overlay': 'rgba(0, 0, 0, 0.62)',
             '--bg-input': '#1b1b1b',
             '--bg-tag': '#2d2d2d',
 
-            // Fluent's light-grey text ramp, unchanged by dark mode.
             '--text-primary': '#f3f2f1',
-            '--text-secondary': '#c8c6c4',
-            '--text-tertiary': '#8a8886',
+            '--text-secondary': '#d2d0ce',
+            '--text-tertiary': '#a19f9d',
             '--text-on-accent': '#ffffff',
-            '--text-link': '#60cdff',
+            // OWA dark uses the lighter communication blue for links so they
+            // clear AA on the dark pane.
+            '--text-link': '#6cb2f7',
 
-            // Dark borders have to be lighter than the surface, not darker —
-            // on a near-black pane a dark hairline is invisible.
+            // Dark borders go LIGHTER than the surface, not darker.
             '--border-subtle': '#2d2d2d',
             '--border-soft': '#3b3a39',
-            '--border-strong': '#484644',
-            '--border-focus': '#60cdff',
+            '--border-strong': '#57534f',
+            // Outlook couples the focus ring to the accent; darkVars leaves
+            // it to the accent layer so a re-tinted bar keeps a matching ring.
+            '--border-focus': '#0078d4',
 
-            // Same communication blue family as the light skin, stepped up
-            // in luminance so it holds up on #1f1f1f. accent-text is the
-            // pale cyan-blue OWA uses for links and unread subjects in dark.
-            '--accent': '#3b9eff',
-            '--accent-hover': '#62b0ff',
-            '--accent-soft': '#17253a',
-            '--accent-text': '#60cdff',
-            '--unread-dot': '#3b9eff',
-
-            // Fluent semantics, dark-background variants: the *soft* washes
-            // become translucent fills (a pale wash on a dark pane reads as
-            // a hole), the hues themselves lighten so text on them passes.
-            '--danger': '#f1707b',
-            '--danger-soft': 'rgba(255, 123, 145, 0.16)',
-            '--success': '#6ccb5f',
-            '--success-soft': 'rgba(108, 203, 95, 0.16)',
-            '--warning': '#fce100',
-            '--warning-soft': 'rgba(252, 225, 0, 0.14)',
-            // OWA's flag red is one of the few brand constants that doesn't
-            // get a dark variant — a darker red vanishes on #1f1f1f.
-            '--star': '#e74856',
-
-            '--font-sans': `'Segoe UI', 'Segoe UI Variable Text', 'Segoe UI Web (West European)',
-                -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', sans-serif`,
-
-            // Fluent shape: near-square chrome, 4px controls. Same values as
-            // the light skin — shape is theme-independent.
-            '--radius-xs': '2px',
-            '--radius-sm': '4px',
-            '--radius-md': '4px',
-            '--radius-lg': '6px',
-            '--radius-xl': '8px',
-
-            // Dark elevation: you cannot drop a black shadow onto a near-black
-            // surface, so the depth has to come from a light rim plus a soft
-            // black ambient. Same geometry as the light skin, re-expressed.
+            // A black shadow on a near-black pane is invisible, so the depth
+            // has to come from a light rim plus a soft ambient. Same geometry
+            // as the light skin, re-expressed.
             '--shadow-sm': '0 0 1px rgba(255, 255, 255, 0.04), 0 1px 2px rgba(0, 0, 0, 0.5)',
             '--shadow-md': '0 0 1px rgba(255, 255, 255, 0.05), 0 3.2px 7.2px rgba(0, 0, 0, 0.55), 0 0.6px 1.8px rgba(0, 0, 0, 0.45)',
-            '--shadow-lg': '0 0 1px rgba(255, 255, 255, 0.08), 0 12px 28px rgba(0, 0, 0, 0.7), 0 2px 8px rgba(0, 0, 0, 0.5)',
-            '--pill-padding': '2px 8px'
+            '--shadow-lg': '0 0 1px rgba(255, 255, 255, 0.08), 0 12px 28px rgba(0, 0, 0, 0.7), 0 2px 8px rgba(0, 0, 0, 0.5)'
         }
     },
 
-    // ─── Photo themes (load real images at runtime) ───────────────────────
-    // These hit third-party endpoints (cataas.com / loremflickr.com) the
-    // first time the theme activates, then the browser caches them. Opt-in
-    // and clearly described so users know they're paying with a network
-    // fetch.
+    // ─── Gmail ───────────────────────────────────────────────────────────
+    // A faithful copy of the real client, not a generic blue theme. The
+    // distinguishing marks all live in extras.css because no var swap can
+    // produce them: the pill-shaped search field, the red rounded Compose
+    // button, Gmail's 8px row rhythm, and its habit of bolding the *sender*
+    // (not the subject) on unread rows.
+    //
+    // Gmail's topbar is white — the same white as the list surface — so the
+    // vars alone do that job and no topbar background is forced here.
     {
-        id: 'cat-photos',
-        label: 'Cat Photos',
-        description: 'Pink + cream salon with real cat portraits in the chrome. Loads images from cataas.com.',
-        swatch: '#f97391',
-        full: true,
+        id: 'gmail',
+        label: 'Gmail',
+        description: 'Google Gmail — red accent, rounded cards, white on light grey.',
+        swatch: '#ea4335',
         extras: {
-            fonts: [
-                'https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&display=swap'
-            ],
             css: `
-                body, input, textarea, select, button { font-family: 'Quicksand', system-ui, sans-serif !important; }
-                /* Soft pink wash + faint paw-print pattern across the page. */
-                body {
-                    background:
-                        radial-gradient(circle at 12% 18%, rgba(249,115,145,0.10), transparent 55%),
-                        radial-gradient(circle at 90% 92%, rgba(249,115,145,0.10), transparent 55%),
-                        var(--bg-base) !important;
+                /* Gmail's header is white — the same white as the list
+                 * surface, which is what --bg-surface already resolves to,
+                 * so no background is forced here. Only the hairline is
+                 * pinned, because Layout's own topbar border would
+                 * otherwise come from the light/dark theme's own ramp. */
+                .topbar {
+                    border-bottom: 1px solid var(--border-soft) !important;
                 }
-                /* Random cataas portrait wedged into the bottom-right corner —
-                   non-blocking, decorative, doesn't intercept clicks. */
-                body::after {
-                    content: '';
-                    position: fixed;
-                    right: 14px;
-                    bottom: 14px;
-                    width: 96px;
-                    height: 96px;
-                    border-radius: 50%;
-                    background-image: url('https://cataas.com/cat?width=192&height=192');
-                    background-size: cover;
-                    background-position: center;
-                    border: 3px solid #f97391;
-                    box-shadow: 0 6px 18px rgba(249,115,145,0.35), 0 0 0 4px rgba(249,115,145,0.18);
-                    pointer-events: none;
-                    z-index: 40;
-                    opacity: 0.95;
+                .topbar .btn-ghost:hover,
+                .topbar .theme-toggle:hover { background: var(--bg-hover) !important; }
+
+                /* Gmail's search field is a soft-grey rounded box — the one
+                 * rounded shape in the whole header. */
+                .topbar .search-wrap {
+                    background: var(--bg-hover) !important;
+                    border: 1px solid var(--border-soft) !important;
+                    border-radius: var(--radius-md) !important;
+                    padding: 0 16px !important;
                 }
-                /* Smaller portrait in the empty-state of message panes for fun. */
-                .empty-state::before, .placeholder::before {
-                    content: '';
-                    display: block;
-                    width: 140px;
-                    height: 140px;
-                    margin: 0 auto 12px;
-                    border-radius: 50%;
-                    background-image: url('https://cataas.com/cat/cute?width=280&height=280');
-                    background-size: cover;
-                    background-position: center;
-                    border: 4px solid #f97391;
-                    box-shadow: 0 8px 22px rgba(249,115,145,0.25);
+                .topbar .search-wrap:focus-within {
+                    background: var(--bg-input) !important;
+                    border-color: var(--accent-soft) !important;
+                    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent) !important;
                 }
-                * { scrollbar-color: #f97391 #fff5f7; scrollbar-width: thin; }
-                *::-webkit-scrollbar-thumb { background: #f97391; }
-            `
+                .topbar .search-scope-btn {
+                    color: var(--text-link) !important;
+                    border-color: var(--border-strong) !important;
+                    border-radius: 999px !important;
+                }
+                .topbar .search-scope-btn.active {
+                    background: var(--text-link) !important;
+                    color: var(--text-on-accent) !important;
+                    border-color: var(--text-link) !important;
+                }
+
+                /* Gmail's left nav: plain grey section labels (not shouty
+                 * uppercase), rounded pills, and no accent bar. The active
+                 * folder is Gmail's pale blue — the red is reserved for
+                 * Compose and destructive actions. */
+                .nav-section {
+                    color: var(--text-secondary) !important;
+                    font-size: 11px !important;
+                    letter-spacing: 0.04em !important;
+                    text-transform: none !important;
+                    margin: 12px 12px 4px !important;
+                }
+                .folder {
+                    border-radius: 999px !important;
+                    padding: 6px 12px !important;
+                    margin: 1px 6px !important;
+                    color: var(--text-primary) !important;
+                }
+                .folder:hover { background: var(--bg-hover) !important; }
+                .folder.active {
+                    background: var(--bg-selected) !important;
+                    color: var(--accent-text) !important;
+                    box-shadow: none !important;
+                }
+                /* Unread mailboxes: bold name, grey count badge. */
+                .folder .count {
+                    background: var(--bg-tag) !important;
+                    color: var(--text-secondary) !important;
+                    font-weight: 700 !important;
+                }
+                .folder.active .count {
+                    background: var(--bg-surface) !important;
+                    color: var(--accent-text) !important;
+                }
+
+                /* Gmail's Compose: a red pill with the pencil glyph, alone
+                 * at the top of the nav. */
+                .compose-row .compose {
+                    background: var(--accent-text) !important;
+                    color: var(--text-on-accent) !important;
+                    border-radius: 999px !important;
+                    padding: 12px 18px !important;
+                    font-size: 14px !important;
+                    box-shadow: var(--shadow-sm) !important;
+                }
+                .compose-row .compose:hover {
+                    background: var(--accent) !important;
+                    box-shadow: var(--shadow-md) !important;
+                    transform: none !important;
+                }
+                /* The refresh button beside Compose stays a neutral chip —
+                 * three stacked red buttons is not Gmail. */
+                .compose-row .refresh-btn {
+                    background: var(--bg-surface) !important;
+                    border: 1px solid var(--border-strong) !important;
+                    border-radius: 999px !important;
+                    color: var(--text-secondary) !important;
+                }
+
+                /* Gmail rows: 8px cards on a grey page, no hairline, no lift
+                 * on hover — just a wash. */
+                .rows { padding: 8px !important; }
+                .row {
+                    border-radius: var(--radius-md) !important;
+                    border-bottom: none !important;
+                    padding: 10px 12px !important;
+                    box-shadow: none !important;
+                }
+                .row:hover {
+                    background: var(--bg-hover) !important;
+                    transform: none !important;
+                    box-shadow: none !important;
+                }
+                .row.selected,
+                .row.bulk-selected {
+                    background: var(--bg-selected) !important;
+                    box-shadow: none !important;
+                }
+                /* Gmail bolds the SENDER on unread, not the subject. */
+                .row.unread .from { font-weight: 700 !important; color: var(--text-primary) !important; }
+                .row:not(.unread) .from { font-weight: 400 !important; color: var(--text-secondary) !important; }
+
+                /* Unlike OWA's sparse blue command bar, Gmail's header is
+                 * white with room to spare, so the weather chip and calendar
+                 * ticker stay VISIBLE here: both build from light surfaces
+                 * with high-contrast text (the lowest pairing here is the
+                 * ticker's --text-secondary on --bg-surface-alt at 5.74:1),
+                 * so they read cleanly against it. */
+            ` + SHARED_EXTRAS
         },
-        themeColor: '#fff5f7',
+        themeColor: '#ffffff',
         vars: {
-            '--bg-base': '#fff5f7',
+            // White cards on Gmail's light grey. #f8f9fa is the grey; #ffffff
+            // stays the surface, which is why --bg-base is white too — the
+            // grey lives in --bg-surface-alt / --bg-hover, matching how
+            // Gmail's list pane and its hover wash relate.
+            '--bg-base': '#ffffff',
             '--bg-surface': '#ffffff',
-            '--bg-surface-alt': '#fde9ed',
+            '--bg-surface-alt': '#f8f9fa',
             '--bg-elevated': '#ffffff',
-            '--bg-hover': '#fad9df',
-            '--bg-active': '#f5c4cd',
-            '--bg-selected': '#fad9df',
-            '--bg-overlay': 'rgba(80, 30, 50, 0.45)',
+            '--bg-hover': '#f8f9fa',
+            '--bg-active': '#f1f3f4',
+            '--bg-selected': '#d3e3fd',
+            '--bg-overlay': 'rgba(32, 33, 36, 0.4)',
             '--bg-input': '#ffffff',
-            '--bg-tag': '#fde9ed',
-            '--text-primary': '#3a1923',
-            '--text-secondary': '#7a3349',
-            '--text-tertiary': '#a36175',
+            '--bg-tag': '#e8eaed',
+
+            // Gmail's text ramp. Its own grey #80868b is only 3.68:1 on
+            // white — fine for a decorative nav label, too low for text, so
+            // the tertiary token steps one notch down the ramp to #70757a
+            // (4.65:1, AA).
+            '--text-primary': '#202124',
+            '--text-secondary': '#5f6368',
+            '--text-tertiary': '#70757a',
             '--text-on-accent': '#ffffff',
-            '--text-link': '#be1b4a',
-            '--border-subtle': '#f7d3da',
-            '--border-soft': '#f0a8b6',
-            '--border-strong': '#dd6f86',
-            '--border-focus': '#f97391',
-            '--accent': '#f97391',
-            '--accent-hover': '#e85276',
-            '--accent-soft': '#fde9ed',
-            '--accent-text': '#be1b4a',
-            '--unread-dot': '#f97391',
-            '--danger': '#c0392b',
-            '--danger-soft': '#fde0db',
-            '--success': '#7ab38a',
-            '--success-soft': '#dff5e8',
-            '--warning': '#d97706',
-            '--warning-soft': '#fef3c7',
-            '--star': '#f59e0b',
-            '--radius-md': '14px',
-            '--radius-lg': '20px',
-            '--radius-xl': '28px',
-            '--shadow-sm': '0 1px 3px rgba(249,115,145,0.18)',
-            '--shadow-md': '0 8px 22px rgba(249,115,145,0.20), 0 2px 6px rgba(249,115,145,0.10)',
-            '--shadow-lg': '0 26px 60px rgba(249,115,145,0.30), 0 8px 18px rgba(249,115,145,0.18)'
-        }
-    },
-    {
-        id: 'hamster',
-        label: 'Hamster',
-        description: 'Warm caramel + sunflower seeds with hamster portraits. Loads images from loremflickr.com.',
-        swatch: '#d97a3a',
-        full: true,
-        extras: {
-            fonts: [
-                'https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap'
-            ],
-            css: `
-                body, input, textarea, select, button { font-family: 'Nunito', system-ui, sans-serif !important; }
-                /* Tiny sunflower-seed pattern repeating across the page. */
-                body {
-                    background:
-                        radial-gradient(ellipse 4px 7px at 25% 30%, rgba(120,72,30,0.10), transparent 60%),
-                        radial-gradient(ellipse 4px 7px at 75% 70%, rgba(120,72,30,0.10), transparent 60%),
-                        radial-gradient(circle at 12% 18%, rgba(217,122,58,0.08), transparent 55%),
-                        radial-gradient(circle at 90% 92%, rgba(217,122,58,0.10), transparent 55%),
-                        var(--bg-base) !important;
-                    background-size: 24px 24px, 24px 24px, auto, auto !important;
-                }
-                /* Round hamster portrait in the corner. */
-                body::after {
-                    content: '';
-                    position: fixed;
-                    right: 14px;
-                    bottom: 14px;
-                    width: 96px;
-                    height: 96px;
-                    border-radius: 50%;
-                    background-image: url('https://loremflickr.com/192/192/hamster');
-                    background-size: cover;
-                    background-position: center;
-                    border: 3px solid #d97a3a;
-                    box-shadow: 0 6px 18px rgba(217,122,58,0.35), 0 0 0 4px rgba(217,122,58,0.20);
-                    pointer-events: none;
-                    z-index: 40;
-                    opacity: 0.95;
-                }
-                .empty-state::before, .placeholder::before {
-                    content: '';
-                    display: block;
-                    width: 140px;
-                    height: 140px;
-                    margin: 0 auto 12px;
-                    border-radius: 50%;
-                    background-image: url('https://loremflickr.com/280/280/hamster,cute');
-                    background-size: cover;
-                    background-position: center;
-                    border: 4px solid #d97a3a;
-                    box-shadow: 0 8px 22px rgba(217,122,58,0.25);
-                }
-                * { scrollbar-color: #d97a3a #fbf2e6; scrollbar-width: thin; }
-                *::-webkit-scrollbar-thumb { background: #d97a3a; }
-            `
+            // Gmail's links are Google's blue, not the red brand accent.
+            '--text-link': '#1a73e8',
+
+            // Google's grey border ramp.
+            '--border-subtle': '#f1f3f4',
+            '--border-soft': '#e0e0e0',
+            '--border-strong': '#dadce0',
+            '--border-focus': '#ea4335',
+
+            // The Gmail brand red family: #EA4335 base, #D93025 hover,
+            // #FCE8E6 pale wash, #C5221F the link-safe dark shade.
+            '--accent': '#ea4335',
+            '--accent-hover': '#d93025',
+            '--accent-soft': '#fce8e6',
+            '--accent-text': '#c5221f',
+            '--unread-dot': '#ea4335',
+
+            // Google's semantics. The star is Google's yellow, not the red
+            // Outlook flag.
+            '--danger': '#d93025',
+            '--danger-soft': '#fce8e6',
+            '--success': '#188038',
+            '--success-soft': '#e6f4ea',
+            '--warning': '#e37400',
+            '--warning-soft': '#fef7e0',
+            '--star': '#f4b400',
+
+            // Roboto where the OS has it (Android, ChromeOS, most Linux),
+            // else the platform UI face. Deliberately NOT a Google Fonts
+            // <link>: the skin shouldn't phone home just to render.
+            '--font-sans': `Roboto, -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif`,
+
+            // Gmail's shape language: 8px cards, 24px dialogs.
+            '--radius-xs': '4px',
+            '--radius-sm': '8px',
+            '--radius-md': '8px',
+            '--radius-lg': '8px',
+            '--radius-xl': '24px',
+
+            // Google's Material elevations.
+            '--shadow-sm': '0 1px 2px 0 rgba(60, 64, 67, 0.3), 0 1px 3px 1px rgba(60, 64, 67, 0.15)',
+            '--shadow-md': '0 1px 3px 0 rgba(60, 64, 67, 0.3), 0 4px 8px 3px rgba(60, 64, 67, 0.15)',
+            '--shadow-lg': '0 4px 4px 0 rgba(60, 64, 67, 0.3), 0 8px 12px 6px rgba(60, 64, 67, 0.15)',
+            '--pill-padding': '4px 12px'
         },
-        themeColor: '#fbf2e6',
-        vars: {
-            '--bg-base': '#fbf2e6',
-            '--bg-surface': '#fff9ee',
-            '--bg-surface-alt': '#f5e6cc',
-            '--bg-elevated': '#ffffff',
-            '--bg-hover': '#f0d9b3',
-            '--bg-active': '#e8c692',
-            '--bg-selected': '#f0d9b3',
-            '--bg-overlay': 'rgba(80, 50, 20, 0.45)',
-            '--bg-input': '#ffffff',
-            '--bg-tag': '#f5e6cc',
-            '--text-primary': '#3a2410',
-            '--text-secondary': '#6b4423',
-            '--text-tertiary': '#8b6841',
+
+        // Material dark. Gmail's dark theme inverts the relationship between
+        // the list and the page: the page goes to the DARK grey (#202124) and
+        // the message list stays a step LIGHTER (#292a2d), so rows read as
+        // cards on a darker canvas — the light palette's white-on-grey,
+        // inverted. Google's dark greys are also genuinely desaturated, not
+        // just dimmed.
+        //
+        // No accent or semantic tokens: those are the user's layer. The
+        // Compose button keeps its own red in extras.css, which is where
+        // Gmail's dark Compose actually lives too.
+        darkVars: {
+            '--bg-base': '#202124',
+            '--bg-surface': '#292a2d',
+            '--bg-surface-alt': '#202124',
+            '--bg-elevated': '#35363a',
+            '--bg-hover': '#303134',
+            '--bg-active': '#3c4043',
+            // Gmail's dark selection is a desaturated blue, not the pale
+            // #D3E3FD of the light theme.
+            '--bg-selected': '#394457',
+            '--bg-overlay': 'rgba(0, 0, 0, 0.7)',
+            '--bg-input': '#292a2d',
+            '--bg-tag': '#3c4043',
+
+            '--text-primary': '#e3e3e3',
+            '--text-secondary': '#bdc1c6',
+            '--text-tertiary': '#9aa0a6',
             '--text-on-accent': '#ffffff',
-            '--text-link': '#a4521b',
-            '--border-subtle': '#ecd9b6',
-            '--border-soft': '#d6b884',
-            '--border-strong': '#a98c5a',
-            '--border-focus': '#d97a3a',
-            '--accent': '#d97a3a',
-            '--accent-hover': '#b85a1f',
-            '--accent-soft': '#fde6cb',
-            '--accent-text': '#a4521b',
-            '--unread-dot': '#d97a3a',
-            '--danger': '#9a3412',
-            '--danger-soft': '#fde4d3',
-            '--success': '#7d9b3a',
-            '--success-soft': '#eaf3d6',
-            '--warning': '#b45309',
-            '--warning-soft': '#fef3c7',
-            '--star': '#eab308',
-            '--radius-md': '14px',
-            '--radius-lg': '20px',
-            '--radius-xl': '28px',
-            '--shadow-sm': '0 1px 3px rgba(120,72,30,0.18)',
-            '--shadow-md': '0 8px 22px rgba(120,72,30,0.20), 0 2px 6px rgba(120,72,30,0.10)',
-            '--shadow-lg': '0 26px 60px rgba(120,72,30,0.30), 0 8px 18px rgba(120,72,30,0.18)'
+            // Google lightens its link blue for dark; #8ab4f8 is their own
+            // dark-theme link colour and clears AA on both #202124 and
+            // #292a2d.
+            '--text-link': '#8ab4f8',
+
+            // Material dark dividers are lighter than the surface, for the
+            // same reason: a dark hairline on a dark pane is invisible.
+            '--border-subtle': '#3c4043',
+            '--border-soft': '#4a4d51',
+            '--border-strong': '#5f6368',
+            '--border-focus': '#ea4335',
+
+            // Material dark elevations: a stronger ambient with almost no
+            // directional key light, so depth comes from the overlay rather
+            // than a cast shadow.
+            '--shadow-sm': '0 1px 2px 0 rgba(0, 0, 0, 0.6), 0 1px 3px 1px rgba(0, 0, 0, 0.3)',
+            '--shadow-md': '0 1px 3px 0 rgba(0, 0, 0, 0.6), 0 4px 8px 3px rgba(0, 0, 0, 0.3)',
+            '--shadow-lg': '0 4px 4px 0 rgba(0, 0, 0, 0.6), 0 8px 12px 6px rgba(0, 0, 0, 0.3)'
         }
     }
 ];
@@ -1628,27 +566,26 @@ function hslAccent(hex: string): { h: number; s: number; l: number; str: string 
     return { ...hsl, str };
 }
 
-function customSkinVars(accentHex: string, overrides?: Partial<Record<string, string>>): Record<string, string> | null {
+// The accent LAYER. Takes the user's hex and re-derives the accent family
+// over whatever skin is active, so the surfaces, type and shape stay the
+// skin's own. Applied as a second pass of inline vars on top of the skin's
+// vars (see applyCurrentSkin) rather than as a replacement palette — that
+// distinction is the whole point of the picker.
+//
+// `--border-focus` and `--unread-dot` ride along because Outlook ties its
+// focus ring and its unread edge bar to the accent; leaving them behind
+// would strand a blue focus ring on a red toolbar.
+function accentOverrideVars(accentHex: string): Record<string, string> | null {
     const base = hslAccent(accentHex);
     if (!base) return null;
     const { h, s, l } = base;
-    const accent = base.str;
-    const hover = `hsl(${h.toFixed(1)} ${s.toFixed(1)}% ${Math.max(0, l - 8).toFixed(1)}%)`;
-    const soft = `hsl(${h.toFixed(1)} ${Math.min(100, s + 5).toFixed(1)}% ${Math.min(95, l + 32).toFixed(1)}%)`;
-    const text = `hsl(${h.toFixed(1)} ${s.toFixed(1)}% ${Math.max(15, l - 18).toFixed(1)}%)`;
     return {
-        '--accent': accent,
-        '--accent-hover': hover,
-        '--accent-soft': soft,
-        '--accent-text': text,
-        '--unread-dot': accent,
-        '--danger': overrides?.['--danger'] || '#c0392b',
-        '--danger-soft': overrides?.['--danger-soft'] || '#fde0db',
-        '--success': overrides?.['--success'] || '#2d9560',
-        '--success-soft': overrides?.['--success-soft'] || '#dff5e8',
-        '--warning': overrides?.['--warning'] || '#c98b15',
-        '--warning-soft': overrides?.['--warning-soft'] || '#fbf2da',
-        '--star': overrides?.['--star'] || '#f0a821'
+        '--accent': base.str,
+        '--accent-hover': `hsl(${h.toFixed(1)} ${s.toFixed(1)}% ${Math.max(0, l - 8).toFixed(1)}%)`,
+        '--accent-soft': `hsl(${h.toFixed(1)} ${Math.min(100, s + 5).toFixed(1)}% ${Math.min(95, l + 32).toFixed(1)}%)`,
+        '--accent-text': `hsl(${h.toFixed(1)} ${s.toFixed(1)}% ${Math.max(15, l - 18).toFixed(1)}%)`,
+        '--unread-dot': base.str,
+        '--border-focus': base.str
     };
 }
 
@@ -1663,9 +600,21 @@ interface SemanticOverrides {
 }
 
 interface SkinState {
+    /** Always the id of a real entry in SKINS — `load()` rewrites anything
+     *  else, so the picker highlights a tile and Layout's gates agree. */
     skinId: string;
+    /** The last accent hex the user dialled in. Kept even when no override
+     *  is active so the colour input always has something to show. */
     customAccent: string;
+    /** The accent hex currently LAYERED over the skin, or null for the
+     *  skin's own accent. This replaces the old 'custom' pseudo-skin, which
+     *  discarded the whole skin just to change a hue. */
+    accentOverride: string | null;
     semantics: SemanticOverrides;
+    /** True once the user has touched a semantic colour. Lets Settings show
+     *  the semantic chips to someone who only changed an accent, and lets a
+     *  reset tuck them away again. */
+    semanticsEdited: boolean;
     /** Free-form CSS the user wrote in Settings → Appearance. Injected
      *  into a single <style id="webmail-custom-css"> on :root so it
      *  applies to the whole SPA and survives re-renders. */
@@ -1683,28 +632,70 @@ const defaultSemantics: SemanticOverrides = {
 };
 
 function load(): SkinState {
+    const fresh: SkinState = {
+        skinId: DEFAULT_SKIN_ID,
+        customAccent: DEFAULT_ACCENT,
+        accentOverride: null,
+        semantics: { ...defaultSemantics },
+        semanticsEdited: false,
+        customCss: ''
+    };
     try {
         const raw = localStorage.getItem(STORAGE_KEY);
-        if (raw) {
-            const parsed = JSON.parse(raw);
-            const sem = parsed.semantics || {};
-            return {
-                skinId: typeof parsed.skinId === 'string' ? parsed.skinId : DEFAULT_SKIN_ID,
-                customAccent: typeof parsed.customAccent === 'string' ? parsed.customAccent : '#5b8def',
-                semantics: {
-                    danger: typeof sem.danger === 'string' ? sem.danger : defaultSemantics.danger,
-                    dangerSoft: typeof sem.dangerSoft === 'string' ? sem.dangerSoft : defaultSemantics.dangerSoft,
-                    success: typeof sem.success === 'string' ? sem.success : defaultSemantics.success,
-                    successSoft: typeof sem.successSoft === 'string' ? sem.successSoft : defaultSemantics.successSoft,
-                    warning: typeof sem.warning === 'string' ? sem.warning : defaultSemantics.warning,
-                    warningSoft: typeof sem.warningSoft === 'string' ? sem.warningSoft : defaultSemantics.warningSoft,
-                    star: typeof sem.star === 'string' ? sem.star : defaultSemantics.star
-                },
-                customCss: typeof parsed.customCss === 'string' ? parsed.customCss.slice(0, 50_000) : ''
-            };
-        }
+        if (!raw) return fresh;
+        const parsed = JSON.parse(raw) || {};
+        const sem = parsed.semantics || {};
+
+        // Legacy migration. 'custom' used to be a pseudo-skin carrying only
+        // an accent hex and an accent-only palette. Fold it into the default
+        // skin with that hex kept as an accent override, so a user who
+        // dialled in a colour keeps it instead of silently reverting to
+        // Outlook blue on upgrade.
+        const legacyCustom = parsed.skinId === 'custom';
+        const storedId = legacyCustom ? DEFAULT_SKIN_ID : parsed.skinId;
+
+        // Stale ids — a deleted skin, or hand-edited localStorage — must not
+        // survive. applyCurrentSkin falls back to the default skin's vars,
+        // but a dead id left in state highlighted no tile in the picker and
+        // made Layout's skin gates read a skin that isn't there.
+        const skinId = SKINS.some((s) => s.id === storedId) ? storedId : DEFAULT_SKIN_ID;
+
+        const storedAccent = typeof parsed.customAccent === 'string' ? parsed.customAccent : DEFAULT_ACCENT;
+        const accentOverride = legacyCustom
+            ? storedAccent
+            : (typeof parsed.accentOverride === 'string' ? parsed.accentOverride : null);
+
+        const next: SkinState = {
+            skinId,
+            customAccent: accentOverride ?? storedAccent,
+            accentOverride,
+            semantics: {
+                danger: typeof sem.danger === 'string' ? sem.danger : defaultSemantics.danger,
+                dangerSoft: typeof sem.dangerSoft === 'string' ? sem.dangerSoft : defaultSemantics.dangerSoft,
+                success: typeof sem.success === 'string' ? sem.success : defaultSemantics.success,
+                successSoft: typeof sem.successSoft === 'string' ? sem.successSoft : defaultSemantics.successSoft,
+                warning: typeof sem.warning === 'string' ? sem.warning : defaultSemantics.warning,
+                warningSoft: typeof sem.warningSoft === 'string' ? sem.warningSoft : defaultSemantics.warningSoft,
+                star: typeof sem.star === 'string' ? sem.star : defaultSemantics.star
+            },
+            // Pre-cut state had no flag. Infer it: only semantics keys that
+            // differ from the defaults count, since an empty `semantics: {}`
+            // is just what every client wrote, not evidence of an edit.
+            semanticsEdited: typeof parsed.semanticsEdited === 'boolean'
+                ? parsed.semanticsEdited
+                : Object.keys(defaultSemantics).some((k) => {
+                    const key = k as keyof SemanticOverrides;
+                    return sem[key] !== undefined && sem[key] !== defaultSemantics[key];
+                }),
+            customCss: typeof parsed.customCss === 'string' ? parsed.customCss.slice(0, 50_000) : ''
+        };
+
+        // Re-write storage when the shape changed so the migration happens
+        // once instead of on every boot.
+        if (JSON.stringify(next) !== raw) persist(next);
+        return next;
     } catch { /* noop */ }
-    return { skinId: DEFAULT_SKIN_ID, customAccent: '#5b8def', semantics: { ...defaultSemantics }, customCss: '' };
+    return fresh;
 }
 
 function persist(s: SkinState) {
@@ -1715,8 +706,8 @@ const state = $state<SkinState>(load());
 
 export const skinState = state;
 
-// Every var any skin might set. Listed here so we always reset cleanly when
-// switching from a fully-themed skin (cat / retro) back to an accent-only one.
+// Every var a skin might set, listed so switching skins always resets
+// cleanly rather than leaving the previous skin's inline values behind.
 const ALL_SKIN_VARS = [
     // accent family
     '--accent', '--accent-hover', '--accent-soft', '--accent-text',
@@ -1746,17 +737,15 @@ function applyVars(vars: Record<string, string>) {
     for (const [k, val] of Object.entries(vars)) root.style.setProperty(k, val);
 }
 
-// Per-skin extras (custom fonts + CSS effects). Lazily loaded only when a
-// skin that defines them is active; cleaned up when the user switches away
-// so we never carry dead Google Fonts / glow effects between themes.
+// Per-skin extras. Lazily loaded only when a skin that defines them is
+// active, and cleared when the user switches away so a previous skin's
+// structural rules never leak into the next one. There is deliberately no
+// webfont loading here any more: both shipped skins use a locally
+// resolvable font stack, so no skin asks the network for type.
 const SKIN_EXTRAS_STYLE_ID = 'webmail-skin-extras';
-const SKIN_EXTRAS_FONT_ID_PREFIX = 'webmail-skin-font-';
 
 function applyExtras(skin: Skin | null) {
     if (typeof document === 'undefined') return;
-
-    // Drop previous skin's font links so unused webfonts stop fetching.
-    document.querySelectorAll(`link[id^="${SKIN_EXTRAS_FONT_ID_PREFIX}"]`).forEach((el) => el.remove());
 
     let styleEl = document.getElementById(SKIN_EXTRAS_STYLE_ID);
     const css = skin?.extras?.css?.trim() || '';
@@ -1771,15 +760,6 @@ function applyExtras(skin: Skin | null) {
         styleEl.textContent = css;
     } else if (styleEl) {
         styleEl.textContent = '';
-    }
-
-    const fonts = skin?.extras?.fonts || [];
-    for (let i = 0; i < fonts.length; i++) {
-        const link = document.createElement('link');
-        link.id = `${SKIN_EXTRAS_FONT_ID_PREFIX}${i}`;
-        link.rel = 'stylesheet';
-        link.href = fonts[i];
-        document.head.appendChild(link);
     }
 
     // Body class for CSS that wants to scope rules to a specific skin.
@@ -1807,8 +787,8 @@ function syncThemeColorMeta(skin: Skin | null) {
     } else if (skin?.vars['--bg-base']) {
         color = skin.vars['--bg-base'];
     } else {
-        // Accent-only skin or custom — fall back to the computed body bg
-        // so the address bar tracks whatever the current theme resolves to.
+        // No declared themeColor — fall back to whatever the live palette
+        // resolves to so the address bar still tracks the current theme.
         try {
             color = getComputedStyle(document.documentElement).getPropertyValue('--bg-base').trim() || '';
         } catch { /* noop */ }
@@ -1832,42 +812,83 @@ function buildOverrides(sem: SemanticOverrides): Record<string, string> {
     };
 }
 
-export function applyCurrentSkin() {
+// Resolve the active skin. `load()` normalises the stored id, but this stays
+// defensive: a bad id must still render a real skin, never a blank page.
+function activeSkin(): Skin {
+    return SKINS.find((s) => s.id === state.skinId)
+        || SKINS.find((s) => s.id === DEFAULT_SKIN_ID)
+        || SKINS[0];
+}
+
+// Module-private: the only legitimate callers are the setters below and the
+// effective-theme watcher. Exporting it just widens the surface something
+// else could call out of order.
+function applyCurrentSkin() {
     if (typeof document === 'undefined') return;
-    if (state.skinId === 'custom') {
-        const vars = customSkinVars(state.customAccent, buildOverrides(state.semantics));
-        if (vars) applyVars(vars);
-        applyExtras(null);
-        return;
-    }
-    const skin = SKINS.find((s) => s.id === state.skinId) || SKINS.find((s) => s.id === DEFAULT_SKIN_ID) || SKINS[0];
-    applyVars(skin.vars);
+    const skin = activeSkin();
+
+    // Palette selection is a VALUE SWAP on the same vars, not a second
+    // hardcoded dark block. That matters: these are inline styles on
+    // <html>, so any dark set written as a separate inline rule would beat
+    // app.css and break the accent layer's ability to retint the skin.
+    // Swapping the values keeps the accent layer as the last word.
+    const base = (isDark() && skin.darkVars) ? { ...skin.vars, ...skin.darkVars } : skin.vars;
+
+    // Merge order matters: the skin lays down the whole palette, then the
+    // user's semantic overrides, then the accent layer. The accent goes last
+    // so it always wins over anything the skin declared for the accent
+    // family — that is the whole point of "chooseable accent colours".
+    // Everything is written in one pass so a stale var from the previous
+    // skin, or from the other theme mode, can never linger in the inline
+    // style.
+    const vars: Record<string, string> = {
+        ...base,
+        ...buildOverrides(state.semantics)
+    };
+    const accent = state.accentOverride
+        ? accentOverrideVars(state.accentOverride)
+        : null;
+    if (accent) Object.assign(vars, accent);
+
+    applyVars(vars);
     applyExtras(skin);
 }
 
+// Re-apply when the effective mode moves, so flipping the OS while on
+// 'auto' repaints the skin without a reload. `onEffectiveThemeChange` fires
+// for an explicit toggle as well, so this covers the whole matrix.
+onEffectiveThemeChange(() => applyCurrentSkin());
+
+export function isKnownSkin(id: string): boolean {
+    return SKINS.some((s) => s.id === id);
+}
+
 export function setSkin(id: string) {
-    state.skinId = id;
+    state.skinId = isKnownSkin(id) ? id : DEFAULT_SKIN_ID;
     persist(state);
     applyCurrentSkin();
 }
 
-export function setCustomAccent(hex: string) {
-    state.customAccent = hex;
-    state.skinId = 'custom';
+// Layer an accent over the ACTIVE skin rather than replacing it. Passing
+// null (or an unparseable hex) clears the layer and hands the skin's own
+// accent back.
+export function setCustomAccent(hex: string | null) {
+    state.accentOverride = hex && hslAccent(hex) ? hex : null;
+    if (state.accentOverride) state.customAccent = state.accentOverride;
     persist(state);
     applyCurrentSkin();
 }
 
 export function setSemantic(patch: Partial<SemanticOverrides>) {
     state.semantics = { ...state.semantics, ...patch };
-    state.skinId = 'custom';
+    state.semanticsEdited = true;
     persist(state);
     applyCurrentSkin();
 }
 
 export function resetSemantics() {
     state.semantics = { ...defaultSemantics };
-    state.skinId = 'custom';
+    state.semanticsEdited = false;
     persist(state);
     applyCurrentSkin();
 }

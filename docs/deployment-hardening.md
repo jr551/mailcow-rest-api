@@ -59,10 +59,10 @@ credential-stuffing target.
 
 One origin serves the API, Swagger UI, and the webmail SPA, so the CSP has to
 cover the SPA too. The SPA loads no third-party scripts or fonts at runtime —
-everything is bundled — so the policy can stay tight. The exceptions: the
-photo skins (cat-photos, hamster) fetch images and fonts from third-party
-origins, and message bodies render remote images through the app's own image
-proxy, so `img-src` can stay `self` + `data:` + `blob:`.
+everything is bundled — so the policy can stay tight. The webmail ships exactly
+two skins (Outlook and Gmail), both pure CSS over bundled/system font stacks,
+and remote images in message bodies render through the app's own image proxy,
+so `img-src` and `font-src` need no external origins at all.
 
 ```nginx
 # Apply on the vhost that serves /, /webmail/ and /v1/.
@@ -70,16 +70,20 @@ add_header X-Content-Type-Options "nosniff" always;
 add_header X-Frame-Options "DENY" always;
 add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 add_header Permissions-Policy "camera=(), microphone=(self), geolocation=()" always;
-add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' https://fonts.gstatic.com; connect-src 'self'; media-src 'self' blob:; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
+add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; media-src 'self' blob:; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
 ```
 
 Notes on the compromises:
 
 - `style-src 'unsafe-inline'` is required — Svelte injects component styles
   and the skin system writes inline custom properties.
-- `img-src https:` is required only if you enable the photo skins; tighten to
-  `'self' data: blob:` if you don't.
-- `font-src https://fonts.gstatic.com` likewise only for the photo skins.
+- `img-src` and `font-src` carry **no** external origins. Earlier revisions of
+  this policy allowed `img-src https:` and `font-src https://fonts.gstatic.com`
+  purely for the photo skins (cat-photos, hamster), which pulled images and
+  webfonts from third-party origins. Those skins are gone, so the exceptions
+  went with them — remote message images are served through `/v1/proxy/image`.
+  If a skin that loads genuinely remote assets is ever reintroduced, add back
+  only the exact origins it uses, never a blanket scheme.
 - `frame-ancestors 'none'` duplicates `X-Frame-Options: DENY` for modern
   browsers; keep both — XFO still matters for older clients.
 - The API returns JSON; these headers are harmless on `/v1/` responses and

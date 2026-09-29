@@ -89,13 +89,22 @@ export const messages = [
     }
 ];
 
+/** Envelope for a fixture message by uid. Index-based lookups
+ *  (`messages[3].envelope`) silently re-point whenever a message is added
+ *  to the list above, so the detail fixtures bind by uid instead. */
+function envelopeFor(uid: number) {
+    const m = messages.find((x) => x.uid === uid);
+    if (!m) throw new Error(`fixture: no message with uid ${uid}`);
+    return m.envelope;
+}
+
 export const detailFor1001 = {
     uid: 1001,
     seq: 1,
     flags: [],
     size: 1234,
     internalDate: '2026-04-29T10:32:00Z',
-    envelope: messages[0].envelope,
+    envelope: envelopeFor(1001),
     text:
         'Hi there!\n\n' +
         'Welcome to your new webmail. This message demonstrates the layout — ' +
@@ -111,7 +120,7 @@ export const detailFor998 = {
     flags: ['\\Seen'],
     size: 800,
     internalDate: '2026-04-26T14:22:00Z',
-    envelope: messages[3].envelope,
+    envelope: envelopeFor(998),
     text:
         'This is an open-tracking notification.\n\n' +
         'The recipient opened your email at 2026-04-26 14:22:00 UTC.',
@@ -125,7 +134,7 @@ export const detailFor1000 = {
     flags: ['\\Seen'],
     size: 4321,
     internalDate: '2026-04-28T16:09:00Z',
-    envelope: messages[1].envelope,
+    envelope: envelopeFor(1000),
     text:
         'Hi,\n\n' +
         'Your Q2 invoice is ready. Total due: $1,248.00. ' +
