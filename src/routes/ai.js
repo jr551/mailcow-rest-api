@@ -292,6 +292,90 @@ function reject(result) {
     throw err;
 }
 
+// Verdicts the receiving MTA can report. Anything else (including a null /
+// empty / unrecognised token) is "no information", never a pass.
+const AUTH_SOFT = new Set(['softfail', 'temperror']);
+const AUTH_FAIL = new Set(['fail', 'permerror']);
+const AUTH_PASS = new Set(['pass']);
+// `none` = the mechanism was never aligned/run (no SPF record, no DKIM
+// signature, no DMARC policy). That is NOT a pass — the previous prompt
+// logic effectively treated it as one.
+const AUTH_PENDING = new Set(['none', 'neutral']);
+
+// Reduce one mechanism's raw verdict to a tier. Deliberately total: an
+// unrecognised value degrades to 'absent' rather than silently reading as
+// a pass, so a future MTA token can't launder a failing message.
+function authTier(verdict) {
+    const v = typeof verdict === 'string' ? verdict.trim().toLowerCase() : '';
+    if (AUTH_FAIL.has(v)) return 'fail';
+    if (AUTH_SOFT.has(v)) return 'soft';
+    if (AUTH_PASS.has(v)) return 'pass';
+    if (AUTH_PENDING.has(v)) return 'pending';
+    return 'absent';
+}
+// "SPF", "SPF and DKIM", "SPF, DKIM and DMARC" — naively joining with "and"
+// yields "SPF and DKIM and DMARC", which reads like a bug in a prompt the
+// model is being asked to trust.
+function joinNames(list) {
+    if (list.length <= 1) return list[0] || '';
+    return `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}`;
+}
+
+
+// Build the Authentication-Results guidance for the scan prompt.
+//
+// The one thing this must get right: these verdicts describe the
+// ENVELOPE sender / signing domain that actually delivered the message,
+// NOT the visible "From:" header. The From: line is trivially forgeable.
+// A message can pass every check for attacker.com while rendering
+// "From: support@bank.com" — that is the entire basis of header
+// spoofing, and it is why a pass must never be an all-clear.
+//
+// Returns null when there is nothing useful to say so the caller omits
+// the block entirely instead of padding the prompt with "not provided".
+function buildAuthGuidance(auth) {
+    if (!auth || typeof auth !== 'object') return null;
+    const tiers = {
+        spf: authTier(auth.spf),
+        dkim: authTier(auth.dkim),
+        dmarc: authTier(auth.dmarc)
+    };
+    const keys = ['spf', 'dkim', 'dmarc'];
+    // 'absent' and 'pending' both mean "the MTA gave us nothing to work
+    // with" — a message whose only verdict is `none` is indistinguishable
+    // from a message that was never checked.
+    const ran = keys.filter((k) => tiers[k] !== 'absent' && tiers[k] !== 'pending');
+    if (ran.length === 0) return null;
+
+    const failed = ran.filter((k) => tiers[k] === 'fail');
+    const soft = ran.filter((k) => tiers[k] === 'soft');
+    const passed = ran.filter((k) => tiers[k] === 'pass');
+
+    const lines = [
+        `Authentication-Results from the receiving mail server — SPF: ${auth.spf || 'not checked'} · DKIM: ${auth.dkim || 'not checked'} · DMARC: ${auth.dmarc || 'not checked'}`,
+        'Read these as describing the ENVELOPE sender / signing domain that actually delivered this message — NOT the visible "From:" header, which any sender can write. They are the only hard evidence of which domain really sent it. Apply them like this:'
+    ];
+
+    if (failed.length) {
+        lines.push(`- ${joinNames(failed.map((k) => k.toUpperCase()))} FAILED: the domain that delivered this is not authorised to send as the sender it claims. When the From: also names a real brand, that is close to conclusive header spoofing — lean strongly toward isPhishing=true.`);
+    }
+    if (soft.length) {
+        lines.push(`- ${joinNames(soft.map((k) => k.toUpperCase()))} did not pass cleanly (softfail/temperror) — typically an unaligned SPF record or a DKIM signature the receiver could not verify. Common in legitimate bulk mail, so this is a WEAK signal on its own: weigh it against the content, and do not let it alone make you call an ordinary newsletter phishing.`);
+    }
+    if (passed.length) {
+        lines.push(`- ${joinNames(passed.map((k) => k.toUpperCase()))} passed. This lowers the odds of PURE header-spoofing, but it is NOT an all-clear and must not end your analysis. A pass only proves the envelope sender was authorised; it says nothing about whether the visible From: is that same domain, and nothing about a compromised-but-genuine account. Specifically:`);
+        lines.push('  · If the visible From: names a DIFFERENT domain from the one that passed, or a lookalike/substituted-character variant of it, then the mismatch between the visible From and the authenticated envelope sender is ITSELF a strong phishing indicator. Do not let the pass override it.');
+        lines.push('  · A pass does not excuse requests for credentials, 2FA codes or payments, urgent deadlines, links pointing at a domain other than the sender\'s, unusual attachments, or a Reply-To on a different domain. Any of those is still phishing on its own merits.');
+        lines.push('  · Legitimate bulk senders often deliver from infrastructure whose From differs from the signing domain. Only treat that mismatch as strong evidence when the substitution is itself suspicious: a lookalike spelling, an unrelated TLD, or the victim\'s brand appearing inside someone else\'s domain (e.g. "bank.com.secure-login.ru").');
+    }
+    if (!failed.length && !soft.length && passed.length === ran.length && ran.length >= 2) {
+        lines.push('- Two or more independent mechanisms passing is the strongest "not spoofed" evidence available. Even so, still check links, attachments and any requested action before calling the message clean.');
+    }
+    lines.push('These verdicts say nothing about whether a message is spam/bulk. They also do not by themselves make a message malicious: a failing check from a familiar sender is far more often a broken SPF record or a forwarding quirk than an attack, and the false-positive guardrails above still apply.');
+    return lines.join('\n');
+}
+
+
 module.exports = async function aiRoutes(app, opts = {}) {
     const aiCache = opts.aiCache || null;
     // Capability probe — UI uses this to decide whether to enable AI buttons.
@@ -1008,30 +1092,22 @@ module.exports = async function aiRoutes(app, opts = {}) {
             '{"isPhishing":true|false,"confidence":0.0-1.0,"reasoning":"brief explanation","indicators":["specific red flag 1","specific red flag 2"],"isSpam":true|false,"spamConfidence":0.0-1.0,"spamReasoning":"brief explanation"}'
         ].join('\n');
 
-        // Build an Authentication-Results summary line so the model can
-        // weight DKIM/SPF/DMARC verdicts. Pass = strong "not spoofed";
-        // fail = strong "treat as phishing"; missing = uninformative.
-        const auth = req.body.auth;
-        const authLine = auth
-            ? `Authentication-Results — SPF: ${auth.spf || 'not checked'} · DKIM: ${auth.dkim || 'not checked'} · DMARC: ${auth.dmarc || 'not checked'}`
-            : 'Authentication-Results: not provided';
-        const authHint = auth && (auth.spf === 'fail' || auth.dkim === 'fail' || auth.dmarc === 'fail')
-            ? '\n[Hint: at least one auth check FAILED — strongly increases phishing likelihood when the message claims to be from a major brand.]'
-            : (auth && (auth.spf === 'pass' || auth.dkim === 'pass') && !(auth.spf === 'fail' || auth.dkim === 'fail' || auth.dmarc === 'fail'))
-                ? '\n[Hint: SPF/DKIM passed — ruling out the obvious sender-spoof tier of phishing. Spam can still apply if content is promotional.]'
-                : '';
+        // Auth verdicts go at the TOP of the user prompt, before the From
+        // line, so the model reads them as ground truth about the envelope
+        // sender rather than as one more heuristic to weigh against the
+        // visible From. Omitted entirely when the MTA gave us nothing.
+        const authBlock = buildAuthGuidance(req.body.auth);
 
         const userPrompt = [
             req.body.headers ? `Headers:\n${req.body.headers}\n` : '',
-            authLine,
+            authBlock ? `${authBlock}\n` : '',
             `Subject: ${req.body.subject || '(no subject)'}`,
             `From: ${req.body.from || ''}`,
             `To: ${req.body.to || ''}`,
             '',
             'Body:',
             req.body.body || '',
-            req.body.html ? `\nHTML snippet (first 8KB):\n${req.body.html.slice(0, 8192)}` : '',
-            authHint
+            req.body.html ? `\nHTML snippet (first 8KB):\n${req.body.html.slice(0, 8192)}` : ''
         ].join('\n');
 
         const result = await llm.chat({ provider: scanProvider, system, userPrompt });
@@ -1071,3 +1147,8 @@ module.exports = async function aiRoutes(app, opts = {}) {
         }
     });
 };
+
+// Exported for unit tests: the prompt logic is the part most likely to
+// rot silently, and it is pure enough to assert on directly.
+module.exports.authTier = authTier;
+module.exports.buildAuthGuidance = buildAuthGuidance;
