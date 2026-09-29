@@ -27,7 +27,9 @@
 
     function onKeydown(e: KeyboardEvent) {
         const t = e.target as HTMLElement;
-        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return;
+        // CONTENTEDITABLE too: the compose body is a TipTap surface, so a "g"
+        // or "l" typed into a draft would switch the Drive view mid-sentence.
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
         if (e.key === 'g' && !e.ctrlKey && !e.metaKey) {
             e.preventDefault();
             import('../../lib/drive.svelte').then((m) => m.setView('grid'));

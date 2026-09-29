@@ -100,10 +100,21 @@ async function resolve(blob) {
     };
 }
 
-// The pre-flip world: the reader auto-allowed when alwaysAllowImages OR
-// proxyImages was set, and proxyImages defaulted to true.
+// The pre-flip world: the reader auto-allowed when `alwaysAllowImages OR
+// proxyImages` was set, so the proxy flag alone granted permission. That
+// conflation is what this release removed, and it produced a real
+// regression: a user who had turned the proxy OFF was flipped to BLOCKING
+// on upgrade, because `proxyImages: false` failed the old rule. The proxy
+// says how an image is fetched, not whether it may load, so only an
+// explicit always-allow counts as prior consent.
 const PRE_FLIP_COMMON = JSON.stringify({ alwaysAllowImages: false, proxyImages: true });
-const PRE_FLIP_PROXY_OFF = JSON.stringify({ alwaysAllowImages: false, proxyImages: false });
+// BOTH flags explicitly off: the one pre-flip shape that was already
+// strict, so it stays strict through the migration.
+const PRE_FLIP_STRICT = JSON.stringify({ alwaysAllowImages: false, proxyImages: false });
+// Proxy off but always-allow never set: auto-allowed before the flip via the
+// proxy term, so it must keep auto-allowing. Treating the proxy flag as
+// consent-by-absence is the regression this release fixed.
+const PRE_FLIP_PROXY_OFF = JSON.stringify({ proxyImages: false });
 const PRE_FLIP_ALWAYS_ON = JSON.stringify({ alwaysAllowImages: true, proxyImages: true });
 const PRE_FLIP_LEGACY_BLOB = JSON.stringify({ groupThreads: true }); // no image keys at all
 
@@ -114,11 +125,14 @@ test('a brand-new profile gets the blocked-by-default behaviour', async () => {
 });
 
 test('an existing profile keeps the images it already had', async () => {
-    // This is the case that would have been a silent overnight regression:
-    // the shipped pre-flip default auto-allowed every image via the proxy.
+    // Only an explicit always-allow counted as consent. Everything else —
+    // including a user who had switched the proxy off — auto-allowed through
+    // the old condition, so all of them keep loading images after the
+    // upgrade. The privacy win lands on NEW profiles, which have no blob.
     for (const [name, blob, expectAllowed] of [
         ['proxy on (the shipped default)', PRE_FLIP_COMMON, true],
-        ['proxy off and always-allow off', PRE_FLIP_PROXY_OFF, false],
+        ['proxy off, always-allow unset', PRE_FLIP_PROXY_OFF, true],
+        ['both flags explicitly off (already strict)', PRE_FLIP_STRICT, false],
         ['always-allow on', PRE_FLIP_ALWAYS_ON, true],
         ['a blob predating both image settings', PRE_FLIP_LEGACY_BLOB, true]
     ]) {
@@ -129,7 +143,7 @@ test('an existing profile keeps the images it already had', async () => {
 });
 
 test('live state and the persisted blob never disagree', async () => {
-    for (const blob of [PRE_FLIP_COMMON, PRE_FLIP_PROXY_OFF, PRE_FLIP_ALWAYS_ON, PRE_FLIP_LEGACY_BLOB]) {
+    for (const blob of [PRE_FLIP_COMMON, PRE_FLIP_PROXY_OFF, PRE_FLIP_STRICT, PRE_FLIP_ALWAYS_ON, PRE_FLIP_LEGACY_BLOB]) {
         const r = await resolve(blob);
         assert.equal(
             r.live, r.persisted.alwaysAllowImages,
