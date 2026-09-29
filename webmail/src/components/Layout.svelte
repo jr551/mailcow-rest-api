@@ -58,7 +58,7 @@
     import { startNetworkWatchdog, withTimeout } from '../lib/network-watchdog.svelte';
     import { playNotify, playSent, playClick, primeAudio, sounds, setMuted } from '../lib/sounds.svelte';
     import { pwa, promptInstall } from '../lib/pwa.svelte';
-    import { recordEnvelope } from '../lib/address-book.svelte';
+    import { recordEnvelope, loadAddressBook } from '../lib/address-book.svelte';
     import { ensureCountry, geoipCache, flagEmoji } from '../lib/geoip.svelte';
     import { myAvatars } from '../lib/avatars.svelte';
     import Avatar from './Avatar.svelte';
@@ -723,7 +723,12 @@
         // the JSON body in the mail viewer (it shows blank). Match by
         // subject (we already have it in the row) and switch to the AI
         // app, no extra fetch needed.
-        if (ui.selectedPath === '.AI Conversations' || ui.selectedPath === 'AI Conversations') {
+        // AI off: fall through to the ordinary viewer rather than jumping
+        // into a surface the user has switched off. That renders the raw
+        // stored message, which is boring but not a dead end — and the
+        // flag is the user's call to make.
+        if (settings.aiFeatures
+            && (ui.selectedPath === '.AI Conversations' || ui.selectedPath === 'AI Conversations')) {
             const row = ui.messages.find((m) => m.uid === uid);
             const wantTitle = (row?.envelope?.subject || '').trim();
             const ai = await import('../lib/ai-threads.svelte');
@@ -1056,14 +1061,31 @@
         ui.undo = { kind, uid, fromPath, toPath, ts: Date.now() };
     }
 
-    async function blockSenderForUid(uid: number) {
+    /**
+     * The one place a sender pattern gets blocked, shared by MessageDetail's
+     * "Block sender" and the message context menu's Block sender / Block
+     * domain / Block root domain items.
+     *
+     * `pattern` is the rspamd blacklist_from value to apply. Callers that pass
+     * nothing get the message's exact From address; the context menu's domain
+     * items pass a pre-computed `*@host` or `*@registrable-domain` (see
+     * lib/domain-scope.ts). Widening this one function is deliberate: the
+     * alternative — a separate onBlockDomain callback — meant a second copy
+     * of confirm → blockSender → toast → error, and those copies drift.
+     *
+     * Both the confirm and the success toast name the exact pattern, because
+     * `*@example.com` is a far bigger hammer than `someone@example.com` and
+     * the user has to see which one they are about to swing. This matches the
+     * wording doAiBlockSender already uses for its own patterns.
+     */
+    async function blockSenderForUid(uid: number, pattern?: string) {
         const m = ui.messages.find((x) => x.uid === uid);
-        const addr = m?.envelope?.from?.[0]?.address;
+        const addr = pattern || m?.envelope?.from?.[0]?.address;
         if (!addr) {
             showToast('error', 'No sender address on this message');
             return;
         }
-        if (!confirm(`Block all mail from ${addr}?`)) return;
+        if (!confirm(`Block all mail matching ${addr}?`)) return;
         try {
             await apiBlockSender(addr);
             showToast('success', `Blocked ${addr}`);
@@ -1162,6 +1184,18 @@
     let inboxSummaryOpen = $state(false);
     let inboxSummarySnapshot = $state<InboxMessageInput[]>([]);
     let voiceModeOpen = $state(false);
+    // Flipping AI off must also close whatever AI surface happens to be
+    // open at that moment. Hiding the component is not enough on its own:
+    // ui.app === 'ai' falls through to the mail view (the guard on the
+    // ChatApp branch) but the user would still be "in" the AI surface by
+    // title, and the floating panel/briefing would linger until dismissed.
+    $effect(() => {
+        if (settings.aiFeatures) return;
+        if (ui.app === 'ai') ui.app = 'mail';
+        ui.aiPanelOpen = false;
+        voiceModeOpen = false;
+        inboxSummaryOpen = false;
+    });
 
     // Window the brief by "since the user last clicked Brief me" so
     // each press shows only what's actually new — without losing
@@ -1382,6 +1416,11 @@
         // Settings & trusted-senders sync via the hidden IMAP folder.
         // Best-effort: never blocks the UI on failure.
         import('../lib/settings-sync').then((m) => m.startSync()).catch(() => { /* offline / unsupported */ });
+        // Address book lives in its own hidden IMAP folder. Best-effort and
+        // deliberately not awaited: the local copy is already on screen, so
+        // compose works before this resolves, and a failure only downgrades
+        // the book to browser-local (which Settings then says out loud).
+        loadAddressBook().catch(() => { /* offline / server predates the feature */ });
         // Skip the probe while the tab is hidden or the browser knows it's
         // offline. It used to run unconditionally forever, so a backgrounded
         // or disconnected tab generated a failed /v1/ai/config every 30s —
@@ -1800,7 +1839,7 @@
         {/if}
         {#if ui.app === 'calendar'}
             <CalendarApp />
-        {:else if ui.app === 'ai'}
+        {:else if ui.app === 'ai' && settings.aiFeatures}
             <ChatApp />
         {:else if ui.app === 'drive'}
             <DriveApp />
@@ -1944,11 +1983,15 @@
         {/if}
     {/if}
 
-    {#if voiceModeOpen}
-        <VoiceChat onClose={() => voiceModeOpen = false} />
+    <!-- Voice chat is launched only from the FAB above, so it is already
+         unreachable while AI is off. The explicit guard here is belt and
+         braces: if a future entry point is added, an AI-off user must
+         never get a live model mic. -->
+    {#if voiceModeOpen && settings.aiFeatures}
+        <VoiceChat onClose={() => (voiceModeOpen = false)} />
     {/if}
 
-    {#if inboxSummaryOpen}
+    {#if inboxSummaryOpen && settings.aiFeatures}
         <InboxSummary
             messages={inboxSummarySnapshot}
             onClose={() => (inboxSummaryOpen = false)}

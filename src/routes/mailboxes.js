@@ -9,13 +9,23 @@ const {
 } = require('../schemas');
 const { badRequest, notFound, conflict } = require('../errors');
 
-// `.wh-<id>` is the outbound-webhook parking namespace — internal plumbing
-// the forwarder polls, not the user's mail. It must not appear in their
-// folder tree. Matched on the whole path because the prefix itself contains
-// the hierarchy separator, so splitting on '.' would eat it.
+// Hidden namespaces. `.wh-<id>` is the outbound-webhook parking mailbox
+// and `.book-addresses` holds the address book; both are internal
+// plumbing, not the user's mail, and neither may appear in their folder
+// tree. The patterns live in the modules that own each namespace so the
+// name and the filter that hides it cannot drift apart, and both are
+// matched on the WHOLE path because a prefix can contain the hierarchy
+// separator, so splitting on '.' would eat it.
+const { isAddressBookMailbox } = require('../address-book-store');
 const WEBHOOK_MAILBOX_RE = /(^|[./])\.wh-[a-z0-9]+$/;
 function isWebhookMailbox(path) {
     return WEBHOOK_MAILBOX_RE.test(String(path));
+}
+
+// A message moved into one of these folders from the UI, or a folder tree
+// built before either namespace existed, must not be able to surface them.
+function isInternalMailbox(path) {
+    return isWebhookMailbox(path) || isAddressBookMailbox(path);
 }
 
 function decodeMailboxPathParam(req) {
@@ -52,10 +62,10 @@ module.exports = async function mailboxRoutes(app, { pool, imapCache }) {
                 cache?.setTree(userHash, out);
             }
 
-            // `.wh-*` is the outbound-webhook namespace — internal plumbing
-            // the forwarder polls. It is not the user's mail and has no
-            // business in their folder tree.
-            out = out.filter((mb) => !isWebhookMailbox(mb.path));
+            // Hide the internal namespaces: the outbound-webhook parking
+            // mailbox the forwarder polls, and the address book. Neither is
+            // the user's mail and neither has business in their tree.
+            out = out.filter((mb) => !isInternalMailbox(mb.path));
 
             if (!includeCounts) return out;
 

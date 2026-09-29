@@ -46,7 +46,9 @@ Every preference lives in one searchable modal. The left rail groups 19 sections
 
 ## Context menu
 
-Right-click any message for Open / Star / Read / Archive / **Create rule from message** / Block sender / Trash. "Move to…" is a submenu rather than an inline folder list, so the menu stays a fixed handful of actions however many mailboxes the account has.
+Right-click any message for Open / Star / Read / Archive / **Create rule from message** / Block sender / **Block domain** / **Block root domain** / Trash. "Move to…" is a submenu rather than an inline folder list, so the menu stays a fixed handful of actions however many mailboxes the account has.
+
+The three block items are one code path differing only in the pattern they apply: the exact address, `*@` the full host, or `*@` the registrable domain (so `deals@mail.promo.example.co.uk` offers `*@mail.promo.example.co.uk` and `*@example.co.uk` — the second is the one that catches a spammer rotating subdomains). Both wider options disappear when there is nothing useful to derive (no From address, an IP literal, or a host that is already its own root). The confirm dialog and the success toast name the exact pattern, because `*@example.co.uk` is a much bigger hammer than a single address.
 
 ![Context menu](docs/screenshots/message-context-menu.png)
 

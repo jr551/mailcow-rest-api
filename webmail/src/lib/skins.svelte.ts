@@ -94,15 +94,23 @@ export const SKINS: Skin[] = [
                     background: var(--accent) !important;
                     border-bottom: 1px solid var(--accent-hover) !important;
                 }
-                .topbar .brand-mark { color: #fff !important; }
-                .topbar .brand-sub { color: rgba(255,255,255,0.75) !important; }
-                .topbar .logo { background: rgba(255,255,255,0.18) !important; }
+                .topbar .brand-mark { color: var(--text-on-accent) !important; }
+                .topbar .brand-sub { color: color-mix(in srgb, var(--text-on-accent) 75%, transparent) !important; }
+                .topbar .logo { background: color-mix(in srgb, var(--text-on-accent) 18%, transparent) !important; }
+                /* The command bar paints from --accent, so its ink has to
+                 * follow --text-on-accent rather than being pinned to
+                 * #fff. Gmail's red is the case that matters: white on
+                 * #ea4335 is 3.92:1, under AA, and the accent layer would
+                 * otherwise put unreadable text on every re-tinted bar.
+                 * --text-on-accent is white for every other shipped swatch
+                 * (see accentOverrideVars), so this is a no-op until the
+                 * user picks one of the warm lights. */
                 .topbar .btn-ghost,
-                .topbar .theme-toggle { color: #fff !important; }
+                .topbar .theme-toggle { color: var(--text-on-accent) !important; }
                 .topbar .btn-ghost:hover,
                 .topbar .theme-toggle:hover {
-                    background: rgba(255,255,255,0.15) !important;
-                    color: #fff !important;
+                    background: color-mix(in srgb, var(--text-on-accent) 15%, transparent) !important;
+                    color: var(--text-on-accent) !important;
                 }
                 /* The search box stays the white OWA field in every accent AND
                  * in dark mode; only the scope toggle inside it takes the
@@ -127,12 +135,12 @@ export const SKINS: Skin[] = [
                     color: var(--accent-text) !important;
                     border-color: #c8c6c4 !important;
                 }
-                .topbar .muted { color: rgba(255,255,255,0.85) !important; }
+                .topbar .muted { color: color-mix(in srgb, var(--text-on-accent) 85%, transparent) !important; }
 
                 /* Signed-in user next to the brand, like OWA's header. */
                 .topbar .brand-user {
                     display: inline-flex !important;
-                    color: #fff !important;
+                    color: var(--text-on-accent) !important;
                     margin-left: 4px;
                 }
                 .topbar .brand-user-emoji { font-size: 14px; }
@@ -566,6 +574,58 @@ function hslAccent(hex: string): { h: number; s: number; l: number; str: string 
     return { ...hsl, str };
 }
 
+// The ink a label uses when it sits ON the accent fill. Not black and not
+// white by convention — the accent layer measures both against the fill it
+// actually produced and takes the winner, because the ten shipped swatches
+// span l=26 (#0f766e) to l=56 (#ea4335) and no single constant wins them all.
+const ACCENT_INK = '#141414';
+
+// WCAG 2.x relative luminance / contrast, used to pick that ink. Deliberately
+// duplicated from the unit suite's maths rather than shared: the suite parses
+// this file as source, so importing the implementation from here would make
+// the assertion test the code it is asserting about. The two are kept honest
+// by the suite, which re-derives every shipped swatch from this file and
+// asserts the result independently.
+function srgbLuminance(hex: string): number {
+    const raw = hex.replace('#', '');
+    const full = raw.length === 3 ? raw.split('').map((c) => c + c).join('') : raw;
+    const [r, g, b] = [0, 2, 4].map((i) => {
+        const v = parseInt(full.slice(i, i + 2), 16) / 255;
+        return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+// Relative luminance of any colour token this module produces, hex OR
+// hsl(). Accepting both is not convenience: the accent family is built as
+// hsl() strings, and feeding one straight to srgbLuminance parses "hs" as
+// base-16 to NaN, so a contrast comparison between two such values is
+// `NaN >= NaN` — false, silently, with no error anywhere. That is exactly
+// what happened to the on-accent ink choice: it resolved every swatch to the
+// near-black ink because the comparison could never be true. Round-tripping
+// through hslToHex here is what makes the measurement real.
+function tokenLuminance(token: string): number {
+    const hsl = /^hsl\(([\d.]+) ([\d.]+)% ([\d.]+)%\)$/.exec(token.trim());
+    if (!hsl) return srgbLuminance(token);
+    const h = +hsl[1];
+    const s = +hsl[2] / 100;
+    const l = +hsl[3] / 100;
+    const k = (n: number) => (n + h / 30) % 12;
+    const a = s * Math.min(l, 1 - l);
+    const chan = (n: number) => {
+        const v = l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+        return Math.round(Math.max(0, Math.min(255, v * 255))).toString(16).padStart(2, '0');
+    };
+    return srgbLuminance(`#${chan(0)}${chan(8)}${chan(4)}`);
+}
+
+function contrastRatio(a: string, b: string): number {
+    const la = tokenLuminance(a);
+    const lb = tokenLuminance(b);
+    const [hi, lo] = la > lb ? [la, lb] : [lb, la];
+    return (hi + 0.05) / (lo + 0.05);
+}
+
 // The accent LAYER. Takes the user's hex and re-derives the accent family
 // over whatever skin is active, so the surfaces, type and shape stay the
 // skin's own. Applied as a second pass of inline vars on top of the skin's
@@ -579,13 +639,71 @@ function accentOverrideVars(accentHex: string): Record<string, string> | null {
     const base = hslAccent(accentHex);
     if (!base) return null;
     const { h, s, l } = base;
+
+    // The derivation is MODE-AWARE, which is the whole reason picking an
+    // accent actually works in dark mode. The original arithmetic was
+    // mode-blind: it derived one family from one lightness and applied it
+    // unchanged in both, which on a near-black pane produced an accent
+    // TEXT of #004478 — 1.41:1 on Outlook's own #1f1f1f. Every accent chip,
+    // active pill and accent-coloured link went invisible the moment the
+    // user picked a dark theme. The bug was invisible in light mode, which
+    // is exactly where a contrast test is least likely to be run.
+    //
+    // Dark re-derives two distinct roles rather than reusing the light
+    // numbers, because one lightness cannot be both a readable label and a
+    // visible bar on a near-black surface:
+    //
+    //   --accent       the BAR / fill / focus ring. Lifted, the same move
+    //                  app.css already makes for its own defaults
+    //                  (--accent #0078d4 light -> #6cb2f7 dark), so it reads
+    //                  as a surface rather than a black hole.
+    //   --accent-text  TEXT that sits ON a surface. Lighter still than the
+    //                  bar, so a link or chip is never the same value as
+    //                  the pane behind it.
+    //
+    // Every value below is measured, not eyeballed: the unit suite asserts
+    // the shipped swatches clear 4.5:1 as text and 3:1 as a mark, against
+    // BOTH skins' real surface tokens, in BOTH palettes.
+    const f = (v: number) => `${v.toFixed(1)}%`;
+    const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+    // The ink for a label that sits ON the accent fill — a button, Outlook's
+    // command bar. Chosen by measurement rather than by convention: white is
+    // right for nine of the ten shipped swatches, but on Gmail red it is
+    // 3.92:1, and a near-black ink is 4.70:1 on the same fill. Both skins
+    // default --text-on-accent to white, so this only diverges where it has to.
+    const onAccent = (fill: string) =>
+        contrastRatio('#ffffff', fill) >= contrastRatio(ACCENT_INK, fill) ? '#ffffff' : ACCENT_INK;
+
+    if (!isDark()) {
+        return {
+            '--accent': base.str,
+            '--accent-hover': `hsl(${h.toFixed(1)} ${s.toFixed(1)}% ${f(clamp(l - 8, 0, 100))})`,
+            '--accent-soft': `hsl(${h.toFixed(1)} ${Math.min(100, s + 5).toFixed(1)}% ${f(clamp(l + 32, 0, 95))})`,
+            '--accent-text': `hsl(${h.toFixed(1)} ${s.toFixed(1)}% ${f(clamp(l - 18, 15, 100))})`,
+            '--text-on-accent': onAccent(base.str),
+            '--unread-dot': base.str,
+            '--border-focus': base.str
+        };
+    }
+
+    // 58..74 keeps a mid-blue bar from washing out to a pastel slab while
+    // still lifting a near-black one (Pine's #0f766e, l=26) into range.
+    const barL = clamp(l + 20, 58, 74);
+    const bar = `hsl(${h.toFixed(1)} ${s.toFixed(1)}% ${f(barL)})`;
     return {
-        '--accent': base.str,
-        '--accent-hover': `hsl(${h.toFixed(1)} ${s.toFixed(1)}% ${Math.max(0, l - 8).toFixed(1)}%)`,
-        '--accent-soft': `hsl(${h.toFixed(1)} ${Math.min(100, s + 5).toFixed(1)}% ${Math.min(95, l + 32).toFixed(1)}%)`,
-        '--accent-text': `hsl(${h.toFixed(1)} ${s.toFixed(1)}% ${Math.max(15, l - 18).toFixed(1)}%)`,
-        '--unread-dot': base.str,
-        '--border-focus': base.str
+        '--accent': bar,
+        '--accent-hover': `hsl(${h.toFixed(1)} ${s.toFixed(1)}% ${f(clamp(barL + 8, 0, 90))})`,
+        // A pale wash would be a light slab on a dark pane. The dark soft is
+        // a desaturated dark tint of the SAME hue, which is what Material
+        // and Fluent do for selected rows on dark surfaces.
+        '--accent-soft': `hsl(${h.toFixed(1)} ${f(s * 0.5)} 15.0%)`,
+        // Lighter than the bar, and never darker than 70: at 70 the darkest
+        // shipped swatch still clears 4.5:1 on the lightest dark surface
+        // (#35363a) that either skin uses.
+        '--accent-text': `hsl(${h.toFixed(1)} ${s.toFixed(1)}% ${f(clamp(l + 40, 70, 84))})`,
+        '--text-on-accent': onAccent(bar),
+        '--unread-dot': bar,
+        '--border-focus': bar
     };
 }
 

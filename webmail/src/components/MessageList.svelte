@@ -20,6 +20,7 @@
     import EventsScanPanel from './EventsScanPanel.svelte';
     import MenuSubmenu, { type SubmenuItem } from './MenuSubmenu.svelte';
     import RuleFromMessageDialog from './RuleFromMessageDialog.svelte';
+    import { domainPattern, rootDomainPattern } from '../lib/domain-scope';
 
     interface ScanState { scanned: number; total: number; reason: string }
     interface Props {
@@ -39,7 +40,13 @@
         appendingMore?: boolean;
         scanState?: ScanState | null;
         onMove?: (uid: number, dest: string) => void;
-        onBlockSender?: (uid: number) => void;
+        /** Block a sender pattern. `pattern` defaults to the message's exact
+         *  From address; the Block domain / Block root domain items pass a
+         *  pre-computed `*@host` pattern instead. Widening this one prop is
+         *  what keeps a single confirm → blockSender → toast → error flow in
+         *  Layout — a second callback would have meant a second copy of that
+         *  flow, which is the rot this file just shed. */
+        onBlockSender?: (uid: number, pattern?: string) => void;
     }
     let {
         onSelect, onStar, onUnread, onTrash, onArchive,
@@ -67,11 +74,56 @@
         e.stopPropagation();
         ctx = { uid, x: e.clientX, y: e.clientY };
         ctxRow = e.currentTarget as HTMLElement;
+        ctxSelectRow(uid);
         // Deliberately does NOT move focus. The pointer user never had focus
         // in this menu before the keyboard path existed, and pulling it in
         // on every right-click would change existing behaviour (and flash a
         // focus ring at a menu the user is driving with a pointer).
         // focusCtxItem is the keyboard opener's job.
+    }
+    /**
+     * Make the right-clicked row look selected, without opening it.
+     *
+     * This is deliberately NOT selectRow(uid), for three separate reasons:
+     *
+     *   1. selectRow calls onSelect, which is Layout's selectMessage. That
+     *      nulls ui.detail, fetches the body and puts it in the reading pane.
+     *      Right-clicking a row is a request for a menu, not a request to
+     *      read the message — and a user right-clicking several rows in turn
+     *      to compare senders would trigger a body fetch per click and get
+     *      the reading pane flickering under the menu.
+     *   2. playClick() is the Settings → Sounds row-click noise. Emitting it
+     *      for a gesture the user did not perceive as a click makes the
+     *      sound feel broken; it is a confirmation of a navigation that
+     *      isn't happening.
+     *   3. ui.selectedUid is the only thing the row highlight reads
+     *      (class:selected on the head row at :1119 and on thread children
+     *      at :1298). Layout's own Escape/arrow-key handler writes it
+     *      directly too, so setting it is an established way to move the
+     *      highlight without going through the fetch.
+     *
+     * Deliberately does NOT touch `ui.selected` (the checkbox Set). That Set
+     * means "rows the user explicitly bulk-marked"; the highlight means "the
+     * row the caret is on". Conflating them would mean every right-click
+     * silently added a row to whatever the user had bulk-selected for the
+     * next action — and would make Escape-to-clear bulk selection impossible
+     * to reason about. Keeping them separate also leaves the Move submenu's
+     * count coherent: moveTo() computes
+     *   bulkN = ui.selected.has(ctx.uid) ? ui.selected.size : 0
+     * so a right-click on a row that is part of an existing multi-selection
+     * still reports and moves the full N, and a right-click on a row outside
+     * it still moves just that one row. This helper changes neither number.
+     *
+     * Note the bulk-N label therefore describes the checkbox selection, not
+     * the highlighted row — unchanged from before this helper existed, and
+     * correct: "Move 12 selected to…" is about the 12 the user ticked, not
+     * about which one they last touched with a right-click.
+     */
+    function ctxSelectRow(uid: number) {
+        // Guarded so a re-right-click on the already-highlighted row is a
+        // true no-op: writing the same value would still re-trigger every
+        // $effect that reads ui.selectedUid for nothing.
+        if (ui.selectedUid !== uid) ui.selectedUid = uid;
     }
     /**
      * Close the menu, handing focus back to its row if — and only if —
@@ -187,6 +239,11 @@
             y: Math.min(r.bottom + 4, window.innerHeight - 80)
         };
         ctxRow = el;
+        // Same highlight as the pointer path, so the row the keyboard menu
+        // belongs to is visibly the row the menu will act on — otherwise
+        // there is no way to tell which message "Create rule from message"
+        // would be built from.
+        ctxSelectRow(uid);
         void tick().then(() => focusCtxItem(0));
     }
     function rowOf(uid: number) {
@@ -408,6 +465,10 @@
     // the user's daily LLM budget without their consent. Filter switches
     // alone now show the *cached* ranking — no automatic re-run.
     function runAiSort() {
+        // Defence in depth: the button that calls this is hidden when AI
+        // is off, but nothing should reach a paid model call through a
+        // stale handler, a queued click, or a future entry point.
+        if (!settings.aiFeatures) return;
         const msgs = ui.messages;
         if (msgs.length === 0) {
             aiRankings = [];
@@ -787,7 +848,10 @@
         <!-- AI action group: collapsed to compact icon buttons so the three
              AI affordances (briefing, sort, calendar scan) sit tight at the
              head of the chip row. Tooltips carry the labels that the
-             previous spans showed inline. -->
+             previous spans showed inline. Hidden wholesale when AI is
+             hard-off — these three are the only way into the AI sort,
+             briefing and calendar scan. -->
+        {#if settings.aiFeatures}
         <div class="ai-action-group">
             <button
                 type="button"
@@ -835,6 +899,7 @@
                 <span class="cal-spark" aria-hidden="true"></span>
             </button>
         </div>
+        {/if}
         {#if ui.messages.length > 0}
             {@const allSelected = ui.selected.size > 0 && ui.selected.size >= ui.messages.length}
             <button
@@ -867,7 +932,7 @@
             >{f.label}</button>
         {/each}
 
-        {#if settings.listFilter === 'ai-sorted' && aiRankings.length > 0 && ui.messagesTotal > 0}
+        {#if settings.aiFeatures && settings.listFilter === 'ai-sorted' && aiRankings.length > 0 && ui.messagesTotal > 0}
             <span class="cat-quick-spacer" aria-hidden="true"></span>
             {@const buckets = (() => {
                 const counts: Record<AiCat, number> = {
@@ -945,7 +1010,7 @@
         {/if}
     </nav>
 
-    {#if suggestAiSort}
+    {#if suggestAiSort && settings.aiFeatures}
         <div class="ai-sort-suggest" role="status" data-testid="ai-sort-suggest">
             <Icon name="sparkles" size={12} />
             <span>You have a lot of unread mail. Want the AI to surface what's important?</span>
@@ -954,7 +1019,7 @@
         </div>
     {/if}
 
-    {#if aiSortLoading || aiSortProgress || sweepRunning}
+    {#if settings.aiFeatures && (aiSortLoading || aiSortProgress || sweepRunning)}
         {@const progPct = aiSortProgress && aiSortProgress.total > 0
             ? Math.round((aiSortProgress.done / aiSortProgress.total) * 100)
             : 0}
@@ -1496,9 +1561,34 @@
             {/if}
             <li class="sep"></li>
             {#if onBlockSender}
+                <!-- Both wider patterns are derived from the row's own From
+                     header — no fetch, and `m` is already resolved above, so
+                     these are one string build per menu open.
+                     The patterns are passed as ARGUMENTS, not as a mode flag:
+                     Layout still owns the single confirm → blockSender →
+                     toast → error flow and names whatever pattern it is
+                     handed, so there is no second copy of that flow here.
+                     Each item disappears when its pattern is unavailable — no
+                     From address, an IP literal, or a host that is already its
+                     own root (`example.com`) — rather than offering an entry
+                     that can only fail. Plain "Block sender" stays
+                     unconditional: Layout reports a missing address itself. -->
+                {@const ctxFrom = m.envelope.from?.[0]?.address ?? null}
+                {@const domPat = domainPattern(ctxFrom)}
+                {@const rootPat = rootDomainPattern(ctxFrom)}
                 <li><button type="button" role="menuitem" class="danger" onclick={() => { onBlockSender!(ctx!.uid); closeCtx(); }}>
                     <Icon name="spam" size={12} /> Block sender
                 </button></li>
+                {#if domPat}
+                    <li><button type="button" role="menuitem" class="danger" title={`Block every sender at ${domPat}`} onclick={() => { onBlockSender!(ctx!.uid, domPat); closeCtx(); }}>
+                        <Icon name="spam" size={12} /> Block domain
+                    </button></li>
+                {/if}
+                {#if rootPat}
+                    <li><button type="button" role="menuitem" class="danger" title={`Block every sender under ${rootPat}`} onclick={() => { onBlockSender!(ctx!.uid, rootPat); closeCtx(); }}>
+                        <Icon name="spam" size={12} /> Block root domain
+                    </button></li>
+                {/if}
             {/if}
             <li><button type="button" role="menuitem" class="danger" onclick={() => { onTrash(ctx!.uid); closeCtx(); }}>
                 <Icon name="trash" size={12} /> Move to Trash

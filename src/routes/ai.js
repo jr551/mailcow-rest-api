@@ -1,5 +1,5 @@
 'use strict';
-
+const { assertPublicDestination, createPinnedDispatcher } = require('../utils/ssrf-guard');
 const llm = require('../llm');
 const config = require('../config');
 const { problem } = require('../errors');
@@ -20,6 +20,44 @@ function isLocalBaseUrl(baseUrl) {
         return false;
     } catch { return false; }
 }
+
+// Short-lived memo of provider model catalogs, keyed by
+// `kind|baseUrl|apiKey-fingerprint`.
+//
+// Why: the model list is a UI affordance, not a feature, and Settings
+// re-asks for it every time the preset or base URL changes — on a big gateway
+// that's a few hundred KB of JSON per keystroke. Caching for a couple of
+// minutes collapses that burst to one upstream request while still picking up
+// a gateway's model lineup change within a coffee break. Failures are cached
+// too (under the same TTL) so a provider that is down doesn't get re-probed
+// by every open Settings panel.
+const MODEL_LIST_TTL_MS = 120_000;
+const modelListCache = new Map();
+
+// A model list is not worth the 30s connect / 90s body budget the chat path
+// uses. 8s is long enough for a healthy gateway (these are small JSON docs)
+// and short enough that a user who switches provider sees a real error
+// message rather than a spinner that hangs.
+const MODEL_LIST_TIMEOUT_MS = 8_000;
+
+// Cache key. The API key is hashed, never stored: a catalog is
+// per-credential on any provider that scopes models to a plan, and we have no
+// business keeping a live key in a long-lived Map.
+function modelListCacheKey(provider) {
+    let fp = '';
+    if (provider.apiKey) {
+        fp = require('crypto').createHash('sha256').update(provider.apiKey).digest('hex').slice(0, 16);
+    }
+    return `${provider.kind}|${provider.baseUrl}|${fp}`;
+}
+
+function readModelListCache(key) {
+    const hit = modelListCache.get(key);
+    if (!hit) return null;
+    if (Date.now() > hit.expires) { modelListCache.delete(key); return null; }
+    return hit.value;
+}
+
 // `provider` block in the request body lets clients override the server's
 // default LLM (so the Settings panel can target a user's own key/endpoint).
 // Server admins can disable overrides via LLM_ALLOW_CLIENT_OVERRIDE=false.
@@ -174,6 +212,38 @@ const capabilitiesSchema = {
     }
 };
 
+const modelListSchema = {
+    type: 'object',
+    properties: {
+        models: {
+            type: 'array',
+            items: {
+                type: 'object',
+                properties: {
+                    id: { type: 'string' },
+                    owned_by: { type: 'string' }
+                }
+            }
+        },
+        // Human-readable "why is this empty" — shown verbatim in Settings.
+        error: { type: 'string' }
+    }
+};
+
+// A provider override for the catalog probe. Same shape as the per-call
+// provider block on the chat routes, so the model list can be fetched for the
+// endpoint the user actually typed rather than the server default.
+const modelsQuerySchema = {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+        kind: { type: 'string', enum: ['openai', 'anthropic'] },
+        preset: { type: 'string', maxLength: 32 },
+        baseUrl: { type: 'string', format: 'uri', maxLength: 512 },
+        apiKey: { type: 'string', maxLength: 512 }
+    }
+};
+
 // Same-origin prefix the SPA treats as an OpenAI-compatible base URL.
 const AI_PROXY_PREFIX = '/v1/ai/llm';
 
@@ -254,6 +324,123 @@ module.exports = async function aiRoutes(app, opts = {}) {
         allowClientOverride: !!config.ai.allowClientOverride,
         presets: Object.keys(llm.OPENAI_COMPAT_PRESETS).concat(['anthropic'])
     }));
+
+    // Live model catalog for the Settings model combobox.
+    //
+    // The provider key is attached here and never leaves the process — the
+    // browser only ever sees model *names*, which are public information. That
+    // is the whole point of proxying discovery: the SPA could not otherwise
+    // ask the gateway without shipping the operator's (or the user's own) key
+    // to the page, and CORS would block it anyway.
+    //
+    // Every failure mode returns 200 with `{ models: [], error }` rather than
+    // a problem+json error. This endpoint exists to populate a dropdown: a
+    // provider that is down, rejects our credentials, or answers with HTML
+    // must not surface as a failed request the Settings panel has to catch —
+    // it should surface as an honest "couldn't load models: <reason>" line
+    // under a still-usable free-text field. The one thing that *is* a real
+    // error is "no key anywhere", which stays a 501.
+    app.get('/v1/ai/models', {
+        schema: {
+            tags: ['ai'],
+            summary: 'List the models the configured AI provider offers',
+            description: 'Probes GET {baseUrl}/models on the provider with the server-held (or client-supplied, when LLM_ALLOW_CLIENT_OVERRIDE is on) key, and returns the catalog for the Settings model combobox. The key is never returned. Answers 200 with `{ models: [], error }` when the provider is unreachable, rejects the credentials, or returns an unreadable body; 501 only when no API key is configured at all.',
+            querystring: modelsQuerySchema,
+            response: { 200: modelListSchema, 501: problemSchema }
+        }
+    }, async (req) => {
+        // Same override gate as every other AI route: when the operator sets
+        // LLM_ALLOW_CLIENT_OVERRIDE=false the query is ignored and we probe
+        // the server's own provider. Otherwise a user who typed a custom Base
+        // URL in Settings gets that endpoint's catalog, not the server's.
+        const q = req.query || {};
+        // Build the override from *present* query params only. resolveProvider
+        // spreads the override over the server config, so a key present with
+        // an `undefined` value would clobber it with undefined and wipe it.
+        // Absent means absent.
+        const override = {};
+        if (q.kind) override.kind = q.kind;
+        if (q.preset) override.preset = q.preset;
+        if (q.baseUrl) override.baseUrl = q.baseUrl;
+        // Only used to *probe* upstream; never echoed back in the response.
+        if (q.apiKey) override.apiKey = q.apiKey;
+        const hasOverride = Object.keys(override).length > 0;
+        const provider = resolveProvider(hasOverride ? override : undefined);
+
+        // SSRF guard, applied to a *client-supplied* baseUrl only.
+        //
+        // Without this the route is a read primitive into the operator's
+        // network: point it at 169.254.169.254 or a 10.x host and the parsed
+        // body comes back either as a model list or as an error string that
+        // still tells you something answered. Every other user-supplied
+        // outbound URL in this codebase is already guarded (push, outbound
+        // webhooks, image proxy, calendar feeds) — this was the one hole.
+        //
+        // The server's own configured baseUrl is deliberately NOT checked:
+        // that is operator config, and a private address is a *supported*
+        // deployment (the `ollama` preset is http://127.0.0.1:11434/v1).
+        // Guarding it would break every legitimate local install.
+        //
+        // Scheme allow-list is http+https, matching the guard's default: a
+        // LAN gateway over plain HTTP is a legitimate AI endpoint, unlike a
+        // web-push or calendar feed which must be HTTPS.
+        //
+        // Error wording is the guard's own, verbatim. A message invented here
+        // would risk distinguishing "you may not reach that" from "nothing is
+        // listening there" — the guard deliberately does not.
+        //
+        // The predicate is "did the client's baseUrl actually reach the
+        // provider", not merely "was one present in the query". When the
+        // operator sets LLM_ALLOW_CLIENT_OVERRIDE=false, resolveProvider
+        // drops the override and we are about to probe the *server's* baseUrl
+        // — which must not be guarded, or a local Ollama install on
+        // 127.0.0.1 would stop working. Comparing the resolved baseUrl
+        // against the requested one distinguishes the two cases exactly.
+        let dispatcher;
+        if (override.baseUrl && provider.baseUrl === override.baseUrl) {
+            try {
+                await assertPublicDestination(provider.baseUrl, { schemes: ['http:', 'https:'] });
+                // Pin the connection to the address we just validated. A
+                // validate-then-fetch is not sufficient: the resolver is free
+                // to answer differently on the second lookup, so an attacker
+                // owning the name can pass a public check and then rebind to
+                // 127.0.0.1. The webhook forwarders and the image proxy both
+                // pin for exactly this reason.
+                dispatcher = (await createPinnedDispatcher(provider.baseUrl)) || undefined;
+            } catch (err) {
+                req.log.warn({ detail: err.message }, 'AI model catalog destination blocked');
+                return { models: [], error: `Model list unavailable: ${err.message}` };
+            }
+        }
+        if (!provider.apiKey) {
+            throw problem(501, 'Not Implemented', 'AI provider not configured server-side');
+        }
+
+        const key = modelListCacheKey(provider);
+        const cached = readModelListCache(key);
+        if (cached) return cached;
+
+        let result;
+        try {
+            result = await llm.listModels({
+                provider,
+                dispatcher,
+                signal: AbortSignal.timeout(MODEL_LIST_TIMEOUT_MS)
+            });
+        } finally {
+            // The pinned Agent is per-request; without this every probe left
+            // a pool (and its sockets) alive until the process exited.
+            if (dispatcher) { try { await dispatcher.close(); } catch { /* */ } }
+        }
+        const value = result.ok
+            ? { models: result.models }
+            : { models: [], error: `${result.title}: ${result.detail}` };
+        modelListCache.set(key, { value, expires: Date.now() + MODEL_LIST_TTL_MS });
+        if (!result.ok) {
+            req.log.warn({ detail: value.error }, 'AI model catalog probe failed');
+        }
+        return value;
+    });
 
     // Tell authenticated clients how to reach the model. The provider key
     // never leaves this process: `baseUrl` points back at our own

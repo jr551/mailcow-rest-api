@@ -53,7 +53,9 @@
     import { onMount, tick } from 'svelte';
     import {
         settings, capabilities, setLlm, setUseCustomLlm, setAiFeatures, setDensity, setAlwaysAllowImages, setGroupThreads, setProxyImages, setPermanentSignIn, setPhishingScan, setTrackOpensDefault, setAiSuggestSubjectOnBlur, setPhishingScanTimeoutSec, setPhishingScanPromptAddendum, setPhishingScanConfidenceFloor,
+        remoteImagesBlockedFor,
         setAiSystemPrompt, setAccountChipDisplay,
+        aiModels, aiModelsSignature, clearAiModels, loadAiModels,
         setDefaultFromAddress, setDisplayName, deriveNameFromAddress, setPageSize,
         setTesseractOcrInstalled, setPhishingScanOcrInline,
         setSpamSuggest, setSpamSuggestConfidenceFloor, setSpamSweepBatchSize, setAiSortSweepSpam,
@@ -63,6 +65,11 @@
     import { warmupTesseract, teardownTesseract } from '../lib/tesseract-ocr';
     import { showToast } from '../lib/store.svelte';
     import { summarizeMessage } from '../lib/api';
+    import { privacySummary } from '../lib/privacy-facts';
+    import {
+        addressBook, loadAddressBook, addContact, editContact, removeContact,
+        filterContacts, clearAddressBook, type Contact
+    } from '../lib/address-book.svelte';
     import { trapFocus } from '../lib/focus-trap';
     import { pwa, promptInstall, subscribePush, unsubscribePush, pushSubscriptionStatus, diagnosePush, sendTestPush, type PushDiagnostics } from '../lib/pwa.svelte';
     import { authState, getSession, isRemembered, forgetSavedCreds } from '../lib/auth.svelte';
@@ -90,8 +97,8 @@
     import { formatBytes, formatFullDate } from '../lib/format';
     import {
         listOutboundWebhooks, createOutboundWebhook, updateOutboundWebhook,
-        deleteOutboundWebhook, isOutboundWebhooksUnavailable,
-        type OutboundWebhook
+        deleteOutboundWebhook, testOutboundWebhook, isOutboundWebhooksUnavailable,
+        type OutboundWebhook, type TestSendResult
     } from '../lib/outbound-webhooks';
     import Icon from './Icon.svelte';
     import Avatar from './Avatar.svelte';
@@ -199,6 +206,30 @@
     const activeCategory = $derived(
         CATEGORIES.find((c) => c.sections.some((s) => s.id === activeSection))
     );
+
+    // Sections that must disappear from the rail when AI is hard-off.
+    // 'smart-suggestions' is listed because every row in it spends a model
+    // call, so with AI off it is a panel of dead toggles. 'ai' is
+    // deliberately ABSENT: it holds the master switch, so hiding it would
+    // strand the user with no way to turn AI back on.
+    // 'sweep' rides here too: its only trigger is the inbox AI-sort
+    // button, so with AI off its two toggles control nothing.
+    const AI_GATED_SECTIONS: SectionId[] = ['smart-suggestions', 'sweep'];
+    const visibleCategories = $derived(
+        !settings.aiFeatures
+            ? CATEGORIES.map((c) => ({ ...c, sections: c.sections.filter((s) => !AI_GATED_SECTIONS.includes(s.id)) }))
+                .filter((c) => c.sections.length)
+            : CATEGORIES
+    );
+
+    // If the AI-off transition hides the section the user currently has
+    // open, move them somewhere real instead of blanking the panel. The
+    // section list is remembered per-user, so this is a genuine state to
+    // land in, not a theoretical one.
+    $effect(() => {
+        if (settings.aiFeatures) return;
+        if (AI_GATED_SECTIONS.includes(activeSection)) activeSection = 'ai';
+    });
     const activeCategoryLabel = $derived(activeCategory?.label ?? '');
 
     // The rail's search box filters sections in *every* category, and a hit
@@ -208,7 +239,7 @@
     const searchHits = $derived.by(() => {
         const q = settingsSearch.trim().toLowerCase();
         if (!q) return null;
-        return CATEGORIES.map((c) => {
+        return visibleCategories.map((c) => {
             // A category-name hit keeps every section: the user asked for the
             // group, not one row inside it.
             const catMatch = `${c.label} ${c.id}`.toLowerCase().includes(q);
@@ -238,12 +269,26 @@
     // its .sweep-* styling were dead weight; the sweep itself still runs from
     // the inbox AI-sort button.
 
+    // --- Privacy panel derived state -----------------------------------------------
+    // What the image gate is actually doing for this account. Derived, never
+    // read from the migration marker, so the panel cannot tell a migrated
+    // user their images are blocked when they are not. Defaults to `true`
+    // (the conservative reading) until the first capability probe lands.
+    const imagesBlocked = $derived(remoteImagesBlockedFor(true));
+    // The AI claims, rebuilt whenever the provider wiring changes (the 30s
+    // capability probe assigns capabilities.aiConfig, and settings.llm is
+    // user-editable), so the copy can never describe a stale route.
+    const aiPrivacy = $derived(privacySummary());
+
 
     // --- Collapsible section state -------------------------------------------------
     let showBlockedSenders = $state(true);
     let showAllowedSenders = $state(true);
     let showBlockedRecipients = $state(true);
     let showMailRules = $state(true);
+    // Forwarding-alias list is long on catch-all-heavy accounts, so it collapses to a
+    // one-line count. Open by default: it's the cheapest thing to scan on the account page.
+    let showForwardingAliases = $state(true);
     let showAiAdvanced = $state(false);
     let trustedAddInput = $state('');
     function addTrustedFromInput() {
@@ -531,6 +576,83 @@
     let blockRecipientInput = $state('');
     let creatingAlias = $state(false);
 
+    // ── Address book (Slice A) ──
+    //
+    // The list is derived from the store, not copied into component state,
+    // so an edit made in Compose (or a contact harvested while this dialog
+    // is open) shows up here without an explicit refresh.
+    let contactSearch = $state('');
+    let contactNameInput = $state('');
+    let contactAddrInput = $state('');
+    let contactNoteInput = $state('');
+    let contactError = $state<string | null>(null);
+    let contactSaving = $state(false);
+    /** uid being edited inline, or null when the form is adding a new one. */
+    let contactEditing = $state<string | null>(null);
+
+    const contactRows = $derived(filterContacts(contactSearch));
+
+    async function saveContact() {
+        contactError = null;
+        const address = contactAddrInput.trim();
+        if (!address) { contactError = 'Enter an email address'; return; }
+        if (contactEditing) {
+            // An edit is awaited so the form only closes on a real outcome:
+            // if it fails, the fields keep the user's typing and the error
+            // explains why, rather than the row silently reverting.
+            contactSaving = true;
+            try {
+                const res = await editContact(contactEditing, {
+                    address,
+                    name: contactNameInput,
+                    note: contactNoteInput
+                });
+                if (!res.ok) { contactError = res.error; return; }
+            } finally {
+                contactSaving = false;
+            }
+        } else {
+            // An add is synchronous: the row is on screen and the write is
+            // fire-and-forget, so the form resets immediately and a second
+            // contact can be typed without waiting on the network.
+            const res = addContact({ address, name: contactNameInput, note: contactNoteInput });
+            if (!res.ok) { contactError = res.error; return; }
+        }
+        resetContactForm();
+    }
+
+    function resetContactForm() {
+        contactEditing = null;
+        contactNameInput = '';
+        contactAddrInput = '';
+        contactNoteInput = '';
+        contactError = null;
+    }
+
+    function startEditContact(c: Contact) {
+        contactEditing = c.uid;
+        contactNameInput = c.name || '';
+        contactAddrInput = c.address;
+        contactNoteInput = c.note || '';
+        contactError = null;
+    }
+
+    async function deleteContactRow(uid: string) {
+        await removeContact(uid);
+        if (contactEditing === uid) resetContactForm();
+    }
+
+    /** "Last seen" as a short relative phrase; 0 means never in their mail. */
+    function contactSeen(c: Contact): string {
+        if (!c.lastSeen) return 'not seen in mail';
+        const days = Math.floor((Date.now() - c.lastSeen) / 86400000);
+        if (days <= 0) return 'seen today';
+        if (days === 1) return 'seen yesterday';
+        if (days < 30) return `seen ${days} days ago`;
+        if (days < 365) return `seen ${Math.floor(days / 30)} months ago`;
+        return `seen ${Math.floor(days / 365)} years ago`;
+    }
+
     // v0.3.2 mail-rules — unified blocks / redirects / copies via Sieve.
     // The legacy `blockedRecipients` list above remains in the UI for the
     // "block this address fast" path; the rules list shows everything
@@ -591,6 +713,41 @@
     // The signing secret comes back exactly once, on creation. Hold it so the
     // user can copy it — the server never lists it again.
     let owNewSecret = $state<{ id: string; secret: string } | null>(null);
+
+    // Per-webhook state for the panel below. With a 100-webhook limit a flat
+    // list is unusable, so the list is filterable and the result of the last
+    // test send is kept per webhook — a test is the answer to "why isn't this
+    // firing?", and losing it the moment the user scrolls away is why the
+    // first version of this section had no test at all.
+    let owSearch = $state('');
+    let owBusyId = $state<string | null>(null);
+    let owTestResult = $state<Record<string, TestSendResult>>({});
+    let owExpandedId = $state<string | null>(null);
+    // The list is open by default — "is anything configured?" is the question
+    // people arrive with, and an empty collapsed section answers it with
+    // nothing. The create form is closed by default: it is five inputs and a
+    // header editor nobody opens unless they already know what they're adding.
+    let showOwList = $state(true);
+    let showOwCreate = $state(false);
+
+    // Search is over label + URL because those are the two things a user
+    // knows; header names come back from the server but a search over them
+    // would return rows whose visible text doesn't contain the query, which
+    // reads as a bug rather than a feature.
+    const owVisibleHooks = $derived.by(() => {
+        const q = owSearch.trim().toLowerCase();
+        if (!q) return outboundHooks;
+        return outboundHooks.filter(
+            (w) => w.label.toLowerCase().includes(q) || w.url.toLowerCase().includes(q)
+        );
+    });
+
+    // "never" beats "3 days ago" for a webhook that has not run yet: the
+    // user's first question is whether a rule has ever pointed at it.
+    function owLastUsedLabel(w: OutboundWebhook): string {
+        if (!w.lastUsedAt) return 'never delivered to';
+        return `last used ${formatFullDate(new Date(w.lastUsedAt).toISOString())}`;
+    }
 
     const RULE_CONDITION_LABELS: Record<MailRuleConditionType, string> = {
         'from-contains': 'From contains',
@@ -846,6 +1003,29 @@
         }
     }
 
+    async function doTestOutboundWebhook(w: OutboundWebhook) {
+        // One in flight at a time per webhook; the server enforces a
+        // per-webhook-per-minute budget and answers 429, but a button that
+        // lets you hammer it until it complains is a bad way to find out.
+        owBusyId = w.id;
+        try {
+            const res = await testOutboundWebhook(w.id);
+            owTestResult = { ...owTestResult, [w.id]: res };
+            if (res.ok) {
+                showToast('success', `${w.label}: HTTP ${res.status} in ${res.elapsedMs} ms`);
+            } else {
+                // Not an error dialog: the test worked, the receiver said no.
+                // The card below carries the detail.
+                showToast('info', `${w.label}: receiver answered HTTP ${res.status}`);
+            }
+        } catch (err) {
+            const msg = err instanceof ApiError ? (err.detail || err.title) : (err as Error).message;
+            showToast('error', msg);
+        } finally {
+            owBusyId = null;
+        }
+    }
+
     async function newTempAlias(permanent: boolean, validityHours = 720) {
         creatingAlias = true;
         try {
@@ -876,6 +1056,30 @@
         refreshPushDiag();
         loadAccountData();
         if (dialogEl) return trapFocus(dialogEl);
+    });
+
+    // The provider catalog follows whichever endpoint is configured. Reacting
+    // to the signature (kind + preset + baseUrl + key) rather than to each
+    // keystroke means we refetch on a *settled* provider, and never re-ask
+    // when the user merely edits the model name.
+    //
+    // The advanced block is collapsed by default, so gating on
+    // `showAiAdvanced` avoids hitting the gateway for a list nobody will see;
+    // `activeSection === 'ai'` keeps the request off from other Settings
+    // pages, and aiFeatures-off means we must not ask the gateway anything.
+    let lastModelsSig: string | null = null;
+    $effect(() => {
+        const sig = aiModelsSignature();
+        const visible = showAiAdvanced && activeSection === 'ai' && settings.aiFeatures;
+        if (!visible) {
+            // Collapsed, or on another page: drop whatever we were showing
+            // rather than leaving a stale provider's models under the field.
+            if (lastModelsSig !== null) { clearAiModels(); lastModelsSig = null; }
+            return;
+        }
+        if (sig === lastModelsSig) return;
+        lastModelsSig = sig;
+        void loadAiModels();
     });
 
     async function handleEnableNotifications() {
@@ -1074,7 +1278,7 @@
                         </div>
                     {/each}
                 {:else}
-                    {#each CATEGORIES as cat (cat.id)}
+                    {#each visibleCategories as cat (cat.id)}
                         <div class="rail-group">
                             <div class="rail-cat muted" data-testid={`settings-group-${cat.id}`}>{cat.label}</div>
                             {#each cat.sections as s (s.id)}
@@ -1174,20 +1378,56 @@
                         </div>
                     {/if}
 
-                    {#if aliases.length}
+                    <!--
+                        Rendered whenever the DB answered (aliases.length OR mailcowDbUnavailable) so the
+                        collapsed state is reachable/announceable by tests and screen readers; the old
+                        `{#if aliases.length}` wrapper only existed to hide an empty <ul>.
+                    -->
+                    {#if aliases.length || mailcowDbUnavailable}
                         <div class="card">
-                            <h4><Icon name="at" size={13} /> Forwarding to you ({aliases.length})</h4>
-                            <ul class="alias-chips" data-testid="alias-chips">
-                                {#each aliases as a (a.address)}
-                                    <li class={`alias-chip ${a.active ? '' : 'inactive'}`}>
-                                        <span class="alias-chip-icon" aria-hidden="true">
-                                            <Icon name="at" size={11} />
-                                        </span>
-                                        <span class="alias-chip-addr truncate">{a.address}</span>
-                                        {#if !a.active}<span class="alias-chip-badge">inactive</span>{/if}
-                                    </li>
-                                {/each}
-                            </ul>
+                            <button
+                                type="button"
+                                class="collapse-header"
+                                onclick={() => showForwardingAliases = !showForwardingAliases}
+                                aria-expanded={showForwardingAliases}
+                                data-testid="forwarding-aliases-toggle"
+                            >
+                                <span>
+                                    <Icon name="at" size={13} /> Forwarding to you
+                                    <span class="count">{aliases.length}</span>
+                                </span>
+                                <Icon name={showForwardingAliases ? 'chevronUp' : 'chevronDown'} size={14} />
+                            </button>
+                            {#if showForwardingAliases}
+                                <div class="collapse-body">
+                                    {#if aliases.length}
+                                        <p class="muted small">
+                                            Aliases that deliver straight into this mailbox. Disabled ones still
+                                            show below so you can spot what's been switched off.
+                                        </p>
+                                        <ul class="alias-chips" data-testid="alias-chips">
+                                            {#each aliases as a (a.address)}
+                                                <li class={`alias-chip ${a.active ? '' : 'inactive'}`}>
+                                                    <span class="alias-chip-icon" aria-hidden="true">
+                                                        <Icon name="at" size={11} />
+                                                    </span>
+                                                    <span class="alias-chip-addr truncate">{a.address}</span>
+                                                    {#if !a.active}<span class="alias-chip-badge">inactive</span>{/if}
+                                                </li>
+                                            {/each}
+                                        </ul>
+                                    {:else if mailcowDbUnavailable}
+                                        <p class="muted small" data-testid="forwarding-aliases-empty">
+                                            Aliases can't be listed — the mailcow DB isn't reachable from this
+                                            server. See the warning below.
+                                        </p>
+                                    {:else}
+                                        <p class="muted small" data-testid="forwarding-aliases-empty">
+                                            No forwarding aliases are pointed at this mailbox yet. Create one below.
+                                        </p>
+                                    {/if}
+                                </div>
+                            {/if}
                         </div>
                     {/if}
 
@@ -1540,32 +1780,33 @@
 
                     <div class="card">
                         <h4><Icon name="eye" size={13} /> Image handling</h4>
+
+                        <!-- The state line describes what THIS profile is
+                             actually doing, never what the default is.
+                             remoteImagesBlockedFor() is the same predicate the
+                             two message readers use, so this cannot claim
+                             "blocked" for a migrated user whose images still
+                             load. See settings.svelte.ts
+                             migrateRemoteImagesDefault. -->
+                        <p class="muted small privacy-state" data-testid="privacy-image-state">
+                            <Icon name={imagesBlocked ? 'lock' : 'info'} size={12} />
+                            {#if imagesBlocked}
+                                Remote images are <strong>blocked</strong>. You will see a
+                                “Load remote content” prompt on messages that contain them.
+                            {:else}
+                                Remote images are <strong>loading automatically</strong>, so senders
+                                can tell when you open a message. Turn on “Always allow” below
+                                only if you are happy with that.
+                            {/if}
+                        </p>
+
                         <div class="form-row" style="padding:0;border:none;background:none;">
-                            <div class="row-text">
-                                <strong>Route images through privacy proxy</strong>
-                                <span class="muted">
-                                    Loads every remote image via /v1/proxy/image so the sender's CDN
-                                    never sees your IP, user-agent, or open time. Subject to the
-                                    server-side daily cap (default 100&nbsp;MB).
-                                </span>
-                            </div>
-                            <label class="toggle compact" class:spy-on={settings.proxyImages}>
-                                <input
-                                    type="checkbox"
-                                    checked={settings.proxyImages}
-                                    onchange={(e) => setProxyImages((e.currentTarget as HTMLInputElement).checked)}
-                                    data-testid="settings-proxy-images"
-                                />
-                                <span>{settings.proxyImages ? 'On' : 'Off'}</span>
-                            </label>
-                        </div>
-                        <div class="form-row">
                             <div class="row-text">
                                 <strong>Always allow remote images</strong>
                                 <span class="muted">
-                                    Skip the per-message "Load remote content?" prompt and load images
-                                    for every email. Convenient, but lets senders see when you've opened
-                                    their message via tracking pixels.
+                                    Load images for every message with no prompt. Off means each
+                                    message asks first — and you can tick “remember this sender”
+                                    to stop being asked for that person for 30 days.
                                 </span>
                             </div>
                             <label class="toggle compact">
@@ -1578,6 +1819,64 @@
                                 <span>{settings.alwaysAllowImages ? 'On' : 'Off'}</span>
                             </label>
                         </div>
+                        <div class="form-row">
+                            <div class="row-text">
+                                <strong>Route allowed images through the privacy proxy</strong>
+                                <span class="muted">
+                                    Fetches images you <em>have</em> allowed via /v1/proxy/image so
+                                    the sender's CDN never sees your IP, user-agent, or
+                                    connection time. This hides who fetched an image — not the
+                                    fact that you read the message, which the sender still learns
+                                    from the request itself. Subject to the server-side daily cap.
+                                </span>
+                            </div>
+                            <label class="toggle compact" class:spy-on={settings.proxyImages}>
+                                <input
+                                    type="checkbox"
+                                    checked={settings.proxyImages}
+                                    onchange={(e) => setProxyImages((e.currentTarget as HTMLInputElement).checked)}
+                                    data-testid="settings-proxy-images"
+                                />
+                                <span>{settings.proxyImages ? 'On' : 'Off'}</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- What the AI can see.
+
+                         Every claim below lives in lib/privacy-facts.ts next to
+                         the code it was verified against, and the copy branches
+                         on how this account actually reaches its model: through
+                         our own proxy (where the server scrubs a second time) or
+                         straight to a provider (where it cannot). The copy is
+                         deliberately candid about that difference — telling a
+                         direct-to-provider user they get server-side
+                         redaction would be false, and a privacy panel that
+                         lies is worse than none. -->
+                    <div class="card" data-testid="settings-ai-privacy">
+                        <h4><Icon name="sparkles" size={13} /> What the AI can see</h4>
+                        <p class="muted small">
+                            Your AI features send real parts of your mail to a language model, so
+                            it is worth being precise about what. Right now they reach
+                            <strong>{aiPrivacy.destination}</strong>.
+                        </p>
+                        <ul class="privacy-facts">
+                            {#each aiPrivacy.facts as fact (fact.id)}
+                                <li>
+                                    <Icon name="check" size={12} />
+                                    <span>
+                                        {fact.claim}
+                                        <code class="privacy-cite" title="Verified against {fact.source}">{fact.source}</code>
+                                    </span>
+                                </li>
+                            {/each}
+                        </ul>
+                        <p class="muted small privacy-footnote">
+                            Redaction is pattern-matching, not a guarantee: it removes the shapes
+                            credentials actually take, so a secret in an unusual format can still
+                            get through. Treat anything sensitive the same way you would treat a
+                            message you forwarded to a stranger.
+                        </p>
                     </div>
 
                 </section>
@@ -2475,24 +2774,54 @@
 
             {:else if activeSection === 'ai'}
                 <section class="tab-section">
-                    <h3>AI provider</h3>
-                    <p class="muted small">
-                        Powers the chat bot, "Add to calendar", and (if the server has its own key) Summarize/Draft/Translate.
-                        Your key stays in this browser; the chat bot calls the provider directly.
-                    </p>
+                    <!-- Hard-off state is stated first and plainly.
+                         Reasoning: the rest of this section configures a
+                         provider, and someone who has switched AI off does
+                         not want to be reasoning about presets and API
+                         keys. What they need is (a) to know the app is
+                         in that state and (b) one obvious way back.
 
-                <label class="toggle">
-                    <input
-                        type="checkbox"
-                        checked={settings.aiFeatures}
-                        onchange={(e) => setAiFeatures((e.currentTarget as HTMLInputElement).checked)}
-                        data-testid="settings-ai-features"
-                    />
-                    <span>AI features</span>
-                </label>
-                <p class="muted small" style="margin:-4px 0 8px 26px;">
-                    Off hides the chat bot, AI panel, and every AI suggestion — nothing is sent to any model.
-                </p>
+                         The provider controls below deliberately STAY
+                         rendered when AI is off: they are harmless, they
+                         preserve the configuration the user set up, and
+                         hiding them would turn "turn AI back on" into a
+                         scavenger hunt. For the same reason this section
+                         is never hidden — it is the only route back to
+                         the master switch. -->
+                    {#if !settings.aiFeatures}
+                        <div class="banner warn" data-testid="ai-hard-off-notice">
+                            <Icon name="info" size={14} />
+                            <span>
+                                AI is off. The AI tab, chat bot, AI panel, voice chat, AI sort,
+                                inbox briefing and every AI suggestion are hidden, and nothing is
+                                sent to any model.
+                            </span>
+                        </div>
+                    {:else}
+                        <h3>AI provider</h3>
+                        <p class="muted small">
+                            Powers the chat bot, "Add to calendar", and (if the server has its own key) Summarize/Draft/Translate.
+                            Your key stays in this browser; the chat bot calls the provider directly.
+                        </p>
+                    {/if}
+
+                    <!-- Standalone control rather than one more row in a
+                         provider card: flipping it removes most of the
+                         UI, so it must not read as "another setting". The
+                         label names the consequence, not the state. -->
+                    <label class="toggle" style="margin-top:12px;">
+                        <input
+                            type="checkbox"
+                            checked={settings.aiFeatures}
+                            onchange={(e) => setAiFeatures((e.currentTarget as HTMLInputElement).checked)}
+                            data-testid="settings-ai-features"
+                        />
+                        <span>Turn off all AI features</span>
+                    </label>
+                    <p class="muted small" style="margin:-4px 0 8px 26px;">
+                        Hides the AI tab, chat bot, AI panel, voice chat, AI sort, inbox briefing
+                        and every AI suggestion. Your provider settings below are kept.
+                    </p>
 
                 {#if capabilities.caps && !capabilities.caps.configured}
                     <div class="banner warn">
@@ -2620,47 +2949,48 @@
                                     oninput={(e) => setLlm({ model: (e.currentTarget as HTMLInputElement).value })}
                                     data-testid="settings-model"
                                 />
-                                <!-- Free-form input still wins, but datalist gives a
-                                     one-tap pick for the few hundred models that
-                                     actually exist. Saved a lot of "Invalid model:
-                                     …deepseek-v4-flash…" mistypes. -->
+                                <!-- Free-form input still wins: a gateway may
+                                     serve a model it doesn't advertise, and an
+                                     operator's private deployment will never
+                                     be in a hardcoded list. The datalist is
+                                     fed from the provider's own catalog via
+                                     /v1/ai/models, so the suggestions are what
+                                     this gateway will actually accept — which
+                                     is what a hand-kept list can never be, and
+                                     why that list went stale the moment a
+                                     provider renamed a model. -->
                                 <datalist id="llm-model-suggestions">
-                                    {#if settings.llm.preset === 'openrouter'}
-                                        <option value="deepseek/deepseek-chat-v3-0324">DeepSeek Chat v3 (general)</option>
-                                        <option value="deepseek/deepseek-r1">DeepSeek R1 (reasoning)</option>
-                                        <option value="deepseek/deepseek-r1-distill-llama-70b">DeepSeek R1 distill — Llama 70B</option>
-                                        <option value="anthropic/claude-haiku-4-5">Anthropic Claude Haiku 4.5</option>
-                                        <option value="anthropic/claude-sonnet-4-6">Anthropic Claude Sonnet 4.6</option>
-                                        <option value="openai/gpt-4o-mini">OpenAI GPT-4o mini</option>
-                                        <option value="openai/gpt-4.1-mini">OpenAI GPT-4.1 mini</option>
-                                        <option value="meta-llama/llama-3.1-70b-instruct">Llama 3.1 70B Instruct</option>
-                                        <option value="qwen/qwen-2.5-72b-instruct">Qwen 2.5 72B Instruct</option>
-                                        <option value="google/gemini-2.0-flash-001">Gemini 2.0 Flash</option>
-                                    {:else if settings.llm.preset === 'openai'}
-                                        <option value="gpt-4o-mini">GPT-4o mini (cheap, fast)</option>
-                                        <option value="gpt-4o">GPT-4o</option>
-                                        <option value="gpt-4.1-mini">GPT-4.1 mini</option>
-                                        <option value="o4-mini">o4-mini (reasoning)</option>
-                                    {:else if settings.llm.preset === 'mistral'}
-                                        <option value="mistral-small-latest">Mistral Small (latest)</option>
-                                        <option value="mistral-medium-latest">Mistral Medium (latest)</option>
-                                        <option value="mistral-large-latest">Mistral Large (latest)</option>
-                                        <option value="codestral-latest">Codestral (latest)</option>
-                                    {:else if settings.llm.preset === 'groq'}
-                                        <option value="llama-3.1-70b-versatile">Llama 3.1 70B Versatile</option>
-                                        <option value="llama-3.1-8b-instant">Llama 3.1 8B Instant</option>
-                                        <option value="mixtral-8x7b-32768">Mixtral 8x7B</option>
-                                    {:else if settings.llm.kind === 'anthropic'}
-                                        <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
-                                        <option value="claude-sonnet-4-6">Claude Sonnet 4.6</option>
-                                        <option value="claude-opus-4-7">Claude Opus 4.7</option>
-                                    {/if}
+                                    {#each aiModels.models as m (m.id)}
+                                        <option value={m.id}>{m.owned_by ? `${m.id} — ${m.owned_by}` : m.id}</option>
+                                    {/each}
                                 </datalist>
+                                <!-- State is stated out loud. A silently empty
+                                     dropdown is indistinguishable from a gateway
+                                     that simply has no models, and the user is
+                                     left guessing which one it is. -->
+                                <div class="hint" data-testid="settings-model-status">
+                                    {#if aiModels.loading}
+                                        <span class="spinner"></span> Loading models from the gateway…
+                                    {:else if aiModels.error}
+                                        {aiModels.error} You can still type a model name.
+                                    {:else if !aiModels.loaded}
+                                        Open the provider's model list…
+                                    {:else if aiModels.models.length === 0}
+                                        The gateway returned no models. You can still type a model name.
+                                    {:else}
+                                        {aiModels.models.length} model{aiModels.models.length === 1 ? '' : 's'} available from this gateway.
+                                    {/if}
+                                </div>
                             </div>
                         </div>
                     {/if}
                 </div>
-
+                <!-- Live model round-trips, gated on the master switch: with
+                     AI off there is nothing to test, and clicking would spend
+                     tokens proving a connection to a surface that's disabled.
+                     The provider fields above stay visible — they are inert
+                     config, not AI activity. -->
+                {#if settings.aiFeatures}
                 <div class="actions">
                     <button
                         type="button"
@@ -2726,6 +3056,7 @@
                         <span>{voicePrefs.enabled ? 'On' : 'Off'}</span>
                     </label>
                 </div>
+                {/if}
                 </section>
 
             {:else if activeSection === 'notifications'}
@@ -2993,7 +3324,7 @@
                     </div>
 
                 </section>
-            {:else if activeSection === 'sweep'}
+            {:else if activeSection === 'sweep' && settings.aiFeatures}
                 <section class="tab-section" data-testid="settings-sweep">
                     <h3>Sweep</h3>
                     <p class="muted small">Bulk spam &amp; phishing classification alongside AI sort.</p>
@@ -3036,7 +3367,15 @@
                                     </label>
                                 {/if}
                 </section>
-            {:else if activeSection === 'smart-suggestions'}
+            {:else if activeSection === 'smart-suggestions' && settings.aiFeatures}
+                <!-- All three rows here spend a model call (subject
+                     suggestion, pre-send proofread, recipient history),
+                     so the whole section is inert when AI is hard-off.
+                     It is hidden outright — including its nav entry —
+                     because unlike the AI section it holds no master
+                     switch, so there would be no reason to navigate to
+                     it. The AI section stays reachable precisely because
+                     it IS the way back. -->
                 <section class="tab-section" data-testid="settings-smart-suggestions">
                     <h3>Smart suggestions</h3>
                     <p class="muted small">Client-side AI helpers — subject suggestions and the pre-send sanity check.</p>
@@ -3108,7 +3447,6 @@
                         Hand matching mail to an external service — the inverse of webhook inboxes.
                         Point a mail rule's "Send to external webhook" action at one of these; the
                         payload carries the parsed headers, the body, and gzip+base64 attachments.
-                        {#if outboundLimit}(limit {outboundLimit}){/if}
                     </p>
                     {#if owNewSecret}
                         <div class="card" data-testid="ow-secret-card">
@@ -3140,8 +3478,62 @@
                             </div>
                         </div>
                     {/if}
+                    <!-- Existing webhooks lead the section. It reads the wrong way round to
+                         put "add another" above the list: with a 100-webhook allowance the
+                         form is a wall of inputs and the thing the user came to look at is
+                         the list. The count sits in the header, so the section still says
+                         what is configured while it is collapsed. -->
+                    <div class="filter-block" data-testid="ow-list-block">
+                        <button
+                            type="button"
+                            class="collapse-header"
+                            onclick={() => (showOwList = !showOwList)}
+                            aria-expanded={showOwList}
+                            data-testid="ow-list-toggle"
+                        >
+                            <span><Icon name="globe" size={13} /> Configured webhooks</span>
+                            <span class="count">
+                                {outboundHooks.length}{#if outboundLimit}&nbsp;/&nbsp;{outboundLimit}{/if}
+                            </span>
+                            <Icon name={showOwList ? 'chevronUp' : 'chevronDown'} size={14} />
+                        </button>
+                        {#if showOwList}
+                            <div class="collapse-body">
+                                {#if outboundHooks.length > 8}
+                                    <!-- Only once the list is long enough to need it: a filter box
+                                         for three rows is clutter, for a hundred it is essential. -->
+                                    <div class="add-row">
+                                        <input
+                                            type="search"
+                                            placeholder="Filter by name or URL"
+                                            bind:value={owSearch}
+                                            aria-label="Filter webhooks by name or URL"
+                                            data-testid="ow-search"
+                                        />
+                                        <span class="muted small">{owVisibleHooks.length} shown</span>
+                                    </div>
+                                {/if}
+                            </div>
+                        {/if}
+                    </div>
+
+                    <!-- The create form is its own collapsible too, and closed by default:
+                         adding a webhook is a deliberate act, while arriving here is usually
+                         "why didn't that fire?". -->
                     {#if !outboundUnavailable}
                         <div class="filter-block">
+                            <button
+                                type="button"
+                                class="collapse-header"
+                                onclick={() => (showOwCreate = !showOwCreate)}
+                                aria-expanded={showOwCreate}
+                                data-testid="ow-create-toggle"
+                            >
+                                <span><Icon name="plus" size={13} /> Add a webhook</span>
+                                <Icon name={showOwCreate ? 'chevronUp' : 'chevronDown'} size={14} />
+                            </button>
+                            {#if showOwCreate}
+                            <div class="collapse-body">
                             <div class="rule-form">
                                 <label class="rule-row">
                                     <span class="rule-label">URL</span>
@@ -3237,9 +3629,16 @@
                                     </button>
                                 </div>
                             </div>
-                            {#if outboundHooks.length}
+                            </div>
+                            {/if}
+                        </div>
+                    {/if}
+
+                    {#if !outboundUnavailable}
+                        <div class="filter-block" data-testid="ow-list-block">
+                            {#if owVisibleHooks.length}
                                 <ul class="rule-cards" data-testid="ow-list">
-                                    {#each outboundHooks as w (w.id)}
+                                    {#each owVisibleHooks as w (w.id)}
                                         <li class="rule-card" data-testid={`ow-item-${w.id}`}>
                                             <div class="rule-card-head">
                                                 <span class="rule-badge"><Icon name="globe" size={11} /> Webhook</span>
@@ -3247,22 +3646,19 @@
                                                 <button type="button" class="rule-remove" aria-label={`Remove webhook ${w.label}`} title="Remove webhook" onclick={() => doDeleteOutboundWebhook(w)} data-testid={`ow-remove-${w.id}`}><Icon name="trash" size={12} /></button>
                                             </div>
                                             <div class="rule-card-body">
-                                                <div class="rule-clause"><code class="rule-val truncate">{w.url}</code></div>
-                                                <div class="rule-clause">
-                                                    <label class="muted small">
-                                                        <input type="checkbox" checked={w.keep} onchange={(e) => doUpdateOutboundWebhook(w, { keep: (e.currentTarget as HTMLInputElement).checked })} />
-                                                        keep message in mailbox
-                                                    </label>
+                                                <div class="rule-clause"><code class="rule-val truncate" title={w.url}>{w.url}</code></div>
+                                                <!-- Last-used is the first thing anyone asks about a
+                                                     webhook ("is it even firing?"), and the raw
+                                                     epoch millisecond the server returns is
+                                                     useless at a glance. -->
+                                                <div class="rule-clause muted small" data-testid={`ow-lastused-${w.id}`}>
+                                                    {owLastUsedLabel(w)}
                                                 </div>
                                                 <div class="rule-clause">
-                                                    <input
-                                                        type="text"
-                                                        class="ow-prepend-edit"
-                                                        value={w.prepend}
-                                                        placeholder="Prepend text (optional)"
-                                                        onchange={(e) => doUpdateOutboundWebhook(w, { prepend: (e.currentTarget as HTMLInputElement).value })}
-                                                        data-testid={`ow-prepend-${w.id}`}
-                                                    />
+                                                    <label class="muted small">
+                                                        <input type="checkbox" checked={w.keep} onchange={(e) => doUpdateOutboundWebhook(w, { keep: (e.currentTarget as HTMLInputElement).checked })} data-testid={`ow-keep-${w.id}`} />
+                                                        keep message in mailbox
+                                                    </label>
                                                 </div>
                                                 {#if w.headers && Object.keys(w.headers).length}
                                                     <!-- Values are masked server-side ('•••'); only the
@@ -3270,11 +3666,87 @@
                                                     <div class="rule-clause muted small" data-testid={`ow-headers-${w.id}`}>
                                                         Headers: {Object.keys(w.headers).join(', ')}
                                                     </div>
+                                                {:else}
+                                                    <div class="rule-clause muted small">Headers: none</div>
+                                                {/if}
+                                                <input
+                                                    type="text"
+                                                    class="ow-prepend-edit"
+                                                    value={w.prepend}
+                                                    placeholder="Prepend text sent above the quoted message (optional)"
+                                                    onchange={(e) => doUpdateOutboundWebhook(w, { prepend: (e.currentTarget as HTMLInputElement).value })}
+                                                    data-testid={`ow-prepend-${w.id}`}
+                                                />
+                                                <div class="ow-card-actions">
+                                                    <button
+                                                        type="button"
+                                                        class="btn"
+                                                        disabled={owBusyId === w.id}
+                                                        onclick={() => doTestOutboundWebhook(w)}
+                                                        data-testid={`ow-test-${w.id}`}
+                                                    >{owBusyId === w.id ? 'Sending…' : 'Send test'}</button>
+                                                    <button
+                                                        type="button"
+                                                        class="btn btn-ghost"
+                                                        onclick={() => (owExpandedId = owExpandedId === w.id ? null : w.id)}
+                                                        aria-expanded={owExpandedId === w.id}
+                                                        data-testid={`ow-details-${w.id}`}
+                                                    >{owExpandedId === w.id ? 'Hide details' : 'Details'}</button>
+                                                    <!-- The rule's target id. An implementation detail,
+                                                         but a user hand-building a rule through the
+                                                         API needs it and hunting it elsewhere is
+                                                         miserable. -->
+                                                    <code class="ow-id" title="Mail rules reference this webhook by id">{w.id}</code>
+                                                </div>
+                                                {#if owExpandedId === w.id}
+                                                    <dl class="ow-details" data-testid={`ow-details-body-${w.id}`}>
+                                                        <div><dt>Prepend</dt><dd>{w.prepend || '— none —'}</dd></div>
+                                                        <div><dt>Rule action</dt><dd><code>{JSON.stringify({ type: 'webhook', webhookId: w.id })}</code></dd></div>
+                                                        <div><dt>Mailbox</dt><dd><code>{w.mailbox}</code> — hidden; matching mail is parked here until delivered</dd></div>
+                                                    </dl>
+                                                {/if}
+                                                {#if owTestResult[w.id]}
+                                                    {@const r = owTestResult[w.id]}
+                                                    <div
+                                                        class="ow-test-result"
+                                                        class:ow-test-ok={r.ok}
+                                                        data-testid={`ow-test-result-${w.id}`}
+                                                    >
+                                                        <div class="ow-test-status">
+                                                            <Icon name={r.ok ? 'check' : 'alertCircle'} size={13} />
+                                                            <strong>HTTP {r.status}</strong>
+                                                            <span class="muted">{r.elapsedMs} ms</span>
+                                                            <span class="muted">{r.truncated ? 'first 300 chars' : 'full reply'}</span>
+                                                            <button
+                                                                type="button"
+                                                                class="btn btn-ghost"
+                                                                onclick={() => {
+                                                                    const next = { ...owTestResult };
+                                                                    delete next[w.id];
+                                                                    owTestResult = next;
+                                                                }}
+                                                                aria-label="Dismiss test result"
+                                                                data-testid={`ow-test-dismiss-${w.id}`}
+                                                            ><Icon name="close" size={12} /></button>
+                                                        </div>
+                                                        <!-- pre-wrap, not truncated: an HTML error page or a
+                                                             JSON body is the thing being debugged, and the
+                                                             server already bounded it at 300 chars. -->
+                                                        {#if r.reply}
+                                                            <pre class="ow-test-reply" data-testid={`ow-test-reply-${w.id}`}>{r.reply}</pre>
+                                                        {:else}
+                                                            <p class="muted small">The receiver sent no body.</p>
+                                                        {/if}
+                                                    </div>
                                                 {/if}
                                             </div>
                                         </li>
                                     {/each}
                                 </ul>
+                            {:else if owSearch.trim()}
+                                <p class="muted small" data-testid="ow-list-empty">
+                                    No webhook matches “{owSearch.trim()}”.
+                                </p>
                             {:else}
                                 <p class="muted small">No outbound webhooks yet.</p>
                             {/if}
@@ -3350,6 +3822,145 @@
                                 autocomplete="off"
                                 data-testid="settings-vip-addresses"
                             />
+                        </div>
+                    </div>
+
+                    <!--
+                        Address book. Stored on the server in a hidden IMAP
+                        folder so it follows the user between devices.
+                        addressBook.error is set when that path is unusable;
+                        the banner says so rather than leaving the user to
+                        assume their contacts are synced when they are only
+                        in this browser.
+
+                        The add form doubles as the editor: Edit on a row
+                        loads it into the same fields, so there is one place
+                        to learn rather than a dialog per row.
+                    -->
+                    <div class="card">
+                        <h4><Icon name="user" size={13} /> Contacts</h4>
+
+                        {#if addressBook.error}
+                            <p class="muted small" role="status" data-testid="contacts-store-warning">
+                                <strong>Not syncing.</strong> Your contacts are kept in this browser
+                                instead of on the server, so they will not follow you to another
+                                device. Reason: {addressBook.error}
+                            </p>
+                        {:else if addressBook.loading}
+                            <p class="muted small">Loading contacts…</p>
+                        {:else}
+                            <p class="muted small">
+                                Stored on the server in a hidden folder, so they follow you to every
+                                device. {addressBook.contacts.length}
+                                {addressBook.contacts.length === 1 ? 'contact' : 'contacts'}.
+                            </p>
+                        {/if}
+
+                        <div class="add-row" style="margin-top:8px;">
+                            <input
+                                type="text"
+                                placeholder="Name (optional)"
+                                bind:value={contactNameInput}
+                                data-testid="contact-name-input"
+                            />
+                            <input
+                                type="text"
+                                placeholder="email@example.com"
+                                bind:value={contactAddrInput}
+                                spellcheck="false"
+                                autocomplete="off"
+                                onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); saveContact(); } }}
+                                data-testid="contact-address-input"
+                            />
+                        </div>
+                        <div class="add-row">
+                            <input
+                                type="text"
+                                placeholder="Note (optional) — where you met, what they do"
+                                bind:value={contactNoteInput}
+                                onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); saveContact(); } }}
+                                data-testid="contact-note-input"
+                            />
+                            <button
+                                type="button"
+                                class="btn btn-secondary"
+                                disabled={contactSaving}
+                                onclick={saveContact}
+                                data-testid="contact-save"
+                            >{contactEditing ? 'Save' : 'Add'}</button>
+                            {#if contactEditing}
+                                <button
+                                    type="button"
+                                    class="btn btn-ghost"
+                                    onclick={resetContactForm}
+                                    data-testid="contact-cancel"
+                                >Cancel</button>
+                            {/if}
+                        </div>
+                        {#if contactError}
+                            <p class="err small" role="alert" data-testid="contact-error">{contactError}</p>
+                        {/if}
+
+                        {#if contactRows.length > 6}
+                            <input
+                                type="search"
+                                placeholder="Search contacts"
+                                bind:value={contactSearch}
+                                style="width:100%;margin-top:8px;"
+                                data-testid="contact-search"
+                            />
+                        {/if}
+
+                        {#if contactRows.length}
+                            <ul class="contact-list" data-testid="contact-list">
+                                {#each contactRows as c (c.uid + c.address)}
+                                    <li
+                                        class="contact-row"
+                                        class:editing={contactEditing === c.uid}
+                                        data-testid="contact-row"
+                                    >
+                                        <div class="row-text">
+                                            <strong>{c.name || c.address}</strong>
+                                            {#if c.name}<span class="contact-addr">{c.address}</span>{/if}
+                                            <span class="muted">
+                                                {contactSeen(c)}{c.count > 1 ? ` · ${c.count} mentions` : ''}
+                                            </span>
+                                            {#if c.note}<span class="muted small">{c.note}</span>{/if}
+                                        </div>
+                                        <div class="rule-actions">
+                                            <button
+                                                type="button"
+                                                class="btn btn-ghost small"
+                                                onclick={() => startEditContact(c)}
+                                                data-testid="contact-edit"
+                                            ><Icon name="pencil" size={11} /> Edit</button>
+                                            <button
+                                                type="button"
+                                                class="btn btn-ghost small"
+                                                aria-label={`Delete ${c.name || c.address}`}
+                                                onclick={() => deleteContactRow(c.uid)}
+                                                data-testid="contact-delete"
+                                            ><Icon name="trash" size={11} /></button>
+                                        </div>
+                                    </li>
+                                {/each}
+                            </ul>
+                        {:else if contactSearch}
+                            <p class="muted small" data-testid="contact-empty">Nothing matches “{contactSearch}”.</p>
+                        {:else}
+                            <p class="muted small" data-testid="contact-empty">
+                                No contacts yet. Send some mail, or add one above.
+                            </p>
+                        {/if}
+
+                        <div class="rule-actions" style="margin-top:8px;">
+                            <button
+                                type="button"
+                                class="btn btn-ghost small"
+                                onclick={() => loadAddressBook()}
+                                disabled={addressBook.loading}
+                                data-testid="contact-reload"
+                            ><Icon name="refresh" size={11} /> Reload from server</button>
                         </div>
                     </div>
                 </section>
@@ -4153,6 +4764,50 @@
     @media (prefers-reduced-motion: reduce) {
         .toggle.spy-on span { animation: none; }
     }
+    /* --- Privacy panel --------------------------------------------------- */
+    /* The state line is a status sentence, not a toggle: it needs to read
+       as prose with a small leading glyph, and must wrap cleanly on a
+       narrow pane rather than running the icon onto its own line. */
+    .privacy-state {
+        display: flex;
+        align-items: flex-start;
+        gap: 7px;
+        margin: 0 0 4px;
+        line-height: 1.45;
+    }
+    .privacy-state :global(svg) { flex: 0 0 auto; margin-top: 2px; }
+    .privacy-state strong { color: var(--text-primary); }
+    /* The claim list. Generous leading because these are sentences the user
+       is meant to actually read, not a feature matrix. */
+    .privacy-facts {
+        list-style: none;
+        margin: 10px 0 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 9px;
+    }
+    .privacy-facts li {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        line-height: 1.5;
+        color: var(--text-secondary);
+    }
+    .privacy-facts li :global(svg) { flex: 0 0 auto; margin-top: 3px; opacity: 0.75; }
+    /* The provenance of each claim, rendered small and monospaced. It is
+       load-bearing, not decoration: it is how a future change that breaks a
+       claim gets found instead of quietly shipping a lie. */
+    .privacy-cite {
+        display: block;
+        margin-top: 3px;
+        font-size: 10.5px;
+        color: var(--text-tertiary);
+        opacity: 0.75;
+        word-break: break-word;
+        user-select: all;
+    }
+    .privacy-footnote { margin: 12px 0 0; padding-top: 10px; border-top: 1px dashed var(--border-subtle); }
     .sound-controls { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
     /* Phishing scan extra knobs that appear under the on/off toggle. */
     .phish-knobs {
@@ -4295,6 +4950,41 @@
         margin-bottom: 8px;
     }
     .add-row input { flex: 1; }
+    /* Contact rows. A list rather than chips because a contact has a name, an
+     * address, a note and provenance ("seen 3 days ago · 12 mentions") —
+     * four facts do not fit on one pill line, and truncating them would hide
+     * the very thing that distinguishes a saved contact from a bare address
+     * harvested from a message. */
+    .contact-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+    }
+    .contact-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 8px;
+        border-radius: var(--radius-xs);
+    }
+    .contact-row:hover { background: var(--bg-hover); }
+    /* The row being edited is tinted so it is obvious which one the form
+     * above will overwrite — otherwise an edit looks like an add. */
+    .contact-row.editing {
+        background: color-mix(in srgb, var(--accent) 8%, transparent);
+    }
+    .contact-row .row-text { flex: 1; min-width: 0; }
+    .contact-addr {
+        font-family: var(--font-mono);
+        font-size: 11.5px;
+        color: var(--text-tertiary);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
     .chip-list {
         list-style: none;
         margin: 0;
@@ -4558,6 +5248,98 @@
         border-color: var(--accent);
     }
     .ow-prepend-edit::placeholder { color: var(--text-tertiary); }
+
+    /* Per-card actions: test send and details sit on one line, with the
+       webhook id pushed to the right so it never reads as another control. */
+    .ow-card-actions {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap;
+        margin-top: 2px;
+    }
+    .ow-card-actions .btn { flex: none; }
+    .ow-id {
+        margin-left: auto;
+        font-family: var(--font-mono);
+        font-size: 10.5px;
+        color: var(--text-tertiary);
+        background: none;
+        border: 0;
+        padding: 0;
+    }
+    /* Details panel: a definition list, because every row really is a
+       term/value pair and a grid of divs would need the same rules. */
+    .ow-details {
+        display: grid;
+        gap: 4px;
+        margin: 4px 0 0;
+        padding: 8px 10px;
+        background: var(--bg-surface-alt);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-xs);
+        font-size: 11.5px;
+    }
+    .ow-details > div {
+        display: grid;
+        grid-template-columns: 90px minmax(0, 1fr);
+        gap: 8px;
+        align-items: baseline;
+    }
+    .ow-details dt {
+        color: var(--text-tertiary);
+        font-weight: 600;
+        text-transform: uppercase;
+        font-size: 9.5px;
+        letter-spacing: 0.04em;
+    }
+    .ow-details dd {
+        margin: 0;
+        color: var(--text-secondary);
+        min-width: 0;
+        overflow-wrap: anywhere;
+    }
+    .ow-details code {
+        font-family: var(--font-mono);
+        font-size: 11px;
+    }
+    /* Test result: the point of the whole panel is seeing what the receiver
+       said, so the reply gets its own block in monospace and wraps rather
+       than truncating — the server already capped it at 300 characters. */
+    .ow-test-result {
+        border: 1px solid var(--danger-soft);
+        background: var(--danger-soft);
+        border-radius: var(--radius-xs);
+        padding: 7px 9px;
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+    }
+    .ow-test-result.ow-test-ok {
+        border-color: var(--border-subtle);
+        background: var(--bg-surface-alt);
+    }
+    .ow-test-status {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 11.5px;
+        color: var(--text-primary);
+        flex-wrap: wrap;
+    }
+    .ow-test-status .muted { font-size: 10.5px; }
+    .ow-test-status .btn-ghost { margin-left: auto; }
+    .ow-test-reply {
+        margin: 0;
+        max-height: 140px;
+        overflow: auto;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        font-family: var(--font-mono);
+        font-size: 11px;
+        line-height: 1.45;
+        color: var(--text-secondary);
+    }
 
     .alias-rows {
         list-style: none;

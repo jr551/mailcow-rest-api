@@ -7,7 +7,7 @@
     import {
         settings, capabilities, setProxyImages, setAlwaysAllowImages, setDefaultFromAddress,
         setDensity, setGroupThreads, setPageSize, setAccountChipDisplay,
-        setLlm, setUseCustomLlm,
+        setLlm, setUseCustomLlm, setAiFeatures,
         setPhishingScan, setTrackOpensDefault, setAiSuggestSubjectOnBlur, setDisplayName,
         setPhishingScanTimeoutSec, setPhishingScanPromptAddendum, setPhishingScanConfidenceFloor,
         setTesseractOcrInstalled, setPhishingScanOcrInline
@@ -728,6 +728,32 @@
         </button>
         {#if showAiProvider}
             <div class="ios-list">
+                <!-- Hard off switch, first row so it reads as the master
+                     control rather than another provider setting. Same
+                     wording as the desktop section: the consequence (all
+                     AI UI disappears) is the thing a user needs to know
+                     before they flip it. -->
+                <div class="ios-row toggle-row">
+                    <div class="toggle-info">
+                        <span class="row-label">Turn off all AI features</span>
+                        <span class="muted small">Hides the AI tab, AI buttons and every suggestion</span>
+                    </div>
+                    <button
+                        type="button"
+                        class="toggle-switch"
+                        class:on={settings.aiFeatures}
+                        class:off={!settings.aiFeatures}
+                        onclick={() => setAiFeatures(!settings.aiFeatures)}
+                        data-testid="settings-ai-features"
+                    >
+                        <span class="toggle-knob"></span>
+                    </button>
+                </div>
+                {#if !settings.aiFeatures}
+                    <div class="ios-row" style="align-items:flex-start;flex-direction:column;gap:4px;">
+                        <span class="muted small">AI is off. The provider settings below are kept, but nothing uses them until you turn AI back on.</span>
+                    </div>
+                {/if}
                 {#if capabilities.caps && !capabilities.caps.configured}
                     <div class="ios-row" style="align-items:flex-start;flex-direction:column;gap:4px;">
                         <span class="muted small">Server has no LLM configured. Set your own provider below to use AI chat.</span>
@@ -767,6 +793,10 @@
                         <span class="row-label">Model</span>
                         <input type="text" class="ai-input" placeholder={settings.llm.preset ? '(preset default)' : 'gpt-4o-mini'} value={settings.llm.model} oninput={(e) => setLlm({ model: (e.currentTarget as HTMLInputElement).value })} />
                     </div>
+                    <!-- A live model round-trip, so it follows the master
+                         switch: with AI off the row would spend tokens on a
+                         connection nothing can use. -->
+                    {#if settings.aiFeatures}
                     <div class="ios-row" style="padding: 6px 16px;flex-direction:column;align-items:stretch;gap:6px;">
                         <button type="button" class="mbtn mbtn-secondary" disabled={aiTesting} onclick={testAiConnection}>
                             {aiTesting ? 'Testing…' : 'Test connection'}
@@ -777,6 +807,7 @@
                             </span>
                         {/if}
                     </div>
+                    {/if}
                 {/if}
             </div>
         {/if}

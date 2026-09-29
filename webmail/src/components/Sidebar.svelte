@@ -10,6 +10,7 @@
         ICON_STYLES, type IconStyle, type FolderNode
     } from '../lib/folder-prefs.svelte';
     import { ApiError } from '../lib/api';
+    import { isHiddenWebmailFolder } from '../lib/contacts';
     import Icon from './Icon.svelte';
     import type { Mailbox, Shortcut } from '../lib/api';
     import type { IconName } from '../lib/icons';
@@ -71,10 +72,14 @@
     let visibleNodes = $derived.by(() => {
         // Read the expanded map so Svelte tracks it.
         void folderPrefs.expanded; // eslint-disable-line @typescript-eslint/no-unused-expressions
-        // Hide internal storage folders (settings sync, future caches).
-        // The leading `.storage_` prefix is reserved for webmail's own
-        // bookkeeping; users should never see those rows.
-        return flattenTree(tree, ui.selectedPath).filter((n) => !n.path.startsWith('.storage_'));
+        // Hide internal storage folders (settings sync, the address book).
+        // The leading dot plus the `.storage_` / `.book-` prefixes are
+        // reserved for webmail's own bookkeeping; users should never see
+        // those rows. The predicate is shared with the server's own filter
+        // so the two cannot drift — the server also hides these from
+        // /v1/mailboxes, and this local pass additionally covers a mailbox
+        // list cached from before that filter existed.
+        return flattenTree(tree, ui.selectedPath).filter((n) => !isHiddenWebmailFolder(n.path));
     });
 
     function prettyFolder(label: string): string {

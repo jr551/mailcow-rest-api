@@ -159,3 +159,364 @@ test('dark palettes are dark, and their borders are visible against them', () =>
     }
     assert.deepEqual(failures, [], `dark palettes that would not read:\n  ${failures.join('\n  ')}`);
 });
+
+// --- The accent palette ---------------------------------------------------
+//
+// The skins above are checked as shipped. The ACCENT LAYER on top of them is
+// a separate derivation (accentOverrideVars in skins.svelte.ts) and was
+// originally mode-blind: it computed one family from one lightness and used it
+// unchanged in both palettes, so on a near-black pane an accent text of
+// #004478 sat on #1f1f1f at 1.41:1. The topbar picker is the thing that made
+// that reachable — one click, any hex — so the palette it offers is checked
+// here against the same real surface tokens.
+//
+// The derivation is re-implemented below rather than imported. That is
+// deliberate: importing the implementation would make the assertion test the
+// exact code it is meant to audit, and a subtle typo in the formula would
+// cancel out on both sides. The two are kept honest by `deriveMatchesSource`,
+// which asserts this copy still agrees with the shipped constants.
+
+const accSrc = src;
+
+// hsl() string -> {h,s,l} as the source would compute it.
+function parseHsl(str) {
+    const m = /^hsl\(([\d.]+) ([\d.]+)% ([\d.]+)%\)$/.exec(str.trim());
+    return m ? { h: +m[1], s: +m[2], l: +m[3] } : null;
+}
+function parseHex(hex) {
+    const raw = hex.replace('#', '');
+    const full = raw.length === 3 ? raw.split('').map((c) => c + c).join('') : raw;
+    return {
+        h: 0,
+        r: parseInt(full.slice(0, 2), 16) / 255,
+        g: parseInt(full.slice(2, 4), 16) / 255,
+        b: parseInt(full.slice(4, 6), 16) / 255
+    };
+}
+function hslToHex({ h, s, l }) {
+    const sn = s / 100;
+    const ln = l / 100;
+    const k = (n) => (n + h / 30) % 12;
+    const a = sn * Math.min(ln, 1 - ln);
+    const f = (n) => ln - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+    const to = (v) => Math.round(Math.max(0, Math.min(255, v * 255))).toString(16).padStart(2, '0');
+    return `#${to(f(0))}${to(f(8))}${to(f(4))}`;
+}
+/** Resolve either a #hex or an hsl() token to a #hex so contrast is measurable. */
+function toHex(token) {
+    if (token.startsWith('#')) return token;
+    const p = parseHsl(token);
+    return p ? hslToHex(p) : null;
+}
+
+function hexToHsl(hex) {
+    const { r, g, b } = parseHex(hex);
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    let h = 0;
+    let s = 0;
+    const l = (max + min) / 2;
+    if (max !== min) {
+        const d = max - min;
+        s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+        if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) * 60;
+        else if (max === g) h = ((b - r) / d + 2) * 60;
+        else h = ((r - g) / d + 4) * 60;
+    }
+    return { h, s: s * 100, l: l * 100 };
+}
+
+// A faithful copy of accentOverrideVars, in both branches. `deriveMatchesSource`
+// below is what stops the two drifting apart.
+function deriveAccent(hex, dark) {
+    const { h, s, l } = hexToHsl(hex);
+    const pct = (v) => `${v.toFixed(1)}%`;
+    const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+    // Mirrors the source's contrastRatio, which accepts hsl() as well as hex.
+    // Comparing an hsl() token with the hex-only maths yields NaN >= NaN,
+    // which is false — that bug shipped once already, so the copy has to
+    // resolve tokens the same way or it would "verify" a different function.
+    const onAccent = (fill) =>
+        contrastRatio('#ffffff', toHex(fill)) >= contrastRatio('#141414', toHex(fill)) ? '#ffffff' : '#141414';
+    // The modern space-separated hsl() the source emits. Every component
+    // carries its own %: dropping the saturation's is what made this copy
+    // return null from toHex and take the whole palette suite with it.
+    const hs = `${h.toFixed(1)} ${s.toFixed(1)}%`;
+    if (!dark) {
+        return {
+            '--accent': `hsl(${hs} ${pct(l)})`,
+            '--accent-hover': `hsl(${hs} ${pct(clamp(l - 8, 0, 100))})`,
+            '--accent-soft': `hsl(${h.toFixed(1)} ${Math.min(100, s + 5).toFixed(1)}% ${pct(clamp(l + 32, 0, 95))})`,
+            '--accent-text': `hsl(${hs} ${pct(clamp(l - 18, 15, 100))})`,
+            '--text-on-accent': onAccent(`hsl(${hs} ${pct(l)})`)
+        };
+    }
+    const barL = clamp(l + 20, 58, 74);
+    const bar = `hsl(${hs} ${pct(barL)})`;
+    return {
+        '--accent': bar,
+        '--accent-hover': `hsl(${hs} ${pct(clamp(barL + 8, 0, 90))})`,
+        '--accent-soft': `hsl(${h.toFixed(1)} ${pct(s * 0.5)} 15.0%)`,
+        '--accent-text': `hsl(${hs} ${pct(clamp(l + 40, 70, 84))})`,
+        '--text-on-accent': onAccent(bar)
+    };
+}
+
+const swatchSrc = readFileSync(new URL('../../src/lib/accents.ts', import.meta.url), 'utf8');
+
+/** The palette, read from the module the picker actually renders. */
+function swatches() {
+    return [...swatchSrc.matchAll(/\{ id: '([a-z]+)',\s*label: '([^']+)',\s*hex: '(#[0-9a-f]{6})',\s*isDefaultFor: (null|'[a-z]+')/g)]
+        .map((m) => ({ id: m[1], label: m[2], hex: m[3], isDefaultFor: m[4] === 'null' ? null : m[4].slice(1, -1) }));
+}
+
+test('the accent palette is non-empty and its ids are unique', () => {
+    const list = swatches();
+    assert.ok(list.length >= 8, `expected a real palette, parsed ${list.length}`);
+    const ids = new Set(list.map((s) => s.id));
+    assert.equal(ids.size, list.length, 'duplicate swatch id — the keyed each-block would drop a colour');
+    const hexes = new Set(list.map((s) => s.hex.toLowerCase()));
+    assert.equal(hexes.size, list.length, 'duplicate hex — the picker would show the same colour twice');
+});
+
+test('every shipped skin has a swatch, and it is that skin\'s real default', () => {
+    // A skin whose default is not one click away is a user who retints the
+    // chrome and then has no way back that they can find.
+    const list = swatches();
+    for (const skin of SKIN_ARRAY()) {
+        const mine = list.filter((s) => s.isDefaultFor === skin.id);
+        assert.equal(mine.length, 1, `${skin.id} needs exactly one default swatch, found ${mine.length}`);
+        // The swatch must agree with the skin's own declared swatch, or the
+        // "Outlook blue" chip would not actually restore Outlook blue.
+        assert.equal(
+            mine[0].hex.toLowerCase(),
+            skin.swatch.toLowerCase(),
+            `${skin.id}'s default swatch (${mine[0].hex}) is not the skin's own ${skin.swatch}`
+        );
+    }
+});
+
+/** Skin id + declared swatch, read from the SKINS array. */
+function SKIN_ARRAY() {
+    const start = accSrc.indexOf('export const SKINS: Skin[] = [');
+    assert.notEqual(start, -1, 'could not find the SKINS array');
+    return accSrc.slice(start).split(/\n    \{\n/).slice(1)
+        .map((entry) => ({
+            id: (entry.match(/id:\s*'([^']+)'/) || [])[1],
+            swatch: (entry.match(/swatch:\s*'(#[0-9a-fA-F]+)'/) || [])[1]
+        }))
+        .filter((s) => s.id && s.swatch);
+}
+
+test('the suite\'s deriveAccent really is the shipped accentOverrideVars', () => {
+    // Marker-grepping for constants was the first attempt at this tripwire and
+    // it is worthless: it passed while the suite audited arithmetic the source
+    // no longer used, so BOTH the mode-blind regression and the NaN-ink
+    // regression above went green. Asserting that a string appears in the
+    // file cannot tell you the function computes what the copy computes.
+    //
+    // Instead: load the shipped function out of the source and RUN it, then
+    // require token-for-token equality with the copy. Skins.svelte.ts is
+    // TypeScript, so the annotations are stripped and the module-scope
+    // dependencies it needs (hexToHsl, hslAccent, the two contrast helpers and
+    // isDark) are lifted in alongside it. A real difference in the shipped
+    // code now fails here instead of hiding behind a stale copy.
+    const start = accSrc.indexOf('function accentOverrideVars');
+    assert.notEqual(start, -1, 'could not find accentOverrideVars');
+    let depth = 0;
+    let end = accSrc.indexOf('{', start);
+    for (let i = end; i < accSrc.length; i++) {
+        if (accSrc[i] === '{') depth++;
+        else if (accSrc[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
+    }
+    const fnBody = accSrc.slice(start, end + 1);
+    const helpers = accSrc.slice(
+        accSrc.indexOf('function hexToHsl'),
+        accSrc.indexOf('// The ink a label uses when it sits ON')
+    );
+    const contrast = accSrc.slice(
+        accSrc.indexOf('// The ink a label uses when it sits ON'),
+        accSrc.indexOf('// The accent LAYER')
+    );
+    const js = [
+        helpers, contrast,
+        'let DARK = false;',
+        'const isDark = () => DARK;',
+        fnBody,
+        'return { setDark: (v) => { DARK = v; }, run: (h) => accentOverrideVars(h) };'
+    ].join('\n')
+        .replace(/: Record<string, string>(\s*\|\s*null)?/g, '')
+        .replace(/: \{ h: number; s: number; l: number(; str: string)? \}\s*\|\s*null/g, '')
+        .replace(/: number(\s*\|\s*null)?/g, '')
+        .replace(/: string(\s*\|\s*null)?/g, '')
+        .replace(/\((hex|fill|accentHex|token): string\)/g, '($1)');
+
+    // eslint-disable-next-line no-new-func
+    const shipped = new Function(js)();
+    const swatchList = swatches();
+    for (const dark of [false, true]) {
+        shipped.setDark(dark);
+        for (const s of swatchList) {
+            const real = shipped.run(s.hex);
+            const copy = deriveAccent(s.hex, dark);
+            for (const token of Object.keys(copy)) {
+                assert.equal(
+                    real[token], copy[token],
+                    `${s.label} (${s.hex}) in ${dark ? 'dark' : 'light'}: the suite's deriveAccent no longer`
+                    + ` matches the shipped accentOverrideVars for ${token}`
+                    + ` — it would be auditing stale arithmetic, not the code that runs.`
+                );
+            }
+        }
+    }
+});
+
+test('every accent swatch stays readable as TEXT on both skins, in both modes', () => {
+    // The regression this exists for: the original mode-blind derivation put
+    // #004478 on #1f1f1f (1.41:1) and the picker made that one click away.
+    const failures = [];
+    for (const skin of palettes()) {
+        const surface = skin['--bg-surface'] || skin['--bg-base'];
+        if (!surface) continue;
+        const dark = skin.mode === 'dark';
+        for (const s of swatches()) {
+            const text = toHex(deriveAccent(s.hex, dark)['--accent-text']);
+            if (!text) { failures.push(`${s.id}: unparseable accent-text`); continue; }
+            const ratio = contrastRatio(text, surface);
+            if (ratio < 4.5) {
+                failures.push(`${skin.id}/${skin.mode} ${s.label} (${s.hex}) accent-text ${text} on ${surface} = ${ratio.toFixed(2)}:1`);
+            }
+        }
+    }
+    assert.deepEqual(failures, [], `accent text below AA:\n  ${failures.join('\n  ')}`);
+});
+
+test('accent text stays readable on its own soft wash (active pills, chips)', () => {
+    // A pale --accent-soft is a light slab on a dark pane; the dark branch
+    // deliberately swaps it for a dark tint of the same hue instead.
+    const failures = [];
+    for (const dark of [false, true]) {
+        for (const s of swatches()) {
+            const v = deriveAccent(s.hex, dark);
+            const text = toHex(v['--accent-text']);
+            const soft = toHex(v['--accent-soft']);
+            if (!text || !soft) { failures.push(`${s.id}: unparseable`); continue; }
+            const ratio = contrastRatio(text, soft);
+            if (ratio < 4.5) failures.push(`${dark ? 'dark' : 'light'} ${s.label} ${text} on soft ${soft} = ${ratio.toFixed(2)}:1`);
+        }
+    }
+    assert.deepEqual(failures, [], `accent text on its own wash below AA:\n  ${failures.join('\n  ')}`);
+});
+
+test('the accent bar and its ink are legible as a MARK and as text on it (WCAG 1.4.11 / AA)', () => {
+    // Outlook's command bar paints --accent and labels it with
+    // --text-on-accent, so the accent has to work as a surface AND carry a
+    // readable label. This is the constraint that rules out a naive hue
+    // slider: Gmail red has no white ink that reaches AA.
+    const failures = [];
+    for (const skin of palettes()) {
+        const surface = skin['--bg-surface'] || skin['--bg-base'];
+        if (!surface) continue;
+        const dark = skin.mode === 'dark';
+        for (const s of swatches()) {
+            const v = deriveAccent(s.hex, dark);
+            const bar = toHex(v['--accent']);
+            const ink = v['--text-on-accent'];
+            if (!bar) { failures.push(`${s.id}: unparseable accent`); continue; }
+            const asMark = contrastRatio(bar, surface);
+            if (asMark < 3.0) failures.push(`${skin.id}/${skin.mode} ${s.label} bar ${bar} on ${surface} = ${asMark.toFixed(2)}:1 (needs 3:1 as a mark)`);
+            const asLabel = contrastRatio(ink, bar);
+            if (asLabel < 4.5) failures.push(`${skin.id}/${skin.mode} ${s.label} ink ${ink} on bar ${bar} = ${asLabel.toFixed(2)}:1 (needs 4.5:1 as text)`);
+        }
+    }
+    assert.deepEqual(failures, [], `accent bar illegible:\n  ${failures.join('\n  ')}`);
+});
+
+test('the on-accent ink is the BETTER of the two, not merely a legible one', () => {
+    // A contrast threshold alone is too weak to catch the bug this layer
+    // actually had. The ink choice used to compare an hsl() token with a
+    // hex-only luminance, which is `NaN >= NaN` — always false — so every
+    // swatch silently got the near-black ink. Both inks clear AA on most
+    // bars, so every other test here stayed green while Outlook's blue
+    // command bar was wearing near-black labels at 2.5:1 in the other
+    // direction. This asserts the CHOICE: the ink must be whichever of
+    // white / near-black actually measures higher against the fill.
+    const failures = [];
+    for (const dark of [false, true]) {
+        for (const s of swatches()) {
+            const v = deriveAccent(s.hex, dark);
+            const bar = toHex(v['--accent']);
+            const ink = v['--text-on-accent'];
+            if (!bar) continue;
+            const white = contrastRatio('#ffffff', bar);
+            const nearBlack = contrastRatio('#141414', bar);
+            const expected = white >= nearBlack ? '#ffffff' : '#141414';
+            if (ink !== expected) {
+                failures.push(
+                    `${dark ? 'dark' : 'light'} ${s.label} (${s.hex}): bar ${bar} took ink ${ink},`
+                    + ` but white is ${white.toFixed(2)}:1 and #141414 is ${nearBlack.toFixed(2)}:1`
+                    + ` — expected ${expected}`
+                );
+            }
+        }
+    }
+    assert.deepEqual(failures, [], `on-accent ink is not the better one:\n  ${failures.join('\n  ')}`);
+});
+
+test('the on-accent ink really is the better of the two in the SHIPPED code', () => {
+    // Same assertion, run against accentOverrideVars lifted out of
+    // skins.svelte.ts rather than the suite's copy — the copy is proved
+    // identical by the test above, but running the real thing keeps the
+    // NaN class of bug from hiding behind that proof.
+    const start = accSrc.indexOf('function accentOverrideVars');
+    let depth = 0;
+    let end = accSrc.indexOf('{', start);
+    for (let i = end; i < accSrc.length; i++) {
+        if (accSrc[i] === '{') depth++;
+        else if (accSrc[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
+    }
+    const js = [
+        accSrc.slice(accSrc.indexOf('function hexToHsl'), accSrc.indexOf('// The ink a label uses when it sits ON')),
+        accSrc.slice(accSrc.indexOf('// The ink a label uses when it sits ON'), accSrc.indexOf('// The accent LAYER')),
+        'let DARK = false;',
+        'const isDark = () => DARK;',
+        accSrc.slice(start, end + 1),
+        'return { setDark: (v) => { DARK = v; }, run: (h) => accentOverrideVars(h) };'
+    ].join('\n')
+        .replace(/: Record<string, string>(\s*\|\s*null)?/g, '')
+        .replace(/: \{ h: number; s: number; l: number(; str: string)? \}\s*\|\s*null/g, '')
+        .replace(/: number(\s*\|\s*null)?/g, '')
+        .replace(/: string(\s*\|\s*null)?/g, '')
+        .replace(/\((hex|fill|accentHex|token): string\)/g, '($1)');
+    // eslint-disable-next-line no-new-func
+    const shipped = new Function(js)();
+    const failures = [];
+    for (const dark of [false, true]) {
+        shipped.setDark(dark);
+        for (const s of swatches()) {
+            const v = shipped.run(s.hex);
+            const bar = toHex(v['--accent']);
+            if (!bar) { failures.push(`${s.id}: unparseable bar`); continue; }
+            const white = contrastRatio('#ffffff', bar);
+            const nearBlack = contrastRatio('#141414', bar);
+            const expected = white >= nearBlack ? '#ffffff' : '#141414';
+            if (v['--text-on-accent'] !== expected) {
+                failures.push(
+                    `${dark ? 'dark' : 'light'} ${s.label} (${s.hex}): shipped code took ${v['--text-on-accent']},`
+                    + ` expected ${expected} (white ${white.toFixed(2)}:1, #141414 ${nearBlack.toFixed(2)}:1)`
+                );
+            }
+        }
+    }
+    assert.deepEqual(failures, [], `shipped on-accent ink is not the better one:\n  ${failures.join('\n  ')}`);
+});
+
+test('the accent layer actually differs between light and dark', () => {
+    // If the two branches ever converge, the picker silently stops working
+    // in dark mode again — the original bug, wearing a different hat.
+    for (const s of swatches()) {
+        const l = toHex(deriveAccent(s.hex, false)['--accent-text']);
+        const d = toHex(deriveAccent(s.hex, true)['--accent-text']);
+        assert.notEqual(l, d, `${s.id} (${s.hex}) derives the same accent-text in light and dark`);
+    }
+});

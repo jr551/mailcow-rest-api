@@ -9,11 +9,21 @@
 //   sent       → 'soft'       | voiceStart → 'silent'
 //   error      → 'silent'     | click      → 'silent'
 //
-// Each event picks one of four preset packs:
-//   chime  — gentle two-note bell
+// Each event picks one of six preset packs:
+//   chime  — gentle two-note bell (D5 → A5)
 //   soft   — short descending whoosh
+//   ting   — Outlook-style new-mail "ting" (E6 → A6), very quiet
+//   blip   — Outlook-style single send blip, quietest cue in the file
 //   sci-fi — square-wave bleep
 //   silent — no sound (per-event mute)
+//
+// On the default profile: 'chime'/'soft' are left as the defaults. They
+// were a deliberate user decision (see the matrix at the top of this
+// file) and 'ting'/'blip' are only an APPROXIMATION of Outlook's cues —
+// the real ones are recordings. Defaulting every new install to an
+// approximation of a competitor's branding is a worse first impression
+// than keeping the pair the user already chose, so the new packs ship as
+// opt-in per event, one click away in Settings.
 //
 // Master mute switch overrides everything (still here for backwards compat
 // and the global-quiet toggle).
@@ -21,8 +31,33 @@
 const STORAGE_KEY = 'webmail.sounds.muted';
 const PROFILE_KEY = 'webmail.sounds.profile.v1';
 
-export type SoundPack = 'chime' | 'soft' | 'sci-fi' | 'silent';
+export type SoundPack = 'chime' | 'soft' | 'sci-fi' | 'ting' | 'blip' | 'silent';
 export type SoundEvent = 'notify' | 'sent' | 'click' | 'error' | 'sortDone' | 'voiceStart';
+
+// Single source of truth for the pack union. The Settings picker iterates
+// this (rather than restating the list), so adding a member to SoundPack +
+// an entry here + a playPack branch really is all it takes to expose a
+// pack in the UI — that used to be a lie, because the picker hardcoded
+// the four original ids and silently dropped anything else.
+export const SOUND_PACKS: { id: SoundPack; label: string }[] = [
+    { id: 'chime',  label: 'Chime' },
+    { id: 'soft',   label: 'Soft' },
+    { id: 'ting',   label: 'Outlook ting' },
+    { id: 'blip',   label: 'Send blip' },
+    { id: 'sci-fi', label: 'Sci-fi' },
+    { id: 'silent', label: 'Silent' }
+];
+
+// Static id → true table rather than a Set: the key set is fixed at
+// module load and never mutated, so a Record literal is the honest
+// shape. Membership check is isPack().
+const PACK_IDS: Record<string, true> = Object.fromEntries(
+    SOUND_PACKS.map(p => [p.id, true])
+);
+
+function isPack(v: unknown): v is SoundPack {
+    return typeof v === 'string' && PACK_IDS[v] === true;
+}
 
 export const SOUND_EVENTS: { id: SoundEvent; label: string; description: string }[] = [
     { id: 'notify',     label: 'New mail arrives', description: 'Foreground chime when fresh mail lands.' },
@@ -67,8 +102,11 @@ function loadProfile(): Record<SoundEvent, SoundPack> {
         const parsed = JSON.parse(raw) as Partial<Record<SoundEvent, SoundPack>>;
         const out = { ...DEFAULT_PROFILE };
         for (const ev of SOUND_EVENTS) {
-            const v = parsed[ev.id];
-            if (v === 'chime' || v === 'soft' || v === 'sci-fi' || v === 'silent') out[ev.id] = v;
+            // isPack, not a literal id list: a stored profile referencing a
+            // pack that no longer exists falls back to the default instead
+            // of poisoning the Record with a bogus value.
+            const v: unknown = parsed[ev.id];
+            if (isPack(v)) out[ev.id] = v;
         }
         return out;
     } catch { return { ...DEFAULT_PROFILE }; }
@@ -151,8 +189,17 @@ function sweep(from: number, to: number, when: number, duration: number, gain = 
 }
 
 // Sound packs — each is a small synth pattern. Adding a new pack here +
-// a new option in SoundPack is the only step required to expose it
-// in the Settings UI; the dispatcher below picks it up automatically.
+// a new option in SoundPack + an entry in SOUND_PACKS is the only step
+// required to expose it in the Settings UI; the dispatcher below picks
+// it up automatically.
+//
+// 'ting' and 'blip' are APPROXIMATIONS of Outlook's real cues, not
+// samples of them. Microsoft's are recordings of struck metal and
+// filtered noise through a hardware-ish chain; the closest we get
+// without shipping audio is a sine pair that shares the contour. What
+// matters here is the CHARACTER: quiet, brief, no sharp transients,
+// nothing that startles. Peak gains sit well below 'chime' so a cue
+// never competes with the notification that triggered it.
 function playPack(pack: SoundPack) {
     if (pack === 'silent') return;
     if (pack === 'chime') {
@@ -164,6 +211,19 @@ function playPack(pack: SoundPack) {
         tone(880, 0,     0.06, 'square', 0.10);
         tone(1320, 0.06, 0.08, 'square', 0.10);
         tone(660, 0.16,  0.12, 'square', 0.08);
+    } else if (pack === 'ting') {
+        // Outlook new mail: a soft two-note "ting". E6 → A6 is a perfect
+        // fourth rather than the chime's perfect fifth, which reads
+        // brighter and more "something arrived" without being louder.
+        // The second note is quieter and carries the decay, so the cue
+        // trails off over ~0.28s instead of stopping dead.
+        tone(1318.51, 0,     0.13, 'sine', 0.11);  // E6
+        tone(1760.00, 0.085, 0.20, 'sine', 0.085); // A6
+    } else if (pack === 'blip') {
+        // Outlook send: one restrained blip. Flat rather than sweeping,
+        // and the lowest non-zero peak gain in the file — this fires on
+        // every send, so it must be the least obtrusive cue we own.
+        tone(880, 0, 0.09, 'sine', 0.075);  // A5
     }
 }
 

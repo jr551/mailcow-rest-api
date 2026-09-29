@@ -50,7 +50,13 @@ function normalizePrepend(value) {
     return value.replace(/[\r\n]+/g, ' ').trim().slice(0, MAX_PREPEND);
 }
 
-function createOutboundWebhookStore({ filePath, secretBox, maxPerUser = 10 } = {}) {
+// 100, not 10: a webhook per consumer is the normal shape for this feature
+// (one per model endpoint, per integration, per environment), and the cap
+// exists to bound a runaway script, not to ration legitimate use. The
+// delivery side costs nothing per idle webhook — the forwarder only opens an
+// IMAP connection when there is parked mail — so a high cap costs the
+// operator nothing and stops the UI from being a wall of clutter.
+function createOutboundWebhookStore({ filePath, secretBox, maxPerUser = 100 } = {}) {
     const resolvedPath = filePath || './data/outbound-webhooks.db';
     if (resolvedPath !== ':memory:') {
         fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
@@ -220,6 +226,25 @@ function createOutboundWebhookStore({ filePath, secretBox, maxPerUser = 10 } = {
         return toPublic(row);
     }
 
+
+    // One live webhook in delivery shape — the real signing secret and the
+    // real header values — for the owner only.
+    //
+    // Deliberately NOT listAllLive: that path crosses users (the forwarder
+    // polls every mailbox) and also hands back the mailbox password, which a
+    // test send has no business holding. This one is scoped by user and
+    // returns only what an HTTP POST to the subscriber needs, so the secret
+    // can be signed with on the server without ever crossing to the browser
+    // and without widening who can read it.
+    function getLive({ id, user }) {
+        const row = getStmt.get(id);
+        if (!row || row.revoked_at || (user && row.user !== user)) return null;
+        return {
+            ...toPublic(row),
+            secret: secretBox.decrypt(row.secret),
+            headers: decryptHeaders(row.headers)
+        };
+    }
     function update({ id, user, label, keep, prepend, headers }) {
         const row = getStmt.get(id);
         if (!row || row.revoked_at || row.user !== user) return null;
@@ -249,7 +274,7 @@ function createOutboundWebhookStore({ filePath, secretBox, maxPerUser = 10 } = {
         db.close();
     }
 
-    return { create, list, listAllLive, get, update, revoke, touch, refreshSecrets, close, maxPerUser };
+    return { create, list, listAllLive, getLive, get, update, revoke, touch, refreshSecrets, close, maxPerUser };
 }
 
 module.exports = {

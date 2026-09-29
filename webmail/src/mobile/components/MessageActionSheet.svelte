@@ -2,6 +2,7 @@
     import Icon from '../../components/Icon.svelte';
     import { summarizeMessage, type MessageListItem, type MessageDetail, ApiError } from '../../lib/api';
     import { showToast } from '../lib/store.svelte';
+    import { settings } from '../../lib/settings.svelte';
 
     interface Props {
         msg: MessageListItem;
@@ -49,6 +50,9 @@
     }
 
     async function runSummarize() {
+        // Defence in depth — the button is hidden when AI is off, but
+        // summarizeMessage is a real paid call to the server's /v1/ai route.
+        if (!settings.aiFeatures) return;
         if (!detail) {
             showToast('error', 'Open the message first');
             return;
@@ -111,10 +115,12 @@
                     <Icon name="reply" size={20} />
                     <span>Reply</span>
                 </button>
-                <button type="button" class="action-row accent" onclick={runSummarize}>
-                    <Icon name="sparkles" size={20} />
-                    <span>Summarize</span>
-                </button>
+                {#if settings.aiFeatures}
+                    <button type="button" class="action-row accent" onclick={runSummarize}>
+                        <Icon name="sparkles" size={20} />
+                        <span>Summarize</span>
+                    </button>
+                {/if}
                 <button type="button" class="action-row" onclick={() => { onToggleStar(); onClose(); }}>
                     <Icon name={isStarred ? 'starFilled' : 'star'} size={20} />
                     <span>{isStarred ? 'Unstar' : 'Star'}</span>

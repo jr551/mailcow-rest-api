@@ -242,6 +242,83 @@ async function chat({ provider, system, userPrompt, fetcher = request, signal, e
     });
 }
 
+// Cap on the catalog we hand back. Gateways like OpenRouter advertise well
+// over a thousand entries; a <datalist> that size is unusable in a browser
+// (and we proxy the payload to every client that opens Settings), so we keep
+// the list to something a person can actually scroll. Free-form model names
+// are still accepted everywhere, so nothing is lost by truncating here.
+const MAX_MODELS = 400;
+
+// Pull `{ id, owned_by }` pairs out of an OpenAI-compatible `/models` body.
+// Returns null when the body isn't a catalog at all, so the caller can report
+// "unreadable" instead of silently showing an empty dropdown. Accepts the
+// documented `{ data: [...] }` envelope plus the two variants gateways ship in
+// practice: a bare array, and `{ models: [...] }` (LM Studio / vLLM shape).
+function normalizeModelList(body) {
+    const raw = Array.isArray(body) ? body
+        : Array.isArray(body?.data) ? body.data
+            : Array.isArray(body?.models) ? body.models
+                : null;
+    if (!raw) return null;
+    const seen = new Set();
+    const out = [];
+    for (const entry of raw) {
+        // Some gateways (Ollama) return bare strings instead of objects.
+        const id = typeof entry === 'string' ? entry : (entry && typeof entry.id === 'string' ? entry.id : '');
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        const ownedBy = typeof entry === 'object' && entry && typeof entry.owned_by === 'string' && entry.owned_by
+            ? entry.owned_by
+            : undefined;
+        out.push(ownedBy ? { id, owned_by: ownedBy } : { id });
+        if (out.length >= MAX_MODELS) break;
+    }
+    return out;
+}
+
+// Model catalog probe: `GET {baseUrl}/models`, the discovery endpoint every
+// OpenAI-compatible gateway serves (OpenAI, Bifrost, LiteLLM, Ollama, vLLM,
+// LM Studio). Anthropic exposes the same shape at /v1/models behind x-api-key.
+//
+// Separate from the chat adapters because it serves a UI affordance (the
+// Settings model combobox), not a feature: a provider that is down or answers
+// with nonsense must degrade to a short reason, never an exception the caller
+// has to translate. The caller supplies `signal` so this can carry a much
+// shorter deadline than a completion.
+//
+// `dispatcher` is the caller's escape hatch for connection policy. The
+// /v1/ai/models route passes a DNS-pinned Agent there, so a base URL the
+// *client* supplied cannot pass the SSRF check and then rebind to a private
+// address on the connection. Omitted, we use the shared llmAgent — correct for
+// the server's own configured provider, which is operator-trusted and is
+// legitimately often a private address (Ollama on 127.0.0.1).
+async function listModels({ provider, fetcher = request, dispatcher, signal }) {
+    const authed = provider.apiKey || 'sk-no-key'; // local Ollama/LM Studio accept any bearer
+    const headers = provider.kind === 'anthropic'
+        ? { 'x-api-key': provider.apiKey || '', 'anthropic-version': ANTHROPIC_VERSION, accept: 'application/json' }
+        : { authorization: `Bearer ${authed}`, accept: 'application/json' };
+    const url = provider.baseUrl.replace(/\/+$/, '') + '/models';
+    let res;
+    try {
+        res = await fetcher(url, {
+            method: 'GET',
+            headers,
+            signal: signal ?? AbortSignal.timeout(provider.timeoutMs),
+            dispatcher: dispatcher ?? llmAgent
+        });
+    } catch (err) {
+        return { ok: false, status: 502, title: 'AI provider unreachable', detail: describeFetchError(err) };
+    }
+    let body = null;
+    try { body = await res.body.json(); } catch { body = null; }
+    if (res.statusCode >= 400) return { ok: false, ...mapHttpStatus(res.statusCode, body) };
+    const models = normalizeModelList(body);
+    if (!models) {
+        return { ok: false, status: 502, title: 'Unreadable model list', detail: 'Provider did not return a { data: [{ id }] } catalog' };
+    }
+    return { ok: true, models };
+}
+
 const SUMMARY_SYSTEM = [
     'You summarize email messages.',
     'Reply with a tight summary in 3–5 short bullet points.',
@@ -372,6 +449,7 @@ async function sortInbox({ messages, provider, fetcher, signal }) {
 module.exports = {
     resolveProvider,
     chat,
+    listModels,
     summarize,
     draftReply,
     extractActions,

@@ -17,6 +17,7 @@
     import { formatDate, senderShort, isTrackingEmail } from '../../lib/format';
     import { type InboxSortRanking } from '../../lib/api';
     import { sortInboxClient } from '../../lib/sort-inbox-client';
+    import { settings } from '../../lib/settings.svelte';
     import Icon from '../../components/Icon.svelte';
     import Avatar from '../../components/Avatar.svelte';
     import SwipeableRow from './SwipeableRow.svelte';
@@ -346,6 +347,16 @@
     let lastSortedKey = '';
 
     $effect(() => {
+        // AI hard-off: the ai-sorted segment is not rendered, so a stale
+        // filter value must not keep re-firing a paid sort behind the
+        // scenes. Reset to the plain list rather than silently doing work.
+        if (!settings.aiFeatures) {
+            if (mobileState.filter === 'ai-sorted') mobileState.filter = 'all';
+            aiSortError = null;
+            aiRankings = [];
+            lastSortedKey = '';
+            return;
+        }
         if (mobileState.filter !== 'ai-sorted') {
             aiSortError = null;
             return;
@@ -541,7 +552,7 @@
     {/if}
 
     <div class="segments" style="margin: 8px 16px 0;">
-        {#each ['all','unread','starred','ai-sorted'] as f}
+        {#each (settings.aiFeatures ? ['all','unread','starred','ai-sorted'] : ['all','unread','starred']) as f}
             <button
                 type="button"
                 class="segment"
@@ -585,7 +596,7 @@
                 <p>{mobileState.search ? 'No matches found.' : 'This folder is empty.'}</p>
             </div>
         {:else}
-            {#if aiSortLoading}
+            {#if settings.aiFeatures && aiSortLoading}
                 <div class="load-more">
                     <span class="spinner" style="width:18px;height:18px"></span>
                     <span class="muted">AI sorting…</span>

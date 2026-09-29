@@ -195,7 +195,13 @@ function resolveApiKey(): string {
     return settings.llm.apiKey;
 }
 
+// Gate for the Sidebar's AI auto-icon affordances (the "Auto icon all"
+// footer button and the per-folder "Auto icon (AI)" context item). The
+// hard-off flag is checked here so both surfaces disappear together — a
+// folder-icon sweep is a batch of paid model calls, so it must never be
+// one click away from a user who turned AI off.
 export function isAiSuggestAvailable(): boolean {
+    if (!settings.aiFeatures) return false;
     if (capabilities.aiConfig?.configured) return true;
     const llm = settings.llm;
     return !!(settings.useCustomLlm && llm.apiKey && (llm.baseUrl || llm.preset));

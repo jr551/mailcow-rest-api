@@ -4,7 +4,7 @@
 // of (or as a fallback to) the server's env-default.
 
 import { getAiConfig, getTtsConfig, apiUrl, type AiConfig, type TtsConfig } from './api';
-import { getSession } from './auth.svelte';
+import { getSession, bearerHeader } from './auth.svelte';
 
 const STORAGE_KEY = 'webmail.settings.v1';
 
@@ -32,7 +32,20 @@ export type ListFilter = 'all' | 'unread' | 'starred' | 'attachments' | 'ai-sort
 export interface Settings {
     llm: LlmConfig;
     useCustomLlm: boolean; // when false, server defaults are used (no provider override sent)
-    /** Master switch for every AI surface (chat bot, AI panel, suggestions). */
+    /**
+     * Master switch for every AI surface (chat bot, AI panel, chat app,
+     * voice, AI sort/briefing/calendar-scan, AI folder auto-icon, compose
+     * AI helpers, and every AI entry point in Settings itself).
+     *
+     * IMPORTANT: this is a CLIENT preference, not a server gate. The
+     * server's /v1/ai/* routes remain reachable for an authenticated
+     * session regardless of this flag, and the browser's own LLM calls
+     * (chat/completions to the user's own provider) are obviously not
+     * something a server could police either. "Hard off" here means hard
+     * off in the UI: no affordance is rendered, so nothing is triggered
+     * by clicking around. We deliberately do NOT try to make the server
+     * trust a client flag — that would be security theatre.
+     */
     aiFeatures: boolean;
     density: Density;
     listFilter: ListFilter;
@@ -55,6 +68,15 @@ export interface Settings {
      *  sees the user's IP. Has no effect when alwaysAllowImages / per-sender
      *  trust isn't granted (the image still has to be allowed first). */
     proxyImages: boolean;
+    /** One-shot migration marker. Absent on every profile written before
+     *  the "images blocked by default" flip; written (true) the first time
+     *  an upgrading profile is read. See migrateRemoteImagesDefault.
+     *
+     *  This is NOT a user-facing preference and must never be rendered as
+     *  one — it exists purely to tell "this profile predates the flip" from
+     *  "this profile chose blocked-by-default", which are otherwise
+     *  indistinguishable because both resolve to the same field values. */
+    remoteImagesDefaulted: boolean;
     /** When true, sessions are persisted to localStorage so the user stays
      *  signed in across browser restarts without relying on the "remember me"
      *  credential vault. */
@@ -171,9 +193,16 @@ function load(): Settings {
                     : (typeof parsed.pageSize === 'number' && parsed.pageSize > 0 && parsed.pageSize <= 1000)
                         ? parsed.pageSize
                         : 25,
-                alwaysAllowImages: !!parsed.alwaysAllowImages,
+                // Same rule the migration applies to the persisted blob
+                // (preRemoteImagesAutoAllowed), so the live state and the
+                // stored blob can never disagree for the one session before
+                // the migration's rewrite is read back.
+                alwaysAllowImages: parsed.remoteImagesDefaulted === true
+                    ? !!parsed.alwaysAllowImages
+                    : preRemoteImagesAutoAllowed(parsed),
                 groupThreads: parsed.groupThreads !== false,
                 proxyImages: parsed.proxyImages !== false,
+                remoteImagesDefaulted: parsed.remoteImagesDefaulted === true,
                 // Mobile defaults this to true on first launch — iOS PWA
                 // storage is too volatile to leave perma-signin opt-in.
                 permanentSignIn: parsed.permanentSignIn === undefined
@@ -213,6 +242,10 @@ function load(): Settings {
             // Sanitise the blob on the way past, not just the object we
             // return, so the stale field can't come back via settings-sync.
             migrateStripClientRules(raw);
+            // Stamp the marker on upgrading profiles BEFORE the return.
+            // See migrateRemoteImagesDefault for why they are left alone.
+            migrateRemoteImagesDefault(raw);
+
             return out;
         }
     } catch { /* noop */ }
@@ -230,6 +263,7 @@ function load(): Settings {
         alwaysAllowImages: false,
         groupThreads: true,
         proxyImages: true,
+        remoteImagesDefaulted: true,
         permanentSignIn: isMobilePwa(),
         phishingScan: true,
         trackOpensDefault: false,
@@ -255,6 +289,85 @@ function load(): Settings {
         calendarTickerTitles: false,
         hideSidebar: true
     };
+}
+
+/* Did a pre-flip profile auto-allow remote images?
+ *
+ * The reader's old condition was `alwaysAllowImages || proxyImages ||
+ * isImageTrusted(sender)`, so EITHER flag granted permission and the proxy
+ * flag alone was enough. `proxyImages` shipped defaulting to true, so an
+ * absent field means "on". This is the single definition of that rule,
+ * shared by load() and migrateRemoteImagesDefault so the live state and the
+ * rewritten blob cannot disagree for the session before the rewrite lands. */
+function preRemoteImagesAutoAllowed(parsed: Record<string, unknown>): boolean {
+    return parsed.alwaysAllowImages === true || parsed.proxyImages !== false;
+}
+
+/* Remote images: blocked by default from this release onward.
+ *
+ * Before the flip, the auto-allow condition in the message readers was
+ * `alwaysAllowImages || proxyImages || isImageTrusted(sender)` — the proxy
+ * alone auto-allowed every image, because the old reasoning was "if the
+ * CDN can't see the user's IP, the reason for the prompt is gone". That
+ * reasoning conflated two different things. The proxy hides the IP; it does
+ * NOT hide *that you read the message*. A tracking pixel fetched through
+ * our proxy still records that this mailbox opened this specific mail, at
+ * this specific time, and the proxy then caches the response for a day
+ * (src/routes/image-proxy.js:193 `cache-control: private, max-age=86400`),
+ * which widens rather than narrows that window. So "proxied" was never
+ * "private" and the default is now blocked, with the per-message
+ * "Load remote content" button and the per-sender 30-day trust as the ways
+ * through.
+ *
+ * MIGRATION — existing users keep exactly the behaviour they had:
+ *   "Blocked by default" has to be expressed in terms of the field the
+ *   reader actually consults, and the reader used to treat *either*
+ *   `alwaysAllowImages` OR `proxyImages` as permission to load. So for an
+ *   upgrading profile the two are folded into the one post-flip field
+ *   (below) and the marker is stamped, so this runs at most once.
+ *
+ *   Reasoning: the overwhelmingly common pre-flip profile has
+ *   `proxyImages: true` and `alwaysAllowImages: false` — the shipped
+ *   default. Under the new reader that profile resolves to BLOCKED, which
+ *   would blank images in every existing mailbox overnight. A user cannot
+ *   tell "privacy got stricter" from "images stopped working", and a silent
+ *   break of the mail renderer is far worse than a stale-but-visible
+ *   privacy default. So we preserve what they had, and the Settings panel
+ *   states the live truth (derived from the field, not from the marker) so
+ *   nobody is told their mail is protected when it isn't.
+ *
+ *   The cost of preserving: a long-standing user keeps an open tracker
+ *   until they visit Settings → Images & privacy and switch it off. We
+ *   take that trade — it is reversible on demand, a silent break is not —
+ *   and the stricter default applies to every NEW profile from here on.
+ */
+function migrateRemoteImagesDefault(raw: string | null) {
+    if (!raw) return;
+    try {
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object') return;
+        if (parsed.remoteImagesDefaulted === true) return;
+        // Reproduce the pre-flip auto-allow exactly.
+        parsed.alwaysAllowImages = preRemoteImagesAutoAllowed(parsed);
+        parsed.remoteImagesDefaulted = true;
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
+    } catch { /* not our JSON — load() falls back to defaults anyway */ }
+}
+
+/* Is remote content actually blocked for this profile right now?
+ *
+ * Every privacy-surface string derives from this rather than from the
+ * migration marker, so the UI can never assert "images are blocked" for a
+ * user whose images are not blocked. It mirrors the reader conditions in
+ * components/MessageDetail.svelte (`allowImages`) and
+ * mobile/components/MessageView.svelte (`shouldAllow`), both of which
+ * dropped their old `|| settings.proxyImages` term.
+ *
+ * `hasRemote` defaults true so a caller that hasn't sniffed the HTML yet
+ * still gets the conservative answer; pass the real value to be exact. */
+export function remoteImagesBlockedFor(hasRemote = true): boolean {
+    if (!hasRemote) return false;
+    return !state.alwaysAllowImages;
 }
 
 /* Client-side rules (the in-browser "move / archive / AI-brief" engine) were
@@ -301,6 +414,14 @@ export function setUseCustomLlm(on: boolean) {
 
 export function setAiFeatures(on: boolean) {
     state.aiFeatures = on;
+    // Leaving 'ai-sorted' selected while AI is off would render a
+    // category-grouped list nobody can regenerate (the sort button that
+    // drives it is gone). Fall back to the unfiltered list so the user
+    // is never stranded on a view with no visible way out. The mobile
+    // shell keeps its own filter in mobile/lib/store.svelte and resets
+    // it from an $effect there rather than reaching across that layer
+    // from here.
+    if (!on && state.listFilter === 'ai-sorted') state.listFilter = 'all';
     persist(state);
 }
 
@@ -537,6 +658,10 @@ export function reset() {
     state.alwaysAllowImages = false;
     state.groupThreads = true;
     state.proxyImages = true;
+    // A reset restores *current* defaults, so the profile is post-flip and
+    // must be marked as such — otherwise the next load() would treat it as
+    // a pre-flip profile that still needs migrating.
+    state.remoteImagesDefaulted = true;
     state.permanentSignIn = false;
     state.phishingScan = true;
     state.trackOpensDefault = false;
@@ -674,6 +799,16 @@ export async function probeCapabilities(): Promise<void> {
     }
 }
 
+// The one predicate every AI affordance in the app should consult before
+// rendering itself. Kept separate from aiAvailable() (which is about
+// whether the *server* has a usable key) so that UI which doesn't care
+// where the LLM lives — the chat bot, the AI folder auto-icon sweep, the
+// mobile AI tab — still respects the user's hard off.
+export function aiEnabled(): boolean {
+    return state.aiFeatures;
+}
+
+
 // True when the *server-side* /v1/ai/* routes will succeed. The AI panel's
 // Summarize/Draft/Actions/Translate buttons all hit those routes, so this
 // must reflect server reality — not the client-side ChatBot config (which
@@ -709,6 +844,118 @@ export function aiAuthKey(): string {
         return cfg.apiKey;
     }
     return state.llm.apiKey;
+}
+
+// --- Provider model catalog -------------------------------------------------
+//
+// The Settings model field is a <datalist> combobox: free-form typing still
+// wins (a gateway may serve a model it never indexed, and the operator may
+// have a private deployment), but offering the gateway's actual list stops
+// "Invalid model: …" mistypes. The list is fetched *through* the server
+// because the provider key must never reach the browser.
+
+export interface AiModel {
+    id: string;
+    owned_by?: string;
+}
+
+export const aiModels = $state<{
+    models: AiModel[];
+    loading: boolean;
+    /** Non-null when the last attempt failed; shown verbatim under the field. */
+    error: string | null;
+    /** True once a request for the *current* signature has settled (ok or not). */
+    loaded: boolean;
+}>({ models: [], loading: false, error: null, loaded: false });
+
+// Monotonic token. Every fetch bumps it; a response whose token is stale is
+// dropped. Without this, switching preset twice quickly lets the first
+// provider's catalog land last and populate the list with the wrong models.
+let modelsToken = 0;
+let modelsAbort: AbortController | null = null;
+
+// Identifies the provider the current `aiModels` describe. The Settings
+// component re-fetches when this changes — preset and base URL are the two
+// inputs that determine which gateway we should be asking.
+export function aiModelsSignature(): string {
+    if (!state.useCustomLlm) return 'server';
+    return [state.llm.kind, state.llm.preset, state.llm.baseUrl, state.llm.apiKey].join('|');
+}
+
+// Discard the catalog. Called when the signature changes so the panel can
+// show a spinner rather than the previous gateway's model names.
+export function clearAiModels() {
+    modelsToken++;
+    modelsAbort?.abort();
+    modelsAbort = null;
+    aiModels.models = [];
+    aiModels.error = null;
+    aiModels.loaded = false;
+    aiModels.loading = false;
+}
+
+// Fetch the provider's model list. Never throws: every outcome is reflected
+// in `aiModels` so the field can show loading / empty / error honestly. A
+// silently empty dropdown is the failure mode worth avoiding — a user who
+// can't tell "no models" from "the fetch broke" will just type a guess.
+export async function loadAiModels(): Promise<void> {
+    modelsAbort?.abort();
+    const controller = new AbortController();
+    modelsAbort = controller;
+    const token = ++modelsToken;
+
+    aiModels.loading = true;
+    aiModels.error = null;
+    aiModels.loaded = false;
+
+    // Mirrors aiProviderOverride(): only the fields the user actually filled
+    // in, and only when they've opted into their own provider. Otherwise the
+    // server probes its own configured gateway.
+    const params = new URLSearchParams();
+    const ov = aiProviderOverride();
+    if (ov) {
+        if (ov.kind) params.set('kind', ov.kind);
+        if (ov.preset) params.set('preset', ov.preset);
+        if (ov.baseUrl) params.set('baseUrl', ov.baseUrl);
+        if (ov.apiKey) params.set('apiKey', ov.apiKey);
+    }
+    const qs = params.toString();
+
+    try {
+        const session = getSession();
+        const res = await fetch(apiUrl(`/v1/ai/models${qs ? `?${qs}` : ''}`), {
+            headers: session ? { authorization: bearerHeader(session) } : {},
+            signal: controller.signal
+        });
+        if (token !== modelsToken) return; // a newer fetch superseded us
+        if (!res.ok) {
+            aiModels.models = [];
+            aiModels.error = res.status === 501
+                ? 'No API key configured for AI on the server.'
+                : `Could not load models (HTTP ${res.status}).`;
+        } else {
+            const body = await res.json() as { models?: unknown; error?: unknown };
+            if (token !== modelsToken) return; // json() is an await too
+            aiModels.models = Array.isArray(body.models)
+                ? body.models.filter((m): m is AiModel =>
+                    !!m && typeof (m as AiModel).id === 'string' && (m as AiModel).id !== '')
+                : [];
+            // The server reports upstream trouble as a 200 with `error` set
+            // (see the route) — surface it rather than rendering an empty box.
+            aiModels.error = typeof body.error === 'string' && body.error ? body.error : null;
+        }
+    } catch (err) {
+        if (token !== modelsToken) return;
+        // An aborted request is our own cancellation, not a failure to report.
+        if ((err as Error)?.name === 'AbortError') return;
+        aiModels.models = [];
+        aiModels.error = (err as Error)?.message || 'Could not reach the server for the model list.';
+    } finally {
+        if (token === modelsToken) {
+            aiModels.loading = false;
+            aiModels.loaded = true;
+        }
+    }
 }
 
 // True when the server has SMTP wired up (SMTP_HOST env var is set).

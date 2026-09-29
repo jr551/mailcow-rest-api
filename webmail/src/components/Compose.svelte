@@ -6,7 +6,10 @@
     import { formatAddress, formatFullDate } from '../lib/format';
     import { smtpAvailable, settings, setDisplayName, pickFromName } from '../lib/settings.svelte';
     import { playSent } from '../lib/sounds.svelte';
-    import { addressBook, recordContact } from '../lib/address-book.svelte';
+    import {
+        addressBook, recordContact, searchContacts, contactNameFor,
+        type Contact
+    } from '../lib/address-book.svelte';
     import { trackSent } from '../lib/sent-status.svelte';
     import { suggestSubject, suggestSubjects } from '../lib/subject-suggest';
     import { aiAvailable } from '../lib/settings.svelte';
@@ -155,7 +158,115 @@
     }
     /** Show a contact's friendly name on its pill when we know one. */
     function contactName(addr: string): string {
-        return addressBook.contacts.find((c) => c.address.toLowerCase() === addr.toLowerCase())?.name || '';
+        return contactNameFor(addr);
+    }
+
+    // ── recipient suggestions ──
+    //
+    // A real dropdown, not <datalist>. The ask was a picker that shows a
+    // friendly name AND people from past mail, and a datalist cannot do
+    // that: its `label` attribute is rendered inconsistently (Chrome shows
+    // it, Firefox and Safari largely ignore it) and there is no way to show
+    // a secondary line. So the chips and input stay exactly as they are —
+    // free-form typing is untouched — and a listbox is layered underneath.
+    //
+    // The dropdown is derived, not stored: it is a pure function of the text
+    // being typed, so there is no cache to invalidate and no state to get
+    // out of step with the input.
+    let suggestField = $state<RecipField | null>(null);
+    let suggestIndex = $state(0);
+    /**
+     * The text the open list was built from, captured on every keystroke.
+     *
+     * Held as its own state rather than re-derived from the input on each
+     * render, because the input's value is owned by the chips/prefix
+     * machinery and re-reading it mid-render is what made the list fall
+     * back to "everything" and lose the filter. Keeping the query next to
+     * the list means the two cannot disagree.
+     */
+    let suggestQuery = $state('');
+
+    const SUGGEST_LIMIT = 8;
+
+    /** The trailing token of the field is the one being typed. */
+    function currentToken(f: RecipField): string {
+        const q = recipLive(f).trim();
+        const comma = q.lastIndexOf(',');
+        const semi = q.lastIndexOf(';');
+        const cut = Math.max(comma, semi);
+        return q.slice(cut + 1).trim();
+    }
+
+    function openSuggest(f: RecipField) {
+        suggestField = f;
+        suggestQuery = currentToken(f);
+        suggestIndex = 0;
+    }
+
+    function closeSuggest() {
+        suggestField = null;
+        suggestQuery = '';
+        suggestIndex = 0;
+    }
+
+    function recipSuggestions(f: RecipField): Contact[] {
+        // Never suggest somebody who is already a pill: adding a duplicate
+        // address is a no-op that the chip list silently collapses, which
+        // reads as the click not working.
+        const chosen = new Set(recipChips(f).map((a) => a.toLowerCase()));
+        return searchContacts(suggestQuery, SUGGEST_LIMIT)
+            .filter((c) => !chosen.has(c.address.toLowerCase()));
+    }
+
+
+    /**
+     * Commit a suggested contact, REPLACING the token being typed.
+     *
+     * The typed text is discarded, not appended to. Slicing at the last
+     * separator keeps the completed recipients that came before it, and the
+     * whole trailing token after that separator is dropped — otherwise
+     * picking "ada@example.com" while "ada@" is in the box produced the
+     * recipient "ada@example.comada@", which is an address to nobody.
+     */
+    function applySuggestion(f: RecipField, c: Contact) {
+        const live = recipLive(f);
+        const cut = Math.max(live.lastIndexOf(','), live.lastIndexOf(';'));
+        const head = cut >= 0 ? live.slice(0, cut + 1) : '';
+        setRecipValue(f, head + c.address);
+        // The token is now complete, so turn it into a pill immediately
+        // rather than waiting for a blur the user may not trigger.
+        commitRecip(f);
+        closeSuggest();
+    }
+
+    /** Secondary line in a suggestion row: where the address came from. */
+    function suggestMeta(c: Contact): string {
+        if (c.name) return c.address;
+        if (c.count > 1) return `${c.address} · seen ${c.count}×`;
+        if (c.lastSeen) return c.address;
+        return `${c.address} · added by you`;
+    }
+
+    function onSuggestKeydown(e: KeyboardEvent, f: RecipField) {
+        const list = suggestField === f ? recipSuggestions(f) : [];
+        if (!list.length) return;
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            suggestIndex = (suggestIndex + 1) % list.length;
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            suggestIndex = (suggestIndex - 1 + list.length) % list.length;
+        } else if (e.key === 'Enter' || e.key === 'Tab') {
+            // Only hijack Enter when a row is actually highlighted; a
+            // half-typed free-form address must still send on Enter.
+            if (e.key === 'Enter' && suggestIndex >= 0 && list[suggestIndex]) {
+                e.preventDefault();
+                applySuggestion(f, list[suggestIndex]);
+            }
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            closeSuggest();
+        }
     }
 
     let subject = $state(buildSubject());
@@ -256,6 +367,17 @@
     }
 
     $effect(() => {
+        // AI hard-off: the panel is not rendered, so don't spend a model
+        // call building a summary nobody can see. Reset the same way an
+        // unrecognised recipient does, and abort anything in flight.
+        if (!settings.aiFeatures) {
+            historyAddr = null;
+            historySummary = null;
+            historyLoading = false;
+            historyDismissed = false;
+            if (historyAbort) { historyAbort.abort(); historyAbort = null; }
+            return;
+        }
         const addr = pickPrimaryAddress(to);
         // Reset state when the user types beyond a recognised email or
         // changes the recipient. The dismissed flag is cleared by-addr
@@ -618,21 +740,41 @@
                 <input
                     type="text"
                     value={recipLive('to')}
-                    oninput={(e) => setRecipValue('to', recipPrefix.to + (e.currentTarget as HTMLInputElement).value)}
+                    oninput={(e) => { setRecipValue('to', recipPrefix.to + (e.currentTarget as HTMLInputElement).value); openSuggest('to'); }}
                     onkeydown={(e) => {
                         const el = e.currentTarget as HTMLInputElement;
                         if (e.key === 'Enter' || e.key === ',' || e.key === ';') {
+                            // A highlighted suggestion wins over committing
+                            // the raw text, so arrow-down then Enter picks
+                            // the contact rather than typing its address out.
+                            if (e.key === 'Enter' && suggestField === 'to' && recipSuggestions('to')[suggestIndex]) {
+                                e.preventDefault();
+                                applySuggestion('to', recipSuggestions('to')[suggestIndex]);
+                                return;
+                            }
                             e.preventDefault();
                             commitRecip('to');
                         } else if (e.key === 'Backspace' && !el.value) {
                             popRecip('to');
+                        } else {
+                            onSuggestKeydown(e, 'to');
                         }
                     }}
-                    onfocus={() => (activeField = 'to')}
-                    onblur={() => { commitRecip('to'); if (activeField === 'to') activeField = null; }}
-                    list="compose-contacts"
+                    onfocus={() => { activeField = 'to'; openSuggest('to'); }}
+                    onblur={() => {
+                        // Delay so a click on a suggestion row lands before
+                        // the list is torn down. Without this the mousedown
+                        // target disappears and the click never fires.
+                        setTimeout(() => { closeSuggest(); }, 120);
+                        commitRecip('to');
+                        if (activeField === 'to') activeField = null;
+                    }}
                     placeholder={recipChips('to').length ? '' : 'Type a name or address'}
                     autocomplete="off"
+                    role="combobox"
+                    aria-expanded={suggestField === 'to' && recipSuggestions('to').length > 0}
+                    aria-autocomplete="list"
+                    aria-controls="compose-suggest-list"
                     data-1p-ignore="true"
                     data-lpignore="true"
                     data-bwignore="true"
@@ -672,21 +814,35 @@
                         <input
                             type="text"
                             value={recipLive(row.f)}
-                            oninput={(e) => setRecipValue(row.f, recipPrefix[row.f] + (e.currentTarget as HTMLInputElement).value)}
+                            oninput={(e) => { setRecipValue(row.f, recipPrefix[row.f] + (e.currentTarget as HTMLInputElement).value); openSuggest(row.f); }}
                             onkeydown={(e) => {
                                 const el = e.currentTarget as HTMLInputElement;
                                 if (e.key === 'Enter' || e.key === ',' || e.key === ';') {
+                                    if (e.key === 'Enter' && suggestField === row.f && recipSuggestions(row.f)[suggestIndex]) {
+                                        e.preventDefault();
+                                        applySuggestion(row.f, recipSuggestions(row.f)[suggestIndex]);
+                                        return;
+                                    }
                                     e.preventDefault();
                                     commitRecip(row.f);
                                 } else if (e.key === 'Backspace' && !el.value) {
                                     popRecip(row.f);
+                                } else {
+                                    onSuggestKeydown(e, row.f);
                                 }
                             }}
-                            onfocus={() => (activeField = row.f)}
-                            onblur={() => { commitRecip(row.f); if (activeField === row.f) activeField = null; }}
-                            list="compose-contacts"
+                            onfocus={() => { activeField = row.f; openSuggest(row.f); }}
+                            onblur={() => {
+                                setTimeout(() => { closeSuggest(); }, 120);
+                                commitRecip(row.f);
+                                if (activeField === row.f) activeField = null;
+                            }}
                             placeholder={recipChips(row.f).length ? '' : row.label}
                             autocomplete="off"
+                            role="combobox"
+                            aria-expanded={suggestField === row.f && recipSuggestions(row.f).length > 0}
+                            aria-autocomplete="list"
+                            aria-controls="compose-suggest-list"
                             data-1p-ignore="true"
                             data-lpignore="true"
                             data-bwignore="true"
@@ -697,17 +853,43 @@
             {/each}
         {/if}
 
-        <!-- Address-book autocomplete shared by To/Cc/Bcc. Population is
-             passive — every envelope we render gets harvested into the
-             local address book. -->
-        <datalist id="compose-contacts">
-            <!-- Cap to the 8 most-recent / most-frequent contacts; native
-                 <datalist> shows everything we hand it and the dropdown
-                 grew unmanageable. -->
-            {#each addressBook.contacts.slice().sort((a, b) => b.count - a.count || b.lastSeen - a.lastSeen).slice(0, 8) as c (c.address)}
-                <option value={c.address} label={c.name || ''}></option>
-            {/each}
-        </datalist>
+        <!--
+            Recipient suggestions, shared by To/Cc/Bcc — whichever field is
+            focused. One list for three inputs, so the id in aria-controls is
+            stable and there is never more than one list on screen.
+
+            Rendered only while a field is focused and something matches, so
+            an untouched compose window shows no overlay at all. Positioned
+            absolutely under the header block rather than inside the token
+            field, because the field wraps as pills are added and an in-field
+            list would be clipped by its own overflow.
+        -->
+        {#if suggestField && recipSuggestions(suggestField).length}
+            {@const field = suggestField}
+            {@const list = recipSuggestions(field)}
+            <ul
+                class="recip-suggest"
+                id="compose-suggest-list"
+                role="listbox"
+                aria-label="Recipient suggestions"
+                data-testid="compose-suggest-list"
+            >
+                {#each list as c, i (c.uid + c.address)}
+                    <li
+                        class="recip-suggest-row"
+                        class:on={i === suggestIndex}
+                        role="option"
+                        aria-selected={i === suggestIndex}
+                        onmousedown={(e) => { e.preventDefault(); applySuggestion(field, c); }}
+                        onmouseenter={() => (suggestIndex = i)}
+                        data-testid="compose-suggest"
+                    >
+                        <span class="rs-name">{c.name || c.address}</span>
+                        <span class="rs-meta">{suggestMeta(c)}</span>
+                    </li>
+                {/each}
+            </ul>
+        {/if}
 
         <!-- Subject: a full-width line under the recipients, the way OWA
              lays it out. The AI wand sits at the far end of the row. -->
@@ -724,6 +906,7 @@
                     data-testid="compose-subject"
                     placeholder={subjectSuggesting ? 'Drafting subject…' : 'Add a subject'}
                 />
+                {#if settings.aiFeatures}
                 <button
                     type="button"
                     class="wand-btn"
@@ -735,9 +918,10 @@
                 >
                     {#if subjectSuggesting}<span class="spinner"></span>{:else}<Icon name="wand" size={14} />{/if}
                 </button>
+                {/if}
             </div>
         </div>
-        {#if subjectSuggestion}
+        {#if subjectSuggestion && settings.aiFeatures}
             <div class="subj-sugg" role="status" aria-live="polite" data-testid="compose-subject-sugg">
                 <Icon name="sparkles" size={12} />
                 <span class="sugg-label">AI suggestion:</span>
@@ -749,7 +933,7 @@
             <div class="subj-err" role="alert">{subjectSuggestError}</div>
         {/if}
 
-        {#if settings.composeHistorySummary && historyAddr && !historyDismissed}
+        {#if settings.aiFeatures && settings.composeHistorySummary && historyAddr && !historyDismissed}
             <div class="history-panel" data-testid="compose-history-panel">
                 <Icon name="sparkles" size={12} />
                 {#if historyLoading}
@@ -1036,6 +1220,10 @@
         flex-direction: column;
         flex: 1;
         min-height: 0;
+        /* Anchor for the recipient suggestion list. Without a positioned
+         * ancestor the absolutely-positioned <ul> resolves against the
+         * viewport and renders over the toolbar. */
+        position: relative;
     }
     /* Header block. OWA stacks From / To / Cc / Bcc / Subject as full-width
      * lines separated by hairlines, with the label sitting inline at the
@@ -1136,7 +1324,59 @@
         color: var(--text-tertiary);
     }
     .recip-x:hover { background: var(--bg-active); color: var(--text-primary); }
-    .subject-row { align-items: center; }
+    /* Recipient suggestion dropdown. A real listbox rather than a <datalist>
+     * because the ask is a friendly display name plus a secondary line, and
+     * <datalist> can only offer one string per option — rendered
+     * inconsistently at that, since Firefox and Safari largely ignore the
+     * `label` attribute.
+     *
+     * Anchored to the form rather than to the token field: the field wraps
+     * and grows as pills are added, and an in-field list would be clipped by
+     * its own overflow. `top` is a fixed offset instead of a percentage
+     * because the header rows above it (From, To, and any open Cc/Bcc) have
+     * a height that changes with the user's own settings — a percentage of
+     * the form would drift as the dialog is resized, whereas a fixed offset
+     * always lands just under the recipient block. */
+    .recip-suggest {
+        position: absolute;
+        top: 92px;
+        left: 16px;
+        right: 16px;
+        z-index: 20;
+        max-height: 260px;
+        overflow-y: auto;
+        list-style: none;
+        margin: 0;
+        padding: 4px;
+        background: var(--bg-surface);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-sm);
+        box-shadow: var(--shadow-md);
+    }
+    .recip-suggest-row {
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+        padding: 5px 8px;
+        border-radius: var(--radius-xs);
+        cursor: pointer;
+    }
+    .recip-suggest-row.on { background: var(--bg-hover); }
+    .rs-name {
+        font-size: 13px;
+        color: var(--text-primary);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .rs-meta {
+        font-size: 11.5px;
+        color: var(--text-tertiary);
+        font-family: var(--font-mono);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
     .ccbcc-toggle {
         flex-shrink: 0;
         font-size: 12px;
