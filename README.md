@@ -32,42 +32,38 @@ docker run --rm -p 3001:3001 \
 
 ## ✨ What it does
 
-- 📬 **Mail** — read, search, move, flag, delete, send, attachments, raw source
-- 🤖 **AI** — inbox sort, summarize, draft reply, phishing scan, translate (server-proxied, key never reaches the browser)
-- 🔗 **Webhook inboxes** — give a service a URL, its POSTs land in your INBOX
-- 📤 **Outbound webhooks** — a mail-rule action POSTs matching mail (headers, body, attachments) to your URL
-- 🔑 **Agent links** — one click → a 24 h pasteable credential for MCP/scripts
-- 📅 **Calendar** — SOGo CalDAV events, iCal publishing, public edit links
-- 🚫 **Rules & policies** — Sieve mail rules, sender allow/block, blocked recipients
-- 📁 **Drive** — optional S3/B2-backed file storage for the browser
-- 🔔 **Push** — web-push subscriptions + notification polling
-- 🛡️ **Safety** — IP allowlists, per-IP rate limiting, credential encryption at rest
-- 🧩 **MCP** — `bin/imap-rest-mcp` stdio adapter for agent tooling
+| Area | What you get |
+|---|---|
+| 📬 Mail | Read, search, move, flag, delete, send, attachments, raw source |
+| 🤖 AI | Inbox sort, summarize, draft reply, phishing scan, translate (server-proxied, the provider key never reaches the browser) |
+| 🔗 Webhook inboxes | Give a service a URL, its POSTs land in your INBOX |
+| 📤 Outbound webhooks | A mail-rule action POSTs matching mail (headers, body, attachments) to your URL |
+| 🔑 Agent links | One click → a 24 h pasteable credential for MCP/scripts |
+| 📅 Calendar | SOGo CalDAV events, iCal publishing, public edit links |
+| 🚫 Rules & policies | Sieve mail rules, sender allow/block, blocked recipients |
+| 📁 Drive | Optional S3/B2-backed file storage for the browser |
+| 🔔 Push | Web-push subscriptions + notification polling |
+| 🛡️ Safety | IP allowlists, per-IP rate limiting, credential encryption at rest |
+| 🧩 MCP | `bin/imap-rest-mcp` stdio adapter for agent tooling |
 
 ## 📧 The webmail
 
-![The bundled webmail in its default Outlook skin](webmail/docs/screenshots/outlook-skin-inbox.png)
+![The bundled webmail in its Outlook skin](webmail/docs/screenshots/outlook-inbox.png)
 
-Ships in the image at `/webmail/` — sign in with a mailcow mailbox address + password. Outlook-on-the-web skin by default; a dozen other skins, a custom accent picker, and a custom-CSS box under **Settings → Appearance**.
+Ships in the image at `/webmail/` — sign in with a mailcow mailbox address + password. Two skins: **Outlook** (default) and **Gmail**, each with its own light *and* dark palette and a customisable accent colour, plus a custom-CSS box under **Settings → Appearance**. The topbar toggle switches light/dark on either skin, and on **auto** it follows your OS. More detail in [`webmail/README.md`](webmail/README.md).
 
 <details>
 <summary><b>Self-hosting, CDN builds, and the mailcow sign-in button</b></summary>
 
 **Same-origin (default).** The SPA is built from `webmail/` into the image, so the API always serves the frontend it was built with. `window.__IMAP_API_BASE__` defaults to `""` — no CORS, no second vhost.
 
-**CDN / separate hosting.** Build the SPA yourself and host it on Cloudflare Pages, Netlify, or S3/CloudFront:
-
-```sh
-cd webmail && npm ci && npm run build   # output in webmail/dist
-```
-
-Point it at a remote API by editing the shell's inline script in `dist/index.html` (and `dist/mobile/index.html`):
+**CDN / separate hosting.** `cd webmail && npm ci && npm run build` (output in `webmail/dist`), host it on Cloudflare Pages, Netlify, or S3/CloudFront, then point it at a remote API by editing the shell's inline script in `dist/index.html` (and `dist/mobile/index.html`):
 
 ```html
 <script>window.__IMAP_API_BASE__ = "https://userapi.example.com"</script>
 ```
 
-Then add that origin to `API_CORS_ORIGINS` on the API.
+…and add that origin to `API_CORS_ORIGINS` on the API.
 
 **A button on mailcow's own login page.** `install/webmail-handoff.js` plus the nginx snippet in `install/webmail-handoff.nginx.example` add a **New webmail** button next to mailcow's sign-in form; it exchanges the typed credentials for a session token and hands it to the SPA in the URL fragment. Injected by the reverse proxy, not into mailcow's tree (which `update.sh` resets).
 
@@ -76,11 +72,9 @@ Then add that origin to `API_CORS_ORIGINS` on the API.
 </details>
 
 <details>
-<summary><b>🔑 App passwords & agent access links</b></summary>
+<summary><b>🔑 App passwords &amp; agent access links</b></summary>
 
-Pointing an MCP client or a script at a mailbox normally means putting the mailbox password in a config file, where it grants IMAP, SMTP, and webmail access indefinitely and can only be withdrawn by changing the password everywhere it is used.
-
-An app password is a per-client credential instead. Users create them in the webmail under **Settings → Security → Agent access link**, which mints a 24-hour, unpinned token and hands back a pasteable URL — the token rides in the `#agent=` fragment so it never reaches a server log. The same card lists every live credential with its last-used IP and a revoke button.
+Pointing an MCP client or a script at a mailbox normally means putting the mailbox password in a config file, where it grants IMAP, SMTP, and webmail access indefinitely and can only be withdrawn by changing the password everywhere it is used. An app password is a per-client credential instead: users create them under **Settings → Security → Agent access link**, which mints a 24-hour, unpinned token and hands back a pasteable URL — the token rides in the `#agent=` fragment so it never reaches a server log, and the same card lists every live credential with its last-used IP and a revoke button.
 
 Use it wherever the mailbox password would go — as the password with the address as username, or as a bearer token on its own:
 
@@ -107,15 +101,12 @@ For MCP, put it in `IMAP_REST_PASS`:
 }
 ```
 
-How it behaves:
-
-- **IP scoping is mandatory.** At least one address or CIDR is required, and a token presented from anywhere else is rejected exactly like a wrong password. This is what makes a leaked token far less useful than a leaked mailbox password.
-- **Only the hash is stored.** A stolen database yields no usable token.
+- **IP scoping is mandatory.** At least one address or CIDR is required, and a token presented from anywhere else is rejected exactly like a wrong password — what makes a leaked token far less useful than a leaked mailbox password.
+- **Only the hash is stored,** so a stolen database yields no usable token.
 - **They cannot manage themselves.** An app password may not create or revoke app passwords — otherwise a leaked one could issue a replacement scoped to the attacker's own network and survive revocation of the original. Managing them requires signing in with the mailbox password.
-- **Revocation is immediate,** and each row records when and from where it was last used.
-- **Optional expiry** in days, in addition to revocation.
+- **Revocation is immediate,** each row records when and from where it was last used, and expiry in days is optional on top.
 
-The API still performs a real IMAP login, so the mailbox password is captured when the token is minted and kept encrypted with `CREDENTIAL_ENCRYPTION_KEY`. The feature therefore requires credential encryption and is disabled without it. It also means **changing the mailbox password invalidates existing app passwords**, since the stored copy no longer matches — recreate them, or sign in to the webmail once to re-key them.
+Because minting performs a real IMAP login, the mailbox password is captured at that moment and kept encrypted with `CREDENTIAL_ENCRYPTION_KEY` — so the feature requires credential encryption, is disabled without it, and **a mailbox password change invalidates existing app passwords**. Recreate them, or sign in to the webmail once to re-key them.
 
 </details>
 
@@ -150,13 +141,7 @@ curl -X PUT -H "Authorization: Bearer $ADMIN_TOKEN" -H 'content-type: applicatio
   -d '{"webmail":{"enabled":false}}' https://api.example.com/v1/admin/settings
 ```
 
-`GET /v1/admin/status` reports version, uptime, and which optional subsystems are live. Settings persist in `admin-settings.db` alongside the other state on the data volume.
-
-Generate a real token, and restrict it by source IP when the API is publicly reachable:
-
-```sh
-openssl rand -hex 32
-```
+`GET /v1/admin/status` reports version, uptime and which optional subsystems are live; settings persist in `admin-settings.db` on the data volume. Generate a real token with `openssl rand -hex 32`, and restrict it by source IP when the API is publicly reachable.
 
 </details>
 
@@ -165,7 +150,7 @@ openssl rand -hex 32
 
 The Swagger UI is the source of truth for schemas and response examples. This route list shows the whole surface at a glance.
 
-### Public and docs
+**Public and docs**
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -174,7 +159,7 @@ The Swagger UI is the source of truth for schemas and response examples. This ro
 | `GET` | `/health` | Liveness/health check |
 | `GET` | `/webmail/` | Bundled webmail SPA (`/webmail/mobile/` for the mobile PWA) |
 
-### Admin
+**Admin**
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -182,21 +167,17 @@ The Swagger UI is the source of truth for schemas and response examples. This ro
 | `GET` | `/v1/admin/settings` | Read runtime settings |
 | `PUT` | `/v1/admin/settings` | Update runtime settings |
 
-### Auth and session
+**Auth and session**
 
 | Method | Path | Purpose |
 |---|---|---|
 | `POST` | `/v1/auth/session` | Exchange credentials for a session token |
 | `DELETE` | `/v1/auth/session` | Sign out |
-| `GET` | `/v1/me/app-passwords` | List app passwords |
-| `POST` | `/v1/me/app-passwords` | Mint an app password |
-| `DELETE` | `/v1/me/app-passwords/{id}` | Revoke an app password |
-| `GET` | `/v1/me/webhook-inboxes` | List webhook inboxes |
-| `POST` | `/v1/me/webhook-inboxes` | Mint a webhook inbox |
-| `DELETE` | `/v1/me/webhook-inboxes/{id}` | Revoke a webhook inbox |
+| `GET`/`POST`/`DELETE` | `/v1/me/app-passwords*` | List, mint, revoke app passwords |
+| `GET`/`POST`/`DELETE` | `/v1/me/webhook-inboxes*` | List, mint, revoke webhook inboxes |
 | `POST` | `/v1/hook/{token}` | Webhook ingest — POST lands in the owner's INBOX |
 
-### Mailboxes and messages
+**Mailboxes and messages**
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -212,7 +193,7 @@ The Swagger UI is the source of truth for schemas and response examples. This ro
 | `POST` | `/v1/mailboxes/{path}/messages` | Append a message |
 | `POST` | `/v1/send` | Send mail (draft/reply metadata, pending approvals) |
 
-### Account, rules, and sender policy
+**Account, rules, and sender policy**
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -224,7 +205,7 @@ The Swagger UI is the source of truth for schemas and response examples. This ro
 | `GET`/`POST`/`DELETE` | `/v1/me/blocked-recipients*` | Blocked recipients |
 | `GET` | `/v1/me/logins` | Recent logins |
 
-### Calendar
+**Calendar**
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -234,7 +215,7 @@ The Swagger UI is the source of truth for schemas and response examples. This ro
 | `GET`/`POST`/`DELETE` | `/v1/me/calendars/{id}/ical-token` | Public iCal feed token |
 | `GET`/`PUT` | `/v1/ical/{token}*` | Public feed + event edit links |
 
-### Drive, push, proxy, tracking, telemetry, and AI
+**Drive, push, proxy, tracking, telemetry, and AI**
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -274,18 +255,18 @@ Copy `.env.example` to `.env`. Common values:
 | `LLM_PROVIDER` | `openai` | `openai` or `anthropic` |
 | `LLM_BASE_URL` | empty | OpenAI-compatible proxy/provider URL |
 | `LLM_API_KEY` | empty | Provider key; stays server-side (chat is proxied via `/v1/ai/llm`) |
+| `LLM_REASONING_EFFORT` | `none` | Reasoning budget; `none` keeps short answers from being eaten by thinking tokens |
+| `LLM_SCRUB_SECRETS` | `true` | Strip credentials from prompts before they reach the provider |
+| `LLM_DECOY_COUNT` | `0` | Decoy requests per real one; multiplies token spend |
+| `AI_CACHE_TTL_MS` | `43200000` | Per-user completion cache TTL (12h); `AI_CACHE_ENABLED=false` to disable |
 | `S3_DRIVE_ENABLED` | `false` | Enables drive config/quota endpoints |
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | empty | Enables push delivery |
 | `RATE_LIMIT_MAX` / `RATE_LIMIT_WINDOW_MS` | `300` / `60000` | Per-IP request cap; `RATE_LIMIT_ENABLED=false` to disable |
+| `TRUST_PROXY` | private hops | Which proxies may set `X-Forwarded-For`; never trusts arbitrary clients |
+| `CREDENTIAL_ENCRYPTION_KEY` | generated | Encrypts stored mailbox passwords at rest; set it so backups don't carry the key |
 | `WEBHOOK_ACCOUNTS` | empty | JSON array of mailboxes whose mail is POSTed to a webhook and then deleted |
 | `WEBHOOK_INBOXES_ENABLED` | `true` | User-minted POST→INBOX URLs; needs `CREDENTIAL_ENCRYPTION_KEY` |
 | `WEBHOOK_INBOXES_MAX_PER_USER` | `10` | Per-mailbox cap on webhook inboxes |
-| `LLM_REASONING_EFFORT` | `none` | Reasoning budget; `none` keeps short answers from being eaten by thinking tokens |
-| `AI_CACHE_TTL_MS` | `43200000` | Per-user completion cache TTL (12h); `AI_CACHE_ENABLED=false` to disable |
-| `LLM_SCRUB_SECRETS` | `true` | Strip credentials from prompts before they reach the provider |
-| `LLM_DECOY_COUNT` | `0` | Decoy requests per real one; multiplies token spend |
-| `TRUST_PROXY` | private hops | Which proxies may set `X-Forwarded-For`; never trusts arbitrary clients |
-| `CREDENTIAL_ENCRYPTION_KEY` | generated | Encrypts stored mailbox passwords at rest; set it so backups don't carry the key |
 | `DRIVE_CORS_ORIGINS` | `PUBLIC_BASE_URL` | Browser origins allowed to reach Drive buckets (required for Drive to work) |
 | `WEBMAIL_ENABLED` | `true` | Serve the bundled SPA at `/webmail/`; `false` is a hard off switch the admin API cannot undo |
 | `WEBMAIL_DIST` | `/app/webmail/dist` | Where the built SPA lives; the image sets this for you |
@@ -293,19 +274,11 @@ Copy `.env.example` to `.env`. Common values:
 | `ADMIN_IP_ALLOWLIST` | empty | Optional CIDR list restricting `/v1/admin/*` on top of the token |
 | `ADMIN_SETTINGS_DB_PATH` | `<data>/admin-settings.db` | Runtime operator settings store |
 
-### Webhook conversion accounts
+**Webhook conversion accounts**
 
-Set `WEBHOOK_ACCOUNTS` to turn a mailbox into a feed for some other system.
-Every message that arrives is POSTed as JSON — envelope, the decoded `text`
-and `html` bodies, attachments with their bytes (base64), and the full
-RFC822 source for receivers that would rather parse MIME themselves — and is
-then deleted from the mailbox.
+Set `WEBHOOK_ACCOUNTS` to turn a mailbox into a feed for some other system. Every message that arrives is POSTed as JSON — envelope, decoded `text`/`html` bodies, attachments with their bytes (base64), and the full RFC822 source for receivers that would rather parse MIME themselves — and is then deleted from the mailbox.
 
-Each attachment carries `filename`, `contentType`, `size`, `included` and
-either `content` (base64) or an `omittedReason`. Attachments over
-`WEBHOOK_MAX_ATTACHMENT_BYTES` (10 MB) or past the per-message budget
-(`WEBHOOK_MAX_ATTACHMENTS_TOTAL_BYTES`, 20 MB) are still listed and
-explained rather than dropped silently.
+Each attachment carries `filename`, `contentType`, `size`, `included` and either `content` (base64) or an `omittedReason`; anything over `WEBHOOK_MAX_ATTACHMENT_BYTES` (10 MB) or past the per-message budget (`WEBHOOK_MAX_ATTACHMENTS_TOTAL_BYTES`, 20 MB) is listed and explained rather than dropped silently.
 
 ```json
 [
@@ -320,44 +293,25 @@ explained rather than dropped silently.
 ]
 ```
 
-`headers` is optional and merged into every POST for that account —
-`Authorization` is the usual case. Reserved transport names (`host`,
-`content-length`, `transfer-encoding`, …) and `x-webhook-*` (the signature
-headers) are rejected; an invalid `headers` block is dropped with a warning
-rather than disabling the account.
+`headers` is optional and merged into every POST for that account — `Authorization` is the usual case. Reserved transport names (`host`, `content-length`, `transfer-encoding`, …) and `x-webhook-*` are rejected; an invalid `headers` block is dropped with a warning rather than disabling the account.
 
-A message is deleted **only** after the webhook answers 2xx. Anything else
-leaves it in the mailbox and schedules a retry — 1m, 5m, 15m, 1h, 3h, 6h,
-12h, then daily, up to `WEBHOOK_MAX_ATTEMPTS` (default 14). Attempt state is
-kept in `WEBHOOK_DB_PATH` so restarts don't reset the backoff or re-deliver.
-After the final attempt the message is left in place rather than dropped.
+A message is deleted **only** after the webhook answers 2xx. Anything else leaves it in the mailbox and schedules a retry — 1m, 5m, 15m, 1h, 3h, 6h, 12h, then daily, up to `WEBHOOK_MAX_ATTEMPTS` (default 14) — with attempt state in `WEBHOOK_DB_PATH` so restarts neither reset the backoff nor re-deliver. After the final attempt the message is left in place.
 
-When `secret` is set, each POST carries
+When `secret` is set, each POST carries:
 
 ```
 X-Webhook-Timestamp: <unix seconds>
 X-Webhook-Signature-V2: <hex HMAC-SHA256 of "<timestamp>.<raw body>">
 ```
 
-Verify the signature against the raw request body, not a re-serialized copy,
-and reject any request whose timestamp is outside your tolerance window (300s
-is a reasonable default) — that check is what makes a captured request
-unreplayable. No body-only `X-Webhook-Signature` is sent: emitting one
-alongside the timestamped signature would let an attacker strip the two
-headers above and replay the request anyway.
+Verify the signature against the raw request body, not a re-serialized copy, and reject any request whose timestamp is outside your tolerance window (300s is a reasonable default) — that check is what makes a captured request unreplayable. No body-only `X-Webhook-Signature` is sent: emitting one alongside the timestamped signature would let an attacker strip the two headers above and replay the request anyway.
 
 </details>
+
 <details>
 <summary><b>📤 Outbound webhooks</b> — email → your URL, driven by a mail rule</summary>
 
-Create one under **Settings → Outbound webhooks**, then point a mail rule's
-"Send to external webhook" action at it (optionally keeping the message in the
-mailbox). Each delivery POSTs the envelope, parsed headers, text/HTML bodies, a
-prepend note you can set per webhook, optional custom request headers
-(`headers`, e.g. `{"Authorization":"Bearer …"}` — stored encrypted, listed
-masked, same reserved-name rules as `WEBHOOK_ACCOUNTS`), and gzip+base64
-attachments with decode instructions for the receiver. A Sent-folder
-receipt records the outcome.
+Create one under **Settings → Outbound webhooks**, then point a mail rule's "Send to external webhook" action at it (optionally keeping the message in the mailbox). Each delivery POSTs the envelope, parsed headers, text/HTML bodies, a prepend note you can set per webhook, optional custom request headers (`headers`, e.g. `{"Authorization":"Bearer …"}` — stored encrypted, listed masked, same reserved-name rules as `WEBHOOK_ACCOUNTS`), and gzip+base64 attachments with decode instructions for the receiver. A Sent-folder receipt records the outcome.
 
 | Variable | Default | Notes |
 |---|---|---|
@@ -369,12 +323,10 @@ receipt records the outcome.
 
 </details>
 
-
-
 <details>
 <summary><b>📦 Mailcow setup details</b></summary>
 
-The public setup scripts are intentionally conservative. Before they start containers or write nginx config they run `install/mailcow-safety-check.sh`, which verifies Docker, Docker Compose, a mailcow checkout, the mailcow network, the mailcow nginx config directory, and running `nginx-mailcow`, `dovecot-mailcow`, and `postfix-mailcow` containers.
+The setup scripts are intentionally conservative: before they start containers or write nginx config they run `install/mailcow-safety-check.sh`, which verifies Docker, Docker Compose, a mailcow checkout, the mailcow network, the nginx config directory, and running `nginx-mailcow`, `dovecot-mailcow` and `postfix-mailcow` containers.
 
 Manual install:
 
@@ -386,11 +338,7 @@ sudo install/mailcow-safety-check.sh
 sudo install/setup.sh
 ```
 
-The default setup exposes the API through mailcow nginx at:
-
-- `https://<your-mailcow-host>/mailcow-rest-api/`
-- `https://<your-mailcow-host>/mailcow-rest-api/openapi.json`
-- `https://<your-mailcow-host>/mailcow-rest-api/health`
+The default setup exposes the API through mailcow nginx at `https://<your-mailcow-host>/mailcow-rest-api/` (plus `/openapi.json` and `/health` under the same prefix).
 
 Set `MAILCOW_PATH` if your mailcow checkout is not `/opt/mailcow-dockerized`, and set `MAILCOW_NETWORK` if your Docker network name differs from `mailcowdockerized_mailcow-network`.
 
@@ -403,12 +351,8 @@ For production edge hardening (rate limiting, security headers, ban coverage), s
 ## 🧪 Development
 
 ```sh
-npm install
-npm test
-npm start
+npm install && npm test && npm start   # Swagger at http://localhost:3001/
 ```
-
-Open Swagger at `http://localhost:3001/`.
 
 Run the MCP adapter locally:
 

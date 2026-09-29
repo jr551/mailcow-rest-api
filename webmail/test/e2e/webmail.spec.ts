@@ -1036,28 +1036,48 @@ test('density toggle switches between compact and comfortable', async ({ page })
     await page.screenshot({ path: `${SCREEN_DIR}/18-density-compact.png`, fullPage: true });
 });
 
-test('Settings: skin picker swaps the accent CSS variable', async ({ page }) => {
+test('Settings: skin picker swaps the whole palette, and the accent layers over it', async ({ page }) => {
     await page.addInitScript(() => localStorage.setItem('webmail.theme', 'dark'));
     await login(page);
     await page.click('[data-testid=settings-btn]');
     await expect(page.getByTestId('settings-modal')).toBeVisible();
     await page.click('[data-testid=settings-tab-appearance]');
 
-    // Pick the Forest skin.
-    await page.click('[data-testid=skin-forest]');
-    const forestAccent = await page.evaluate(() =>
-        getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()
+    const readVar = (name: string) => page.evaluate(
+        (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim(),
+        name
     );
-    expect(forestAccent.toLowerCase()).toBe('#16a34a');
+
+    // Outlook is the default; its command bar is its accent.
+    expect((await readVar('--accent')).toLowerCase()).toBe('#0078d4');
+    expect(await readVar('--font-sans')).toContain('Segoe UI');
+
+    // Pick the Gmail skin — the accent AND the type family change with it.
+    await page.click('[data-testid=skin-gmail]');
+    expect((await readVar('--accent')).toLowerCase()).toBe('#ea4335');
+    expect(await readVar('--font-sans')).toContain('Roboto');
 
     // Persistence: reload, the same skin should re-apply.
     await page.reload();
-    const afterReload = await page.evaluate(() =>
-        getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()
-    );
-    expect(afterReload.toLowerCase()).toBe('#16a34a');
+    expect((await readVar('--accent')).toLowerCase()).toBe('#ea4335');
 
-    await page.screenshot({ path: `${SCREEN_DIR}/19-skin-forest.png`, fullPage: true });
+    await page.screenshot({ path: `${SCREEN_DIR}/19-skin-gmail.png`, fullPage: true });
+
+    // The accent picker is a LAYER, not a replacement: dialling a new hue on
+    // Gmail must retint the accent family without stripping the skin's
+    // surfaces, type or shape. This is the regression that made the old
+    // 'custom' pseudo-skin unusable.
+    await page.click('[data-testid=settings-btn]');
+    await page.click('[data-testid=settings-tab-appearance]');
+    await page.getByTestId('skin-custom-input').fill('#7c3aed');
+
+    expect(await readVar('--font-sans')).toContain('Roboto');
+    expect((await readVar('--bg-surface')).toLowerCase()).toBe('#ffffff');
+    // The override is derived, not a raw hex, so assert on the rendered hue.
+    const layered = await readVar('--accent');
+    expect(layered).toMatch(/^(#7c3aed|hsl\(26[0-9.]+)/i);
+
+    await page.screenshot({ path: `${SCREEN_DIR}/20-accent-layered.png`, fullPage: true });
 });
 
 test('install banner appears when beforeinstallprompt fires', async ({ page }) => {

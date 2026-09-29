@@ -55,7 +55,7 @@ async function seed(
             SETTINGS_KEY,
             SKIN_KEY,
             JSON.stringify({ weatherChip, weatherChipOutlook }),
-            JSON.stringify({ skinId, customAccent: '#5b8def', semantics: {}, customCss: '' })
+            JSON.stringify({ skinId, customAccent: '#0078d4', accentOverride: null, semantics: {}, semanticsEdited: false, customCss: '' })
         ] as const
     );
 }
@@ -106,18 +106,26 @@ test.describe('Weather chip', () => {
         await expect(page.getByTestId('weather-chip')).toBeVisible();
     });
 
-    test('renders on other skins with the default opt-in', async ({ page }) => {
+    test('shows on the Gmail skin with no opt-in — it does not hide the chips', async ({ page }) => {
         await applyMocks(page);
         await stubWeather(page);
-        await seed(page, { skinId: 'default', weatherChip: true });
+        // Gmail's header is white and has room for the chip, so the setting
+        // alone is enough. If a future skin re-hides these, this test is the
+        // one that says the feature went missing.
+        await seed(page, { skinId: 'gmail', weatherChip: true });
         await login(page);
+        await expect(page.locator('html')).toHaveClass(/skin-gmail/);
         await expect(page.getByTestId('weather-chip')).toBeVisible();
     });
+
+    // Default state for the placement tests below. Gmail renders the chip
+    // with no per-skin opt-in, so this is the plain, un-overridden path.
+    const chipMounts = { skinId: 'gmail', weatherChip: true } as const;
 
     test('options menu stays inside the viewport near the right/bottom edge', async ({ page }) => {
         await applyMocks(page);
         await stubWeather(page);
-        await seed(page, { skinId: 'default', weatherChip: true });
+        await seed(page, chipMounts);
         await login(page);
         await expect(page.getByTestId('weather-chip')).toBeVisible();
         // The caret path anchors the menu to the chip's own left edge. The
@@ -154,7 +162,7 @@ test.describe('Weather chip', () => {
     test('options menu is left where it wants to be when it already fits', async ({ page }) => {
         await applyMocks(page);
         await stubWeather(page);
-        await seed(page, { skinId: 'default', weatherChip: true });
+        await seed(page, chipMounts);
         await login(page);
         await page.setViewportSize({ width: 1400, height: 900 });
         await expect(page.getByTestId('weather-chip')).toBeVisible();
@@ -172,7 +180,7 @@ test.describe('Weather chip', () => {
     test('options menu clamps from a right-click near the corner', async ({ page }) => {
         await applyMocks(page);
         await stubWeather(page);
-        await seed(page, { skinId: 'default', weatherChip: true });
+        await seed(page, chipMounts);
         await login(page);
         await expect(page.getByTestId('weather-chip')).toBeVisible();
 
@@ -193,7 +201,7 @@ test.describe('Weather chip', () => {
     test('clicking the chip cycles panes, Escape and click-outside close the menu', async ({ page }) => {
         await applyMocks(page);
         await stubWeather(page);
-        await seed(page, { skinId: 'default', weatherChip: true });
+        await seed(page, chipMounts);
         await login(page);
         const chip = page.getByTestId('weather-chip');
         await expect(chip).toBeVisible();

@@ -26,6 +26,7 @@
     import { findSpamFolder } from '../lib/spam-sweep';
     import { listMailboxes, moveMessage } from '../lib/api';
     import type { Attachment, MessageDetail } from '../lib/api';
+    import MenuSubmenu, { type SubmenuItem } from './MenuSubmenu.svelte';
 
     interface Props {
         onReply: (replyTo: MessageDetail) => void;
@@ -44,6 +45,16 @@
     let moveOpen = $state(false);
     let folderPickerAtt = $state<Attachment | null>(null);
     let folderPickerBlob = $state<Blob | null>(null);
+
+    // Folder destinations for the Move submenu. Unbounded by design — the
+    // inline list this replaced dumped every mailbox into a 320px max-height
+    // dropdown, so a large account silently scrolled past most of its
+    // folders. MenuSubmenu renders the full list in a scrolling panel.
+    let moveTargets = $derived<SubmenuItem[]>(
+        ui.mailboxes
+            .filter((m) => m.path !== ui.selectedPath)
+            .map((m) => ({ key: m.path, label: m.name || m.path }))
+    );
 
     // Keep the previous message on screen while the next one loads so the
     // pane crossfades instead of flashing a spinner. `shown` only changes
@@ -919,7 +930,26 @@
     }
 </script>
 
-<svelte:window onclick={onWindowClick} />
+<svelte:window
+    onclick={onWindowClick}
+    onkeydowncapture={(e) => {
+        if (e.key !== 'Escape' || !moveOpen) return;
+        // Same two-stage Escape contract as the message-list context menu
+        // (see MessageList.svelte): while the folder submenu is open, stand
+        // down and let MenuSubmenu consume the key at the target, so the
+        // FIRST Escape dismisses the submenu and only the second closes the
+        // Move menu.
+        //
+        // Without this, Escape while the Move menu was open fell through to
+        // Layout's global handler, which uses Escape to clear the selection
+        // and then close the reading pane — so dismissing a dropdown tore
+        // down the message you were looking at.
+        if (document.querySelector('.detail [data-submenu-open="true"]')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        moveOpen = false;
+    }}
+/>
 
 <section class="detail" aria-label="Message detail">
     {#if !shown && !ui.detailLoading && !ui.detailError}
@@ -1342,16 +1372,23 @@
                                         ><Icon name="spam" size={13} /> Block mail to {catchallTo}</button>
                                     </li>
                                 {/if}
-                                <li class="menu-section">Move to folder</li>
-                                {#each ui.mailboxes.filter(m => m.path !== ui.selectedPath) as mb (mb.path)}
-                                    <li>
-                                        <button
-                                            type="button"
-                                            role="menuitem"
-                                            onclick={() => { moveOpen = false; onMove(d.uid, mb.path); }}
-                                        >{mb.name || mb.path}</button>
-                                    </li>
-                                {/each}
+                                <!-- Same MenuSubmenu as the message-list
+                                     context menu, so hover intent, keyboard
+                                     handling and edge-flipping are literally
+                                     the same code here. The folder list was
+                                     previously dumped inline, which made this
+                                     menu grow without bound — an account with
+                                     40 mailboxes got a 40-item dropdown that
+                                     pushed Block/Allow off the bottom of a
+                                     320px max-height scroller. -->
+                                <MenuSubmenu
+                                    label="Move to folder"
+                                    icon="move"
+                                    items={moveTargets}
+                                    onSelect={(path) => { moveOpen = false; onMove(d.uid, path); }}
+                                    testid="detail-move"
+                                    width={200}
+                                />
                             </ul>
                         {/if}
                     </div>

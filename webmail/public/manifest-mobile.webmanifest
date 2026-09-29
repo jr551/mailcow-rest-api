@@ -9,7 +9,7 @@
     "display_override": ["standalone", "minimal-ui", "browser"],
     "orientation": "portrait",
     "background_color": "#121317",
-    "theme_color": "#5b8def",
+    "theme_color": "#0078d4",
     "categories": ["productivity", "communication", "email"],
     "lang": "en",
     "dir": "ltr",

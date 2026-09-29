@@ -26,13 +26,18 @@ import {
     capabilities, aiAuthKey
 } from './settings.svelte';
 import { voicePrefs, setVoiceEnabled, setVoiceId } from './voice.svelte';
-import { setSkin, setCustomAccent, skinState } from './skins.svelte';
+import { SKINS, setSkin, setCustomAccent, isKnownSkin, skinState } from './skins.svelte';
 import { folderPrefs, setFolderIcon } from './folder-prefs.svelte';
 import { ui, showToast } from './store.svelte';
 import { maybeFlagCooldown, aiCooldownLabel } from './ai-cooldown.svelte';
 import { bearerHeader, getSession } from './auth.svelte';
 import { apiUrl } from './api';
 import { setTools } from './ai-threads.svelte';
+
+// Built once from the real SKINS list so the tool schema can never drift out
+// of sync with the picker again — it used to advertise seven ids that had
+// all been deleted, one of which ('mono') never existed at all.
+const SKIN_IDS = SKINS.map((s) => s.id);
 
 
 export type ChatRole = 'user' | 'assistant' | 'system' | 'tool';
@@ -512,13 +517,16 @@ export const TOOLS: ToolDef[] = [
         type: 'function',
         function: {
             name: 'set_skin',
-            description: 'Switch the colour skin / accent. Pass a built-in id (default | midnight | forest | rose | sunset | mono | custom) or "custom" plus a CSS hex colour.',
+            description: `Switch the colour skin, and optionally layer an accent colour over it. Valid skin ids: ${SKIN_IDS.join(' | ')}. Pass customAccent as any CSS hex (e.g. #6e44ff) to retint the active skin's accent family; omit it to keep the skin's own accent. Pass customAccent as null to clear a layered accent.`,
             parameters: {
                 type: 'object',
                 required: ['skinId'],
                 properties: {
-                    skinId: { type: 'string' },
-                    customAccent: { type: 'string', description: 'Required when skinId is "custom". Any CSS hex colour, e.g. #6e44ff.' }
+                    skinId: { type: 'string', enum: SKIN_IDS },
+                    customAccent: {
+                        type: ['string', 'null'],
+                        description: 'Optional CSS hex colour layered over the skin, e.g. #6e44ff. Null clears it.'
+                    }
                 }
             }
         }
@@ -793,6 +801,7 @@ export async function execTool(name: string, args: Record<string, unknown>): Pro
                 llmPreset: settings.llm.preset,
                 llmModel: settings.llm.model,
                 skinId: skinState.skinId,
+                accentOverride: skinState.accentOverride,
                 customAccent: skinState.customAccent,
                 voiceEnabled: voicePrefs.enabled,
                 voiceId: voicePrefs.voiceId
@@ -881,11 +890,27 @@ export async function execTool(name: string, args: Record<string, unknown>): Pro
         }
         case 'set_skin': {
             const skinId = String(args.skinId);
-            setSkin(skinId);
-            if (skinId === 'custom' && args.customAccent) {
-                setCustomAccent(String(args.customAccent));
+            // Reject rather than silently substitute: the model is working
+            // from the tool schema, so an unknown id means either it
+            // hallucinated or the schema is stale. Silently landing on
+            // Outlook and reporting `ok` hid both for months.
+            if (!isKnownSkin(skinId)) {
+                throw new Error(
+                    `Unknown skin "${skinId}". Valid ids: ${SKIN_IDS.join(', ')}.`
+                );
             }
-            return { ok: true, skinId, customAccent: skinState.customAccent };
+            setSkin(skinId);
+            // A customAccent layers over whichever skin was just chosen;
+            // an explicit null clears a previously layered accent. Omitting
+            // the argument leaves the accent state alone.
+            if (args.customAccent !== undefined) {
+                setCustomAccent(args.customAccent === null ? null : String(args.customAccent));
+            }
+            return {
+                ok: true,
+                skinId: skinState.skinId,
+                accentOverride: skinState.accentOverride
+            };
         }
         case 'set_folder_icon': {
             const path = String(args.path);
