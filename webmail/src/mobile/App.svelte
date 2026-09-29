@@ -150,7 +150,12 @@
     <div class="mobile-shell">
         {#key mobileState.view}
             <div class="view-wrap fade-in">
-                <svelte:component this={views[mobileState.view]} />
+                <!-- The AI tab is gone from the bottom nav when AI is hard-off,
+                     so `view === 'ai'` can still be reached from a stale
+                     history entry or a notification tap. Redirect to the
+                     inbox rather than rendering an AI surface the user
+                     switched off. -->
+                <svelte:component this={mobileState.view === 'ai' && !settings.aiFeatures ? InboxView : views[mobileState.view]} />
             </div>
         {/key}
         {#if mobileState.view !== 'message' && mobileState.view !== 'compose'}

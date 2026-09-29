@@ -126,9 +126,14 @@
         }
         const remote = hasRemoteImages(html);
         hasRemote = remote;
-        // When proxyImages is on, we auto-allow remote images so they can be
-        // routed through the privacy proxy without bothering the user.
-        const shouldAllow = settings.alwaysAllowImages || settings.proxyImages || isImageTrusted(fromAddr) || !remote;
+        // Remote images are BLOCKED by default; see
+        // components/MessageDetail.svelte for the full rationale. The
+        // desktop reader dropped `|| settings.proxyImages` from this same
+        // condition, and leaving it here would make the two surfaces
+        // disagree about what "blocked" means for the same account. The
+        // proxy still governs HOW an allowed image is fetched
+        // (`proxyActive` below), never whether it loads at all.
+        const shouldAllow = settings.alwaysAllowImages || isImageTrusted(fromAddr) || !remote;
         allowImages = shouldAllow;
         proxyActive = shouldAllow && settings.proxyImages && remote;
 

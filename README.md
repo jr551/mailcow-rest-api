@@ -313,10 +313,12 @@ Verify the signature against the raw request body, not a re-serialized copy, and
 
 Create one under **Settings → Outbound webhooks**, then point a mail rule's "Send to external webhook" action at it (optionally keeping the message in the mailbox). Each delivery POSTs the envelope, parsed headers, text/HTML bodies, a prepend note you can set per webhook, optional custom request headers (`headers`, e.g. `{"Authorization":"Bearer …"}` — stored encrypted, listed masked, same reserved-name rules as `WEBHOOK_ACCOUNTS`), and gzip+base64 attachments with decode instructions for the receiver. A Sent-folder receipt records the outcome.
 
+Each card has a **Send test** button. It POSTs a synthetic payload through the *same* delivery code the background worker uses — same signature scheme, same header merge, same pinned connection — and reports the receiver's HTTP status, timing and the first 300 characters of its reply. It reads no message, consumes nothing, leaves the delivery queue untouched, and never returns the signing secret or the stored header values. A non-2xx is shown as a result, not an error: the receiver rejecting the request is exactly what you needed to see.
+
 | Variable | Default | Notes |
 |---|---|---|
 | `OUTBOUND_WEBHOOKS_ENABLED` | `true` | Master switch for `/v1/me/outbound-webhooks` |
-| `OUTBOUND_WEBHOOKS_MAX_PER_USER` | `10` | Per-mailbox cap |
+| `OUTBOUND_WEBHOOKS_MAX_PER_USER` | `100` | Per-mailbox cap |
 | `OUTBOUND_WEBHOOK_POLL_INTERVAL_MS` | `60000` | How often hidden `.wh-*` mailboxes are drained |
 | `OUTBOUND_WEBHOOK_MAX_ATTEMPTS` | `14` | Retry budget with backoff |
 | `OUTBOUND_WEBHOOK_MAX_MESSAGE_BYTES` | `26214400` | Skip forwarding past this |

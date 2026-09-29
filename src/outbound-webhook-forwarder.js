@@ -1,7 +1,8 @@
 'use strict';
 
-const crypto = require('node:crypto');
-const { ImapFlow } = require('imapflow');
+// Only used as the default when no requestOverride is injected: the shared
+// delivery module compares against this exact reference to decide whether to
+// skip SSRF pinning, so it must be this binding, not a local re-require.
 const { request } = require('undici');
 const { walkStructure, downloadPartText, streamToBuffer } = require('./imap');
 const {
@@ -14,7 +15,7 @@ const {
 } = require('./webhook-payload');
 const { headerSafe, formatPhrase } = require('./utils/rfc822');
 const { backoffFor } = require('./webhook-forwarder');
-const { createPinnedDispatcher } = require('./utils/ssrf-guard');
+const { deliverOutbound } = require('./outbound-webhook-deliver');
 
 // Per-user outbound webhooks: mail that matched a rule is POSTed to a URL the
 // user named.
@@ -88,91 +89,28 @@ function createOutboundWebhookForwarder({
         return client;
     }
 
-    function sign(secret, signedContent) {
-        return crypto.createHmac('sha256', secret).update(signedContent).digest('hex');
-    }
-
+    // Every real delivery goes through the shared module so a test send is
+    // the same POST by construction — signature scheme, header merge order,
+    // pinned connection, reply cap. `requestOverride` exists so tests can
+    // drive the whole delivery path without a live endpoint; production never
+    // passes it, and the shared module skips SSRF pinning only when it is
+    // driven that way.
     async function deliver(webhook, payload) {
-        const body = JSON.stringify(payload);
-        const headers = {
-            'content-type': 'application/json',
-            'user-agent': 'mailcow-rest-api/outbound-webhook',
-            // User-supplied headers (Authorization etc.) merge after our
-            // defaults and before the signature block. Reserved transport
-            // names and x-webhook-* were rejected at creation, so nothing
-            // here can clobber the signature or the framing.
-            ...(webhook.headers || {})
-        };
-        if (webhook.secret) {
-            // Timestamp inside the signed content so a captured request cannot
-            // be replayed forever — the receiver can reject anything outside
-            // its tolerance window. Only the V2 header is sent: emitting a
-            // body-only signature alongside it would hand an attacker the
-            // replay back, since stripping the V2 headers would still
-            // validate.
-            const timestamp = String(Math.floor(now() / 1000));
-            headers['x-webhook-timestamp'] = timestamp;
-            headers['x-webhook-signature-v2'] = sign(webhook.secret, `${timestamp}.${body}`);
+        const outcome = await deliverOutbound({
+            webhook,
+            payload,
+            secret: webhook.secret,
+            now,
+            timeoutMs,
+            requestImpl: requestOverride || request
+        });
+        if (!outcome.ok) {
+            const err = new Error(`Webhook returned ${outcome.status}: ${outcome.reply}`);
+            err.statusCode = outcome.status;
+            err.elapsedMs = outcome.elapsedMs;
+            throw err;
         }
-        const started = now();
-        // `requestOverride` exists so tests can drive the whole delivery path
-        // without a live endpoint. Production never passes it.
-        const doRequest = requestOverride || request;
-        // The URL was checked at creation, but that is not enough: the
-        // operator of a public-looking hostname can flip its DNS to a
-        // private address afterwards (rebinding) and every poll would POST
-        // mailbox contents to an internal service. Re-resolve and pin the
-        // connection to the checked address on every delivery.
-        let dispatcher;
-        if (!requestOverride) {
-            try {
-                dispatcher = (await createPinnedDispatcher(webhook.url)) || undefined;
-            } catch (err) {
-                // Only a genuinely disallowed destination is permanent. A
-                // resolver blip (EAI_AGAIN, SERVFAIL) throws here too, and
-                // treating that as permanent abandoned mail after a single
-                // attempt — so propagate the guard's own verdict instead of
-                // assuming.
-                const blocked = new Error(`Webhook URL is not allowed: ${err.message}`);
-                blocked.permanent = err.permanent === true;
-                throw blocked;
-            }
-        }
-        try {
-            const res = await doRequest(webhook.url, {
-                method: 'POST',
-                headers,
-                body,
-                headersTimeout: timeoutMs,
-                bodyTimeout: timeoutMs,
-                dispatcher
-            });
-            // Cap the reply capture — a hostile or broken endpoint could
-            // stream an unbounded body and `res.body.text()` buffers it all.
-            let text = '';
-            try {
-                for await (const chunk of res.body) {
-                    if (text.length >= 300) break;
-                    text += chunk.toString('utf8');
-                }
-                text = text.slice(0, 300);
-            } catch { /* a truncated reply is still a reply */ }
-            const elapsedMs = now() - started;
-            if (res.statusCode < 200 || res.statusCode >= 300) {
-                const err = new Error(`Webhook returned ${res.statusCode}: ${text}`);
-                err.statusCode = res.statusCode;
-                err.elapsedMs = elapsedMs;
-                throw err;
-            }
-            return { status: res.statusCode, elapsedMs, reply: text };
-        } finally {
-            // Each delivery builds its own Agent, which owns a connection
-            // pool and keep-alive timers. Without this, a busy webhook
-            // accumulates one pool per message.
-            if (dispatcher && typeof dispatcher.close === 'function') {
-                await dispatcher.close().catch(() => {});
-            }
-        }
+        return outcome;
     }
 
     async function buildPayload(client, webhook, uid, uidvalidity) {

@@ -272,26 +272,64 @@ test('AI panel summarizes and drafts a reply', async ({ page }) => {
     await page.screenshot({ path: `${SCREEN_DIR}/09-ai-panel.png`, fullPage: true });
 });
 
-test('theme toggle cycles auto → light → dark and persists', async ({ page }) => {
+test('appearance control offers light/dark/auto and an accent palette', async ({ page }) => {
     await login(page);
     const html = page.locator('html');
-    const toggle = page.locator('.theme-toggle');
+    const toggle = page.getByTestId('theme-toggle');
 
     // Initial: whatever auto resolves to (likely light in headless)
     const initial = await html.getAttribute('data-theme');
     expect(['auto', 'light', 'dark']).toContain(initial);
 
+    // The control is a popover now, not a cycle-on-click button. Both
+    // capabilities have to survive that change, so both are exercised here.
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
     await toggle.click();
-    const second = await html.getAttribute('data-theme');
-    expect(second).not.toBe(initial);
+    await expect(page.getByTestId('appearance-panel')).toBeVisible();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
 
-    await toggle.click();
-    const third = await html.getAttribute('data-theme');
-    expect(third).not.toBe(second);
+    // Mode: the segmented control writes data-theme and persists.
+    await page.getByTestId('appearance-mode-dark').click();
+    await expect(html).toHaveAttribute('data-theme', 'dark');
+    await page.getByTestId('appearance-mode-light').click();
+    await expect(html).toHaveAttribute('data-theme', 'light');
+    const chosen = 'light';
 
-    // Reload — chosen theme persists
+    // Accent: picking a swatch retints the live accent var rather than
+    // merely marking the chip selected.
+    const accentOf = () =>
+        html.evaluate((el) => getComputedStyle(el).getPropertyValue('--accent').trim());
+    const before = await accentOf();
+    await page.getByTestId('accent-violet').click();
+    const after = await accentOf();
+    expect(after).not.toBe(before);
+
+    // Escape closes and returns focus to the trigger, so a keyboard user is
+    // not dropped somewhere unrelated with the panel still visually open.
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('appearance-panel')).toBeHidden();
+    await expect(toggle).toBeFocused();
+
+    // Reload — both the mode and the accent survive.
     await page.reload();
-    await expect(html).toHaveAttribute('data-theme', third!);
+    await expect(html).toHaveAttribute('data-theme', chosen);
+    const persisted = await accentOf();
+    expect(persisted).toBe(after);
+});
+
+test('accent picks back to the skin default in one click', async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem('webmail.theme', 'light'));
+    await login(page);
+
+    await page.getByTestId('theme-toggle').click();
+    await page.getByTestId('accent-rose').click();
+    await expect(page.getByTestId('appearance-accent-reset')).toBeEnabled();
+
+    await page.getByTestId('appearance-accent-reset').click();
+    // With no override the reset affordance reports the skin's own colour…
+    await expect(page.getByTestId('appearance-accent-reset')).toContainText('Outlook default');
+    // …and is inert, because there is nothing left to undo.
+    await expect(page.getByTestId('appearance-accent-reset')).toBeDisabled();
 });
 
 test('search debounces and shows empty state', async ({ page }) => {

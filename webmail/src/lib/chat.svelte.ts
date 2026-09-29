@@ -996,7 +996,14 @@ function openAiMessageToChat(m: Record<string, unknown>): ChatMessage | null {
     return null;
 }
 
+// Whether the client-side chat surface is usable. This is the gate for
+// the AI Calendar button, the "Other AI" menu, the chat bot's own
+// configured check, and the Error Doctor's AI diagnosis — so the hard-off
+// flag is honoured HERE, once, rather than in five separate templates.
+// Without it those surfaces would keep rendering for a user who has
+// switched AI off entirely.
 export function isChatConfigured(): boolean {
+    if (!settings.aiFeatures) return false;
     if (capabilities.aiConfig?.configured) return true;
     const llm = settings.llm;
     return !!(settings.useCustomLlm && llm.apiKey && (llm.baseUrl || llm.preset));

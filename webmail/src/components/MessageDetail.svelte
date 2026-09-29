@@ -214,14 +214,23 @@
         if (phishingAbort) { phishingAbort.abort(); phishingAbort = null; }
     });
 
-    // Auto-allow if the user previously chose "remember for a month" for
-    // this sender, or if the master "always allow remote images" setting is
-    // on, or if the privacy proxy is on (the upstream CDN can't see the
-    // user's IP, so the main reason for the prompt is gone). Reset whenever
-    // the user opens a different message.
+    // Remote images are BLOCKED by default. Auto-allow happens only when the
+    // user has made a standing decision that outranks this message: the
+    // master "always allow" setting, or a previous per-sender trust.
+    //
+    // `settings.proxyImages` is deliberately NOT in this list any more. It
+    // used to be, on the theory that the proxy hides the user's IP so the
+    // prompt is pointless — but the proxy hides *who* fetched, not *that the
+    // mail was read*. A tracking pixel still reaches the sender's host and
+    // still records this mailbox opening this message, and the proxy then
+    // caches the response for 24h (routes/image-proxy.js:193), extending
+    // the window. Routing is not consent, so the proxy now only decides HOW
+    // an already-allowed image is fetched (see `useProxy` below), never
+    // whether it loads. Rationale and migration: settings.svelte.ts
+    // migrateRemoteImagesDefault.
     $effect(() => {
         const fromAddr = ui.detail?.envelope.from?.[0]?.address || '';
-        allowImages = settings.alwaysAllowImages || settings.proxyImages || isImageTrusted(fromAddr);
+        allowImages = settings.alwaysAllowImages || isImageTrusted(fromAddr);
         rememberSender = true;
     });
 
@@ -1199,7 +1208,7 @@
                             {/if}
                         </div>
                     {/if}
-                    {#if isChatConfigured()}
+                    {#if settings.aiFeatures && isChatConfigured()}
                         <div class="ai-tools-wrap">
                             <button
                                 type="button"
@@ -1275,11 +1284,11 @@
                                 </div>
                             {/if}
                         </div>
-                    {:else if aiAvailable()}
+                    {:else if settings.aiFeatures && aiAvailable()}
                         <button type="button" class="btn btn-secondary ai-btn-other" onclick={onAi} data-testid="ai-btn">
                             <Icon name="wand" size={12} /> Other AI
                         </button>
-                    {:else if capabilities.loaded}
+                    {:else if settings.aiFeatures && capabilities.loaded}
                         <button
                             type="button"
                             class="btn btn-secondary ai-btn-setup"
@@ -1343,6 +1352,7 @@
                                         onclick={() => doBlockSender(d.envelope.from?.[0]?.address)}
                                         data-testid="block-sender-btn"
                                     ><Icon name="spam" size={13} /> Block {d.envelope.from?.[0]?.address || 'sender'}</button>
+                                {#if settings.aiFeatures}
                                 <li>
                                     <button
                                         type="button"
@@ -1352,6 +1362,7 @@
                                         data-testid="ai-block-sender-btn"
                                     ><Icon name="sparkles" size={13} /> {aiBlockBusy ? 'Thinking…' : 'Block senders like this (AI)'}</button>
                                 </li>
+                                {/if}
                                 <li>
                                     <button
                                         type="button"

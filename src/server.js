@@ -36,6 +36,7 @@ const sendRoutes = require('./routes/send');
 const pushRoutes = require('./routes/push');
 const senderPolicyRoutes = require('./routes/sender-policy');
 const mailboxInfoRoutes = require('./routes/mailbox-info');
+const addressBookRoutes = require('./routes/address-book');
 const shortcutsRoutes = require('./routes/shortcuts');
 // v0.3.2 mail-rules.js supersedes recipient-policy.js: it serves the legacy
 // /v1/me/blocked-recipients endpoints AND the new /v1/me/mail-rules ones
@@ -647,6 +648,7 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
 
     await app.register(sessionRoutes, { cache, imap: imapCfg, sessionTtlMs: config.session.ttlMs, appPasswords: appPasswordStore, webhookInboxes: webhookInboxStore, outboundWebhooks: outboundWebhookStore });
     await app.register(mailboxRoutes, { pool, imapCache });
+    await app.register(addressBookRoutes, { pool });
     await app.register(messageRoutes, { pool, ocrCache, imapCache });
     await app.register(aiRoutes, { aiCache });
     await app.register(sendRoutes, { db: mailcowDb, smtp: config.smtp, pool, trackingStore, getPublicBaseUrl, imapCache });
@@ -694,7 +696,13 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
     await app.register(adminRoutes, { adminSettings, appPasswordStore });
     await app.register(appPasswordRoutes, { store: appPasswordStore });
     await app.register(webhookInboxRoutes, { store: webhookInboxStore, pool, getPublicBaseUrl });
-    await app.register(outboundWebhookRoutes, { store: outboundWebhookStore, sieveManager });
+    await app.register(outboundWebhookRoutes, {
+        store: outboundWebhookStore,
+        sieveManager,
+        // The test send must time out exactly as a real delivery does, or a
+        // green test proves nothing about the worker.
+        timeoutMs: config.outboundWebhooks.timeoutMs
+    });
     await app.register(iconProxyRoutes);
     await app.register(trackingRoutes, { store: trackingStore, smtp: config.smtp });
     await app.register(imageProxyRoutes, { cache: imageProxyCache, maxBytesPerDay: config.imageProxy.maxBytesPerDay });

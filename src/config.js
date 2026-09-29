@@ -263,7 +263,12 @@ module.exports = Object.freeze({
         // owner's hidden mailbox over IMAP to read what the rule parked there.
         enabled: bool(process.env.OUTBOUND_WEBHOOKS_ENABLED, true),
         dbPath: dataFile(process.env.OUTBOUND_WEBHOOKS_DB_PATH, 'outbound-webhooks.db'),
-        maxPerUser: num(process.env.OUTBOUND_WEBHOOKS_MAX_PER_USER, 10),
+        // 100 by default: one webhook per consumer is the normal shape (a
+        // model endpoint, an integration, a staging and a prod target), and
+        // an idle webhook costs the server nothing — the forwarder only opens
+        // an IMAP connection when a rule has parked mail. The cap is there to
+        // stop a runaway provisioning script, not to ration real use.
+        maxPerUser: num(process.env.OUTBOUND_WEBHOOKS_MAX_PER_USER, 100),
         pollIntervalMs: num(process.env.OUTBOUND_WEBHOOK_POLL_INTERVAL_MS, 60_000),
         timeoutMs: num(process.env.OUTBOUND_WEBHOOK_TIMEOUT_MS, 15_000),
         maxAttempts: num(process.env.OUTBOUND_WEBHOOK_MAX_ATTEMPTS, 14),

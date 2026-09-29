@@ -22,6 +22,7 @@ import { bearerHeader, getSession, tryRenewSession } from './auth.svelte';
  *   POST   /v1/me/outbound-webhooks  <- { label, url, keep, prepend } -> OutboundWebhook
  *   PATCH  /v1/me/outbound-webhooks/:id <- { label?, keep?, prepend? } -> OutboundWebhook
  *   DELETE /v1/me/outbound-webhooks/:id -> 204
+ *   POST   /v1/me/outbound-webhooks/:id/test -> TestSendResult
  */
 export interface OutboundWebhook {
     id: string;
@@ -39,6 +40,10 @@ export interface OutboundWebhook {
     prepend: string;
     createdAt?: number | null;
     lastUsedAt?: number | null;
+    /** Hidden IMAP folder the mail rule delivers into, `.wh-<id>`. The
+     *  server derives it from the id and always returns it. It is internal
+     *  plumbing the forwarder polls, not a folder the user manages. */
+    mailbox: string;
     /** Custom request headers as name → masked value ('•••'). The server
      *  stores the real values encrypted and never returns them, so the map
      *  is only good for showing which headers exist. */
@@ -47,6 +52,24 @@ export interface OutboundWebhook {
      *  It is what the receiver uses to verify x-webhook-signature-v2, so the
      *  UI has to show it once or the user can never verify a delivery. */
     secret?: string;
+}
+
+/** What the subscriber actually said to a test delivery. Nothing about the
+ *  webhook's own credentials appears here: the server signs on its own side
+ *  and reports only the receiver's answer, so a screenshot of this result is
+ *  safe to share. */
+export interface TestSendResult {
+    /** True when the receiver answered 2xx. A 4xx/5xx is still a *successful
+     *  test* — the request arrived and the receiver rejected it on its own
+     *  terms, which is exactly the information the user asked for. */
+    ok: boolean;
+    status: number;
+    elapsedMs: number;
+    /** First 300 characters of the receiver's response body. */
+    reply: string;
+    /** True when the 300-char cap cut a longer reply. */
+    truncated: boolean;
+    sentAt: string;
 }
 
 export interface OutboundWebhookInput {
@@ -115,6 +138,20 @@ export async function deleteOutboundWebhook(id: string): Promise<void> {
     return request('DELETE', `/v1/me/outbound-webhooks/${encodeURIComponent(id)}`);
 }
 
+
+/**
+ * Ask the server to POST a synthetic payload to this webhook and report the
+ * receiver's reply. The server runs the same delivery code the background
+ * worker does, so this verifies the URL, the custom headers and the signature
+ * in one go — without sending any real mail and without the browser ever
+ * seeing the signing secret.
+ *
+ * A non-2xx from the receiver resolves normally with `ok: false`; only a
+ * failure to reach the receiver at all rejects (ApiError, status 502).
+ */
+export async function testOutboundWebhook(id: string): Promise<TestSendResult> {
+    return request('POST', `/v1/me/outbound-webhooks/${encodeURIComponent(id)}/test`);
+}
 /** True when the server doesn't expose the feature at all, so the panel can
  *  stay hidden instead of showing a permanent error. */
 export function isOutboundWebhooksUnavailable(err: unknown): boolean {

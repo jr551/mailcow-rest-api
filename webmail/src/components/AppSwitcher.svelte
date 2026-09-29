@@ -3,6 +3,7 @@
     // Calendar. Sits flush against the existing sidebar.
     import { ui } from '../lib/store.svelte';
     import { recordView } from '../lib/recent-views.svelte';
+    import { settings } from '../lib/settings.svelte';
     import Icon from './Icon.svelte';
 
     function go(app: 'mail' | 'calendar' | 'ai' | 'drive', title: string) {
@@ -40,18 +41,23 @@
         <Icon name="calendar" size={20} />
         <span class="label">Calendar</span>
     </button>
-    <button
-        type="button"
-        class="rail-btn"
-        class:active={ui.app === 'ai'}
-        title="AI"
-        aria-pressed={ui.app === 'ai'}
-        onclick={() => go('ai', 'AI chat')}
-        data-testid="app-switch-ai"
-    >
-        <Icon name="sparkles" size={20} />
-        <span class="label">AI</span>
-    </button>
+        <!-- Hidden entirely when AI is hard-off — the rail is a flex column,
+             so removing the node leaves no dead space (unlike the panel
+             ghosting). -->
+        {#if settings.aiFeatures}
+            <button
+                type="button"
+                class="rail-btn"
+                class:active={ui.app === 'ai'}
+                title="AI"
+                aria-pressed={ui.app === 'ai'}
+                onclick={() => go('ai', 'AI chat')}
+                data-testid="app-switch-ai"
+            >
+                <Icon name="sparkles" size={20} />
+                <span class="label">AI</span>
+            </button>
+        {/if}
     <button
         type="button"
         class="rail-btn"
