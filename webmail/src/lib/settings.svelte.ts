@@ -303,14 +303,29 @@ function load(): Settings {
 
 /* Did a pre-flip profile auto-allow remote images?
  *
- * The reader's old condition was `alwaysAllowImages || proxyImages ||
- * isImageTrusted(sender)`, so EITHER flag granted permission and the proxy
- * flag alone was enough. `proxyImages` shipped defaulting to true, so an
- * absent field means "on". This is the single definition of that rule,
- * shared by load() and migrateRemoteImagesDefault so the live state and the
- * rewritten blob cannot disagree for the session before the rewrite lands. */
+ * The migration exists to preserve EFFECTIVE behaviour, not to re-litigate
+ * consent. Before the flip the reader auto-allowed when
+ * `alwaysAllowImages || proxyImages || isImageTrusted(sender)`, and
+ * `proxyImages` shipped defaulting to true — so the overwhelming majority of
+ * profiles were auto-allowing simply because the field was absent.
+ *
+ * The earlier version of this rule asked for an explicit
+ * `alwaysAllowImages: true` and treated everything else as blocking. That
+ * was wrong twice over: it flipped the common profile to prompting (the
+ * exact silent-overnight-breakage this migration exists to prevent), and it
+ * inverted `proxyImages: false` into consent-by-absence.
+ *
+ * What is left: a profile is migrated to "allowed" unless it was EXPLICITLY
+ * strict — both flags explicitly off. That is the one shape that was already
+ * blocking, and it stays blocking. `proxyImages: false` alone is a note about
+ * HOW images are fetched, not consent, so it neither grants nor revokes it.
+ *
+ * New profiles have no blob, take the fresh blocked-by-default, and are
+ * where the privacy win actually lands.
+ */
 function preRemoteImagesAutoAllowed(parsed: Record<string, unknown>): boolean {
-    return parsed.alwaysAllowImages === true || parsed.proxyImages !== false;
+    const explicitlyStrict = parsed.alwaysAllowImages === false && parsed.proxyImages === false;
+    return !explicitlyStrict;
 }
 
 /* Remote images: blocked by default from this release onward.

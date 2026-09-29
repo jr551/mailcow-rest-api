@@ -77,9 +77,14 @@
     onkeydown={(e) => {
         const t = e.target as HTMLElement;
         if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return;
+        // CONTENTEDITABLE TOO. The compose body is a TipTap surface
+        // (contenteditable), so without this any word containing "d" or "m"
+        // — i.e. almost every sentence — switched the app to Drive or Mail
+        // while the user was mid-typing. The keyup/keypress would then land
+        // wherever the app went, which is how the character was lost.
+        if (t && t.isContentEditable) return;
         if ((e.key === 'm' || e.key === 'M') && !e.ctrlKey && !e.metaKey) ui.app = 'mail';
         if ((e.key === 'd' || e.key === 'D') && !e.ctrlKey && !e.metaKey) ui.app = 'drive';
-        // 'c' is taken by calendar's own create-event shortcut when calendar is active.
     }}
 />
 

@@ -40,9 +40,12 @@
     }
 
     function onKeydown(e: KeyboardEvent) {
-        // Skip when typing into form fields.
+        // Skip when typing into form fields — and into the compose body's
+        // TipTap surface, which is CONTENTEDITABLE rather than a textarea.
+        // Otherwise a "1" or "t" typed into a draft flips the calendar view
+        // mid-sentence. Same guard Layout.svelte already uses.
         const t = e.target as HTMLElement;
-        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return;
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
         if (modalOpen) return;
         if (e.key === '1') view = 'month';
         else if (e.key === '2') view = 'schedule';
