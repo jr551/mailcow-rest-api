@@ -46,11 +46,21 @@ Every preference lives in one searchable modal. The left rail groups 19 sections
 
 ## Context menu
 
-Right-click any message for Open / Star / Read / Archive / **Create rule from message** / Block sender / **Block domain** / **Block root domain** / Trash. "Move to…" is a submenu rather than an inline folder list, so the menu stays a fixed handful of actions however many mailboxes the account has.
+Right-click any message for Open / Star / Read / Archive / **Create rule from message** / **Send to external webhook** / Block sender / **Block domain** / **Block root domain** / Trash. The two variable-width items — "Move to…" and "Send to external webhook…" — are submenus rather than inline lists, so the menu stays a fixed handful of actions however many mailboxes or webhooks the account has.
 
 The three block items are one code path differing only in the pattern they apply: the exact address, `*@` the full host, or `*@` the registrable domain (so `deals@mail.promo.example.co.uk` offers `*@mail.promo.example.co.uk` and `*@example.co.uk` — the second is the one that catches a spammer rotating subdomains). Both wider options disappear when there is nothing useful to derive (no From address, an IP literal, or a host that is already its own root). The confirm dialog and the success toast name the exact pattern, because `*@example.co.uk` is a much bigger hammer than a single address.
 
 ![Context menu](docs/screenshots/message-context-menu.png)
+
+## Link safety
+
+Clicking a link inside a message never opens it straight away. The destination is looked up first and shown with what the checker actually found, and a link with no verdict is labelled as no verdict rather than as safe:
+
+![Link safety prompt](docs/screenshots/link-safety-prompt.png)
+
+The check is deliberately hard to misread. **Never scanned** is not an all-clear and says so in words; **not checked** and **check timed out** are distinct from **harmless**; a plain-`http://` destination is called out separately from its verdict; and a malicious hit is labelled as malicious with the count of engines that flagged it. The way through is always there and always says what it does — a link is never trapped, because a prompt you cannot dismiss is just a wall. Cancel closes without opening anything.
+
+The lookup is a server call to `GET /v1/link-check?url=…` (VirusTotal, with the key server-side), so the provider key stays off the browser as with every other AI-backed feature. It needs AI features switched on; with them off the prompt does not appear and links behave like ordinary links. Turn it off independently under **Settings → Junk email → Link safety**.
 
 ## Screenshots
 
@@ -58,12 +68,13 @@ The three block items are one code path differing only in the pattern they apply
 |---|---|
 | ![AI panel](docs/screenshots/desktop-ai-panel.png) AI assistant panel | ![Compose](docs/screenshots/desktop-compose.png) Compose |
 | ![Message](docs/screenshots/desktop-message-dark.png) Message reading (dark) | ![Mobile](docs/screenshots/mobile-inbox.png) Mobile/PWA inbox |
+| ![Link safety](docs/screenshots/link-safety-prompt.png) Link-safety prompt | ![Inbox](docs/screenshots/outlook-inbox.png) Outlook inbox, light |
 
 ## What it includes
 
 - Desktop mailbox UI: folders, search, filters, message detail, attachments, compose, reply, forward, right-click context menu and multi-select.
 - Calendar and drive views backed by the REST API.
-- AI workflows for summarising, drafting, inbox sorting, action extraction, translation, phishing checks and TTS where configured.
+- AI workflows for summarising, drafting, inbox sorting, action extraction, translation, phishing checks, link-safety checks and TTS where configured.
 - Tracking, sender policy, blocked recipients, shortcuts, density, theme, and PWA install surfaces.
 - Mobile entry point with an iOS Mail-inspired layout for inbox, message reading, compose, folders and settings.
 

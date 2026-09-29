@@ -2159,9 +2159,15 @@
                     <!-- Link safety. Sits in the same section as the scam
                          scan because it is the same kind of thing: a
                          pre-flight check on a message before you act on it.
-                         It is NOT a sub-toggle of the scan above — it works
-                         with AI features off — so it is its own card rather
-                         than a knob inside that one. -->
+                         It is NOT a sub-toggle of the scan above — it has its
+                         own switch and is independent of the scan toggle. It
+                         IS subordinate to AI features, though:
+                         linkCheckEnabled() requires settings.aiFeatures, so
+                         turning AI off disables link checking too. That is
+                         deliberate — the hard-off must not be circumvented by
+                         a feature that still ships the URL somewhere — and it
+                         is why the card reads as inert rather than claiming
+                         to work. -->
                     <div class="card">
                         <h4><Icon name="shield" size={13} /> Link safety</h4>
                         {#if !settings.aiFeatures}

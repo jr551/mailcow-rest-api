@@ -35,7 +35,7 @@ docker run --rm -p 3001:3001 \
 | Area | What you get |
 |---|---|
 | 📬 Mail | Read, search, move, flag, delete, send, attachments, raw source |
-| 🤖 AI | Inbox sort, summarize, draft reply, phishing scan, translate (server-proxied, the provider key never reaches the browser) |
+| 🤖 AI | Inbox sort, summarize, draft reply, phishing scan, link-safety check, translate (server-proxied, the provider key never reaches the browser) |
 | 🔗 Webhook inboxes | Give a service a URL, its POSTs land in your INBOX |
 | 📤 Outbound webhooks | A mail-rule action POSTs matching mail (headers, body, attachments) to your URL |
 | 🔑 Agent links | One click → a 24 h pasteable credential for MCP/scripts |
