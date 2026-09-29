@@ -937,6 +937,89 @@
             tooltip: `Receiving MTA didn't surface SPF/DKIM/DMARC results for this message.`
         };
     }
+
+    // How many indicator bullets fit in the floating warning bubble
+    // before it stops being a glance and becomes a wall of text. The
+    // full list is always in the blocking phishing-overlay card, so
+    // nothing is lost by capping it here.
+    const BUBBLE_INDICATOR_LIMIT = 3;
+    const INDICATOR_MAX_CHARS = 120;
+
+    // The model returns `indicators` — its own list of specific red
+    // flags — and until now the warning bubble showed only the one-line
+    // `reasoning`. A user told "looks like a scam" with no reason can't
+    // calibrate: they either trust the verdict blindly or ignore it
+    // entirely. The reasons are already being paid for.
+    //
+    // Trimmed because models occasionally emit a whole paragraph per
+    // bullet; a 300-char bullet destroys the bubble's scannability.
+    type ScanIndicators = { items: string[]; total: number; overflow: number };
+    function scanIndicators(list: string[] | null | undefined): ScanIndicators {
+        const all = (Array.isArray(list) ? list : [])
+            .map((s) => String(s ?? '').replace(/\s+/g, ' ').trim())
+            .filter(Boolean);
+        return {
+            items: all.slice(0, BUBBLE_INDICATOR_LIMIT).map((s) => (
+                s.length > INDICATOR_MAX_CHARS ? `${s.slice(0, INDICATOR_MAX_CHARS - 1).trimEnd()}…` : s
+            )),
+            total: all.length,
+            overflow: Math.max(0, all.length - BUBBLE_INDICATOR_LIMIT)
+        };
+    }
+
+    // `confidence` is the model's confidence in its *phishing* call, NOT
+    // in the message being safe. So a "clean" verdict at confidence 0.05
+    // means "95% sure this isn't phishing" — a strong result — while 0.6
+    // means the model is genuinely torn. The old tooltip said "95% safe"
+    // for the first case, which is arithmetically right and
+    // informationally useless: it presented a decisive result and a
+    // coin-flip identically.
+    //
+    // Both thresholds stay user-tunable and their DEFAULTS are untouched
+    // — what counts as flagged is still entirely the floor's job. This
+    // only changes how a verdict that did NOT cross the floor is
+    // described, so no verdict flips as a result.
+    // One threshold, not two. Below this the model is close enough to
+    // calling it phishing that the "clean" tick is not earned, even
+    // though the floor says don't flag.
+    const NEAR_MISS_RATIO = 0.6;
+
+    type ScanClaim = { label: string; detail: string; confident: boolean };
+    function scanClaim(
+        flagged: boolean,
+        confidence: number,
+        floor: number,
+        positiveWord: string,
+        cleanWord: string
+    ): ScanClaim {
+        const c = Math.max(0, Math.min(1, confidence || 0));
+        if (flagged) {
+            // Already crossed the floor, so the model was at least that
+            // sure — the number means what it looks like it means.
+            return {
+                label: positiveWord,
+                detail: `${Math.round(c * 100)}% confidence this is phishing.`,
+                confident: true
+            };
+        }
+        // Not flagged. Two cases were previously rendered identically as
+        // a reassuring green tick:
+        //   c < threshold  — the model put real weight on "phishing"
+        //                     but not enough to cross the floor
+        //   c ≈ 0          — the model was decisive that this is clean
+        if (c >= floor * NEAR_MISS_RATIO) {
+            return {
+                label: 'Near miss',
+                detail: `${Math.round(c * 100)}% phishing confidence — under your ${Math.round(floor * 100)}% threshold, so not flagged, but closer than a clean result. Read it before clicking anything.`,
+                confident: false
+            };
+        }
+        return {
+            label: cleanWord,
+            detail: `Scanned — model puts phishing odds at ${Math.round(c * 100)}%.`,
+            confident: true
+        };
+    }
 </script>
 
 <svelte:window
@@ -1443,29 +1526,29 @@
                     {/if}
                     {#if settings.phishingScan && phishingResult && !phishingScanning}
                         {@const flagged = phishingResult.isPhishing && phishingResult.confidence >= settings.phishingScanConfidenceFloor}
+                        {@const phishClaim = scanClaim(flagged, phishingResult.confidence, settings.phishingScanConfidenceFloor, 'Phishing risk', 'Scam-scanned')}
                         <span
                             class="proxy-badge scam-badge"
                             class:warn={flagged}
-                            title={flagged
-                                ? `Scam scan: phishing indicators detected (${Math.round(phishingResult.confidence * 100)}%). ${phishingResult.reasoning || ''}`.trim()
-                                : `Scam scan: clean (${Math.round((1 - phishingResult.confidence) * 100)}% safe).`}
+                            class:hedged={!phishClaim.confident}
+                            title={`Scam scan: ${phishClaim.detail}${phishingResult.reasoning ? ` ${phishingResult.reasoning}` : ''}`}
                             data-testid="scam-scanned-badge"
                         >
-                            <Icon name={flagged ? 'shieldAlert' : 'shield'} size={10} />
-                            {flagged ? 'Phishing risk' : 'Scam-scanned'}
+                            <Icon name={flagged ? 'shieldAlert' : phishClaim.confident ? 'shield' : 'info'} size={10} />
+                            {phishClaim.label}
                         </span>
                         {#if settings.spamSuggest}
                             {@const spamFlagged = phishingResult.isSpam && phishingResult.spamConfidence >= settings.spamSuggestConfidenceFloor}
+                            {@const spamClaim = scanClaim(spamFlagged, phishingResult.spamConfidence, settings.spamSuggestConfidenceFloor, 'Looks like spam', 'Spam-scanned')}
                             <span
                                 class="proxy-badge spam-badge"
                                 class:warn={spamFlagged}
-                                title={spamFlagged
-                                    ? `Spam scan: looks like spam (${Math.round(phishingResult.spamConfidence * 100)}%). ${phishingResult.spamReasoning || ''}`.trim()
-                                    : `Spam scan: clean (${Math.round((1 - phishingResult.spamConfidence) * 100)}% likely legitimate).`}
+                                class:hedged={!spamClaim.confident}
+                                title={`Spam scan: ${spamClaim.detail}${phishingResult.spamReasoning ? ` ${phishingResult.spamReasoning}` : ''}`}
                                 data-testid="spam-scanned-badge"
                             >
-                                <Icon name={spamFlagged ? 'shieldAlert' : 'shield'} size={10} />
-                                {spamFlagged ? 'Looks like spam' : 'Spam-scanned'}
+                                <Icon name={spamFlagged ? 'shieldAlert' : spamClaim.confident ? 'shield' : 'info'} size={10} />
+                                {spamClaim.label}
                             </span>
                         {/if}
                     {/if}
@@ -1497,14 +1580,33 @@
                         ><Icon name="close" size={11} /></button>
                     </div>
                 {:else if phishingResult?.isPhishing && (phishingResult?.confidence ?? 0) >= settings.phishingScanConfidenceFloor && !phishingDismissed}
+                    <!-- {@const} must be a direct child of a block, not of a
+                         plain element, so it sits here rather than inside the
+                         bubble div. -->
+                    {@const ind = scanIndicators(phishingResult?.indicators)}
                     <div class="phishing-bubble phishing-bubble-floating scam-bubble-floating" role="status" data-testid="phishing-warning-bubble">
                         <span class="smoke smoke-1" aria-hidden="true"></span>
                         <span class="smoke smoke-2" aria-hidden="true"></span>
                         <span class="smoke smoke-3" aria-hidden="true"></span>
                         <Icon name="shieldAlert" size={14} />
-                        <span class="phish-bubble-text">
-                            <strong>Looks like a scam.</strong>
-                            {phishingResult?.reasoning ? phishingResult.reasoning.slice(0, 140) : 'Be careful with links + attachments.'}
+                        <span class="phish-bubble-stack">
+                            <span class="phish-bubble-text">
+                                <strong>Looks like a scam.</strong>
+                                {phishingResult?.reasoning ? phishingResult.reasoning.slice(0, 140) : 'Be careful with links + attachments.'}
+                            </span>
+                            {#if ind.total > 0}
+                                <!-- The model's own reasons, not just its verdict. A user
+                                     who can see WHY is far better placed to judge the
+                                     call than one shown only a confidence number. -->
+                                <ul class="phish-indicators" data-testid="phish-indicators">
+                                    {#each ind.items as indicator}
+                                        <li>{indicator}</li>
+                                    {/each}
+                                </ul>
+                                {#if ind.overflow > 0}
+                                    <span class="phish-indicators-more" data-testid="phish-indicators-more">+{ind.overflow} more indicator{ind.overflow === 1 ? '' : 's'}</span>
+                                {/if}
+                            {/if}
                         </span>
                         <button
                             type="button"
@@ -1518,7 +1620,17 @@
                             }}
                         ><Icon name="close" size={11} /></button>
                     </div>
-                {:else if phishingResult && !phishingResult.isPhishing && (phishingResult.confidence ?? 0) >= 0.4 && (phishingResult.confidence ?? 0) < settings.phishingScanConfidenceFloor && !phishingDismissed && ((phishingResult.indicators?.length ?? 0) > 0 || phishingResult.reasoning)}
+                <!-- "Mixed signals" is a CONTINUOUS band, not one starting at a
+                     hardcoded 0.4. The old floor here meant a not-phishing
+                     verdict at, say, 0.3 that still carried indicators showed
+                     the user NOTHING — the model had flagged concerns and we
+                     dropped them, which defeats the point of surfacing
+                     indicators at all. Any not-phishing result below the
+                     user's own floor that carries a reason or an indicator
+                     now surfaces. The user's configured floor is still the
+                     only threshold that matters; this just removes the dead
+                     band underneath it. -->
+                {:else if phishingResult && !phishingResult.isPhishing && (phishingResult.confidence ?? 0) < settings.phishingScanConfidenceFloor && !phishingDismissed && ((phishingResult.indicators?.length ?? 0) > 0 || phishingResult.reasoning)}
                     <div class="scam-bubble scam-bubble-borderline scam-bubble-floating" role="status" data-testid="scam-borderline-bubble">
                         <span class="scam-shimmer" aria-hidden="true"></span>
                         <Icon name="shieldAlert" size={14} />
@@ -2449,10 +2561,21 @@
         gap: 12px;
         flex-wrap: wrap;
     }
-    /* Toolbar badges. Each one wears its own colour family so the user
-     * can read the row at a glance: green = image proxy, blue = AI scam
-     * scan, purple = AI spam scan. The .warn modifier swaps the family
-     * for an amber alert tone. */
+    /* Toolbar badges. The family is chosen by tokens, never by a literal:
+     * the two shipped skins (Outlook, Gmail) plus the user's accent layer
+     * each repaint --accent/--warning/--danger, and a hardcoded blue here
+     * survived the theme switch looking like a third, unowned colour. The
+     * severity ladder, quiet → loud:
+     *   clean+certain  = --success / --success-soft   (the proxy default)
+     *   clean+uncertain = --text-tertiary / --bg-tag   ("I looked, saw a
+     *                     maybe") — deliberately NOT green. A 45%-confidence
+     *                     pass and a 2%-confidence pass both read "Scam-scanned"
+     *                     today, which overstates the first.
+     *   flagged         = --danger (phishing) / --warning (spam)
+     * `.warn` alone stays amber because the image-proxy badge shares it for
+     * "Proxy limited", which is a soft warning and not a danger. The
+     * scam/spam variants therefore re-assert their own tone at higher
+     * specificity instead of borrowing the shared one. */
     .proxy-badge {
         display: inline-flex;
         align-items: center;
@@ -2466,32 +2589,53 @@
         border: 1px solid color-mix(in srgb, var(--success) 35%, transparent);
         border-radius: 999px;
     }
+    /* AI scam scan: the user's accent, so a clean scan reads as "the app
+     * checked this" rather than as a safety claim. */
     .proxy-badge.scam-badge {
-        color: #1d4ed8;
-        background: color-mix(in srgb, #2563eb 14%, transparent);
-        border-color: color-mix(in srgb, #2563eb 38%, transparent);
+        color: var(--accent-text);
+        background: var(--accent-soft);
+        border-color: color-mix(in srgb, var(--accent) 38%, transparent);
     }
+    /* AI spam scan: the same amber shelf the spam bubble uses, so the two
+     * halves of one scan response share a visual language. */
     .proxy-badge.spam-badge {
-        color: #6d28d9;
-        background: color-mix(in srgb, #7c3aed 14%, transparent);
-        border-color: color-mix(in srgb, #7c3aed 38%, transparent);
-    }
-    :global(html.dark) .proxy-badge.scam-badge,
-    :global([data-theme="dark"]) .proxy-badge.scam-badge {
-        color: #93c5fd;
-        background: color-mix(in srgb, #2563eb 22%, transparent);
-        border-color: color-mix(in srgb, #2563eb 50%, transparent);
-    }
-    :global(html.dark) .proxy-badge.spam-badge,
-    :global([data-theme="dark"]) .proxy-badge.spam-badge {
-        color: #c4b5fd;
-        background: color-mix(in srgb, #7c3aed 22%, transparent);
-        border-color: color-mix(in srgb, #7c3aed 50%, transparent);
+        color: var(--warning);
+        background: var(--warning-soft);
+        border-color: color-mix(in srgb, var(--warning) 38%, transparent);
     }
     .proxy-badge.warn {
         color: var(--warning);
         background: var(--warning-soft);
         border-color: color-mix(in srgb, var(--warning) 35%, transparent);
+    }
+    /* Confirmed phishing outranks every other badge in the toolbar, so it
+     * takes the danger token and a solid border rather than a tint. */
+    .proxy-badge.scam-badge.warn {
+        color: var(--danger);
+        background: var(--danger-soft);
+        border-color: color-mix(in srgb, var(--danger) 55%, transparent);
+    }
+    .proxy-badge.spam-badge.warn {
+        color: var(--warning);
+        background: var(--warning-soft);
+        border-color: color-mix(in srgb, var(--warning) 55%, transparent);
+    }
+    /* "Scanned, but the model wasn't sure" — see the sibling's
+     * `scanClaim`/`class:hedged`. A clean verdict reached below
+     * 0.6 × the confidence floor used to render in exactly the same
+     * accent pill as a 0.99 one, which overstates the weaker call.
+     * Grey, dashed, and icon-swapped (markup picks `info` over
+     * `shield`) is enough differentiation; it deliberately does NOT
+     * go amber, because amber is this UI's "something is wrong"
+     * signal and this is the absence of a result, not a result.
+     * `.warn.hedged` is intentionally not a rule: scanClaim only
+     * reports low confidence on the *unflagged* branch, so that
+     * combination is unreachable and a style for it would be dead. */
+    .proxy-badge.hedged {
+        color: var(--text-tertiary);
+        background: var(--bg-tag);
+        border-color: var(--border-soft);
+        border-style: dashed;
     }
     .seg {
         display: inline-flex;
@@ -2915,9 +3059,6 @@
         animation: none;
         transform: scale(1.03);
     }
-    @media (prefers-reduced-motion: reduce) {
-        .phishing-skip { animation: none; }
-    }
     .body {
         position: relative;
     }
@@ -2932,7 +3073,16 @@
     /* Soft floating phishing warning — hovers over the top of .body with
        three rising "smoke" puffs behind it, then fades itself out after
        ~8s unless the user clicks ✕ first. Overlay, not banner: no
-       margins, so it takes no space in the flow. */
+       margins, so it takes no space in the flow.
+
+       Tokens, not violet literals. This rule was pinned to #9333ea /
+       #c084fc, so a Gmail-red or Outlook-blue user got a purple bubble
+       that belonged to no skin in the picker — and because the skins
+       paint their palette as INLINE vars on <html>, a literal here is
+       also unreachable by any amount of theming. --danger is the
+       family the app already reserves for "this is harmful", and it is
+       the one that gets repainted per skin AND by the user's semantic
+       overrides, so the warning follows the palette it lands in. */
     .phishing-bubble {
         position: relative;
         padding: 10px 14px;
@@ -2941,11 +3091,11 @@
         gap: 10px;
         background: linear-gradient(
             135deg,
-            color-mix(in srgb, #9333ea 18%, var(--bg-surface)),
-            color-mix(in srgb, #c084fc 12%, var(--bg-surface))
+            color-mix(in srgb, var(--danger) 18%, var(--bg-surface)),
+            color-mix(in srgb, var(--danger) 10%, var(--bg-surface))
         );
-        border: 1px solid color-mix(in srgb, #9333ea 35%, var(--border-subtle));
-        border-radius: 14px;
+        border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border-subtle));
+        border-radius: var(--radius-md);
         color: var(--text-primary);
         font-size: 13px;
         overflow: hidden;
@@ -3013,36 +3163,55 @@
         overflow: hidden;
         animation: phish-bubble-in 360ms ease-out;
     }
+    /* The loudest thing the scan can say, and the only one that sits over
+     * a blurred message body. Severity ladder, quietest → loudest:
+     *   scanning   = surface + soft border, no fill   (nothing concluded)
+     *   borderline = surface + DASHED warning border   (something to note)
+     *   spam       = warning-soft fill                (actionable suggestion)
+     *   phishing   = danger-soft fill + solid border  (obvious, unmissable)
+     *
+     * Every fill mixes toward --bg-surface rather than being a saturated
+     * gradient, which is what lets the ink stay --text-primary: a literal
+     * gradient forces a fixed light ink (#fdf4ff) that is unreadable the
+     * moment a skin's --danger lands light in dark mode, or dark in light
+     * mode. Tinting the surface instead means the bubble is legible under
+     * all four skin × theme combinations with no ink switch to get wrong. */
     .phishing-bubble-floating {
         max-width: min(560px, 100%);
-        padding: 10px 14px;
-        border-radius: 999px;
+        padding: 12px 14px;
+        border-radius: var(--radius-lg);
         background:
-            radial-gradient(120% 220% at 100% 0%, rgba(216, 180, 254, 0.55), transparent 55%),
-            linear-gradient(135deg, #7c3aed 0%, #a855f7 50%, #d8b4fe 100%);
-        border: 1px solid color-mix(in srgb, #7c3aed 65%, transparent);
-        box-shadow:
-            0 10px 28px rgba(124, 58, 237, 0.30),
-            inset 0 1px 0 rgba(255, 255, 255, 0.30);
-        color: #fdf4ff;
+            linear-gradient(
+                135deg,
+                color-mix(in srgb, var(--danger) 16%, var(--bg-surface)),
+                color-mix(in srgb, var(--danger) 8%, var(--bg-surface))
+            );
+        border: 1px solid color-mix(in srgb, var(--danger) 55%, transparent);
+        /* A solid danger bar on the leading edge: the severity is legible
+         * from the shape alone, before a word is read. */
+        border-left: 4px solid var(--danger);
+        box-shadow: var(--shadow-md);
+        color: var(--text-primary);
         font-size: 13.5px;
         /* The fade-out has to live on the -floating variant: it is declared
            after `.phishing-bubble`, so the duplicate keyframe list there was
            overriding it and the warning sat on the message forever. */
         animation: phish-bubble-in 360ms ease-out,
-                   ghost-bob 4s ease-in-out 360ms infinite,
                    scan-bubble-out 700ms ease-in 8200ms forwards;
     }
-    /* Scanning state — inviting purple gradient + spinning orb. */
+    /* Scanning state — nothing has been concluded yet, so this is the
+     * quietest of the four: a plain surface with an accent hairline and
+     * the spinning orb for the motion. It used to be a saturated violet
+     * gradient, which made an *in-progress* scan shout as loudly as a
+     * confirmed phishing hit — the exact "ordinary mail looks unsafe"
+     * failure. */
     .scam-bubble-scanning {
-        background:
-            radial-gradient(120% 220% at 0% 0%, rgba(216, 180, 254, 0.42), transparent 60%),
-            linear-gradient(135deg, #6d28d9 0%, #8b5cf6 55%, #c4b5fd 100%);
-        border: 1px solid color-mix(in srgb, #6d28d9 65%, transparent);
-        box-shadow: 0 10px 28px rgba(109, 40, 217, 0.32), inset 0 1px 0 rgba(255,255,255,0.28);
-        color: #f5f3ff;
+        background: var(--bg-surface);
+        border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border-subtle));
+        box-shadow: var(--shadow-md);
+        color: var(--text-secondary);
     }
-    .scam-bubble-scanning :global(svg) { color: #f5f3ff; flex-shrink: 0; }
+    .scam-bubble-scanning :global(svg) { color: var(--text-tertiary); flex-shrink: 0; }
     .scam-orb {
         position: relative;
         width: 26px;
@@ -3057,8 +3226,8 @@
         inset: 0;
         border-radius: 50%;
         border: 2px solid transparent;
-        border-top-color: #ede9fe;
-        border-right-color: #c4b5fd;
+        border-top-color: var(--accent);
+        border-right-color: color-mix(in srgb, var(--accent) 55%, transparent);
         animation: scam-orb-spin 1s linear infinite;
     }
     .scam-orb-core {
@@ -3071,25 +3240,36 @@
         0%, 100% { transform: scale(1); opacity: 0.92; }
         50%      { transform: scale(1.18); opacity: 1; }
     }
-    /* Borderline state — softer indigo-violet, with a slow shimmer
-     * sweep so the user notices something nuanced is being said. */
+    /* Borderline state — "the model found something but not enough to
+     * flag it". It sits BETWEEN the quiet scanning bubble and the
+     * danger fill on purpose, so it uses the warning family with a
+     * dashed edge: a solid border would be indistinguishable from a
+     * real warning at a glance, and a fill as strong as the phishing
+     * bubble's would train the user to discount the one that matters. */
     .scam-bubble-borderline {
-        background: linear-gradient(135deg, #4338ca 0%, #6366f1 60%, #a5b4fc 100%);
-        border: 1px solid color-mix(in srgb, #4338ca 60%, transparent);
-        color: #eef2ff;
-        box-shadow: 0 6px 18px rgba(67, 56, 202, 0.26);
+        background: linear-gradient(
+            135deg,
+            color-mix(in srgb, var(--warning) 14%, var(--bg-surface)),
+            color-mix(in srgb, var(--warning) 7%, var(--bg-surface))
+        );
+        border: 1px dashed color-mix(in srgb, var(--warning) 55%, transparent);
+        color: var(--text-primary);
+        box-shadow: var(--shadow-md);
         /* The rail is absolutely positioned over the body, so a bubble that
            never leaves covers the opening lines and swallows clicks. */
         animation: phish-bubble-in 360ms ease-out,
                    scan-bubble-out 700ms ease-in 8200ms forwards;
     }
-    .scam-bubble-borderline :global(svg) { color: #eef2ff; flex-shrink: 0; }
+    .scam-bubble-borderline :global(svg) { color: var(--warning); flex-shrink: 0; }
+    /* The shimmer swept a white gradient across the old saturated fill.
+     * On a surface-tinted bubble that reads as a grey smear, so it now
+     * sweeps the warning token itself and stays faint. */
     .scam-shimmer {
         position: absolute;
         inset: 0;
         background: linear-gradient(120deg,
             transparent 0%,
-            rgba(255,255,255,0.18) 50%,
+            color-mix(in srgb, var(--warning) 16%, transparent) 50%,
             transparent 100%);
         transform: translateX(-100%);
         animation: scam-shimmer 3.6s ease-in-out infinite;
@@ -3099,50 +3279,114 @@
         0%, 25%   { transform: translateX(-100%); }
         60%, 100% { transform: translateX(100%); }
     }
-    /* Common close button on the new bubbles. */
-    .scam-bubble-scanning .phish-bubble-close,
-    .scam-bubble-borderline .phish-bubble-close {
-        background: rgba(255, 255, 255, 0.18);
-        color: #ffffff;
+    /* Close buttons, once per bubble tone. These were all `rgba(255,255,255,
+     * …)` + white ink, which was correct only because the bubbles used to
+     * be saturated light gradients; now that they are surface-tinted, a
+     * translucent white chip is invisible on a light skin. Each one
+     * inverts against its own surface instead. */
+    .phish-bubble-close {
+        background: var(--bg-hover);
+        color: var(--text-secondary);
     }
-    .scam-bubble-scanning .phish-bubble-close:hover,
-    .scam-bubble-borderline .phish-bubble-close:hover {
-        background: rgba(255, 255, 255, 0.32);
+    .phish-bubble-close:hover {
+        background: var(--bg-active);
+        color: var(--text-primary);
     }
-    @media (prefers-reduced-motion: reduce) {
-        .scam-orb-ring, .scam-orb-core, .scam-shimmer { animation: none; }
-    }
-    .phishing-bubble-floating :global(svg) { color: #fdf4ff; }
     .phishing-bubble-floating .phish-bubble-close {
-        background: rgba(255, 255, 255, 0.20);
-        color: #fdf4ff;
+        background: color-mix(in srgb, var(--danger) 18%, transparent);
+        color: var(--text-primary);
     }
     .phishing-bubble-floating .phish-bubble-close:hover {
-        background: rgba(255, 255, 255, 0.32);
+        background: color-mix(in srgb, var(--danger) 30%, transparent);
     }
-    @keyframes ghost-bob {
-        0%, 100% { transform: translateY(0); }
-        50%      { transform: translateY(-2px); }
-    }
+    /* ghost-bob is gone. The floating warning used a 4s infinite
+     * translateY loop purely to make it feel "alive"; on an overlay that
+ * sits over the user's text it never stopped moving, and it was one more
+     * infinite animation to suppress for reduced-motion users. The
+     * severity is now carried by colour, the solid left bar and the
+     * indicator list, none of which need motion. */
+    /* Spam suggestion. Deliberately a full-strength but flat warning fill
+     * rather than the old saturated orange gradient: the action here is
+     * "Move to Spam", which is reversible and one click away, so it should
+     * read as a suggestion the user can act on — not as the phishing
+     * warning, which sits over a blurred body and demands trust. The
+     * pill is square-cornered (`--radius-lg`, not 999px) so the two
+     * severities differ in SHAPE as well as colour, which is what keeps
+     * them distinguishable for a colour-blind reader. */
     .spam-bubble-floating {
         margin: 12px auto 6px;
         max-width: 560px;
-        border-radius: 999px;
+        border-radius: var(--radius-lg);
         /* Same reason as the borderline bubble: it sits over the message. */
         animation: phish-bubble-in 360ms ease-out,
                    scan-bubble-out 700ms ease-in 8200ms forwards;
-        /* Spam wears amber/orange so it never gets confused with the
-         * purple AI-scam-scan bubble. Different problem, different
-         * shelf. */
-        background: linear-gradient(135deg, #b45309 0%, #f59e0b 60%, #fcd34d 100%);
-        border: 1px solid color-mix(in srgb, #b45309 60%, transparent);
-        color: #1f1300;
-        box-shadow: 0 8px 22px rgba(180, 83, 9, 0.28), inset 0 1px 0 rgba(255,255,255,0.25);
+        background: var(--warning-soft);
+        border: 1px solid color-mix(in srgb, var(--warning) 50%, transparent);
+        border-left: 4px solid var(--warning);
+        color: var(--text-primary);
+        box-shadow: var(--shadow-md);
         padding: 10px 14px;
     }
-    .spam-bubble-floating :global(svg) { color: #4a2900; }
-    .phishing-bubble :global(svg) { color: #9333ea; flex-shrink: 0; }
+    .spam-bubble-floating :global(svg) { color: var(--warning); }
+    .phishing-bubble :global(svg) { color: var(--danger); flex-shrink: 0; }
     .phish-bubble-text { flex: 1; min-width: 0; }
+    /* The floating bubble is a flex ROW (icon | text | close), so the
+     * reasoning and the indicator list need a column wrapper to stack
+     * without pushing the close button out of the bubble. */
+    .phish-bubble-stack {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+    /* The model's reasons, surfaced in the same bubble as its verdict. */
+    .phish-indicators {
+        margin: 2px 0 0;
+        padding: 0;
+        list-style: none;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        font-size: 12.5px;
+        line-height: 1.35;
+    }
+    .phish-indicators li {
+        position: relative;
+        padding-left: 14px;
+        /* Inherits the bubble's own ink — the floating variant paints a
+         * light gradient with #fdf4ff text, the non-floating variant a
+         * surface-mixed tint, so a hardcoded colour would be wrong in
+         * one of them and unreadable in the other. */
+        opacity: 0.92;
+    }
+    .phish-indicators li::before {
+        content: '';
+        position: absolute;
+        left: 3px;
+        top: 0.55em;
+        width: 4px;
+        height: 4px;
+        border-radius: 50%;
+        background: currentColor;
+        opacity: 0.7;
+    }
+    .phish-indicators-more {
+        font-size: 11.5px;
+        opacity: 0.75;
+    }
+    /* A scan that did NOT clear the floor but came close. Deliberately
+     * muted rather than alarming: it is not a warning, it is the absence
+     * of a clean bill of health, and colouring it like a real flag would
+     * train the user to ignore the badge that does matter.
+     * Only the border/ink change — the badge keeps the same size and
+     * position, so nothing shifts when a scan result lands. */
+    .proxy-badge.hedged {
+        border-style: dashed;
+        border-color: var(--warning, currentColor);
+        color: var(--text-secondary);
+        opacity: 0.9;
+    }
     .phish-bubble-close {
         flex-shrink: 0;
         display: inline-flex;
@@ -3150,12 +3394,9 @@
         justify-content: center;
         width: 22px; height: 22px;
         border-radius: 50%;
-        background: rgba(147, 51, 234, 0.15);
-        color: #6b21a8;
         border: none;
         cursor: pointer;
     }
-    .phish-bubble-close:hover { background: rgba(147, 51, 234, 0.3); }
     /* Spam suggestion: cooler tone than the phishing warning so the two
        can sit on top of each other without competing visually. Stays
        until dismissed or the user clicks Move. */
@@ -3165,14 +3406,19 @@
         display: flex;
         align-items: center;
         gap: 10px;
-        background: color-mix(in srgb, #f59e0b 14%, var(--bg-surface));
-        border: 1px solid color-mix(in srgb, #f59e0b 35%, var(--border-subtle));
-        border-radius: 12px;
+        background: var(--warning-soft);
+        border: 1px solid color-mix(in srgb, var(--warning) 35%, var(--border-subtle));
+        border-radius: var(--radius-md);
         color: var(--text-primary);
         font-size: 13px;
     }
-    .spam-bubble :global(svg) { color: #b45309; flex-shrink: 0; }
+    .spam-bubble :global(svg) { color: var(--warning); flex-shrink: 0; }
     .spam-bubble-text { flex: 1; min-width: 0; }
+    /* "Move to Spam" is a solid, filled call to action. The amber ramp
+     * is only two stops, so a full-strength --warning fill has no darker
+     * --warning-hover to point at; the hover is built from mixing the
+     * token toward the surface instead, which stays correct under a
+     * repainted semantic palette rather than assuming #d97706. */
     .spam-bubble-action {
         flex-shrink: 0;
         display: inline-flex;
@@ -3182,13 +3428,18 @@
         font: inherit;
         font-weight: 600;
         font-size: 12.5px;
-        background: #f59e0b;
-        color: #1f1300;
+        background: var(--warning);
+        /* --text-primary rather than a baked dark brown: --warning is a
+         * light amber in every shipped skin, and the old #1f1300 was only
+         * correct because the bubble behind it was always light. */
+        color: var(--text-primary);
         border: none;
         border-radius: 999px;
         cursor: pointer;
     }
-    .spam-bubble-action:hover { background: #d97706; }
+    .spam-bubble-action:hover {
+        background: color-mix(in srgb, var(--warning) 82%, var(--text-primary));
+    }
     .spam-bubble-action[disabled] { opacity: 0.6; cursor: progress; }
     .spam-bubble-close {
         flex-shrink: 0;
@@ -3197,18 +3448,34 @@
         justify-content: center;
         width: 22px; height: 22px;
         border-radius: 50%;
-        background: rgba(245, 158, 11, 0.18);
-        color: #92400e;
+        background: color-mix(in srgb, var(--warning) 20%, transparent);
+        color: var(--text-primary);
         border: none;
         cursor: pointer;
     }
-    .spam-bubble-close:hover { background: rgba(245, 158, 11, 0.32); }
+    .spam-bubble-close:hover {
+        background: color-mix(in srgb, var(--warning) 34%, transparent);
+    }
+    /* The three rising "smoke" puffs behind the phishing warning.
+     *
+     * On prefers-reduced-motion they are hidden outright (opacity: 0),
+     * not merely paused: the keyframe's resting state is opacity 0, so
+     * "animation: none" alone would leave them parked at scale(0.7) in
+     * whatever opacity the last frame left, and a frozen blur is still a
+     * smear over the message text. The existing block already did this
+     * correctly for .smoke; it did NOT for the other three, which is
+     * what the widened query below fixes. */
     .smoke {
         position: absolute;
         bottom: -10px;
         width: 26px; height: 26px;
         border-radius: 50%;
-        background: radial-gradient(circle, rgba(147, 51, 234, 0.45), rgba(147, 51, 234, 0));
+        /* --danger, matching the bubble the puffs belong to. */
+        background: radial-gradient(
+            circle,
+            color-mix(in srgb, var(--danger) 40%, transparent),
+            color-mix(in srgb, var(--danger) 0%, transparent)
+        );
         filter: blur(6px);
         animation: phish-smoke 3.2s ease-in-out infinite;
         pointer-events: none;
@@ -3225,12 +3492,65 @@
         from { opacity: 0; transform: translateY(-6px); }
         to   { opacity: 1; transform: translateY(0); }
     }
-    @keyframes phish-bubble-out {
-        from { opacity: 1; }
-        to   { opacity: 0; transform: translateY(-6px); pointer-events: none; }
-    }
+    /* Reduced motion, done properly and in ONE place.
+     *
+     * The audit this replaces found four real gaps:
+     *  1. `.scam-bubble-scanning` and `.scam-bubble-borderline` and
+     *     `.spam-bubble-floating` animate via `phish-bubble-in` +
+     *     `scan-bubble-out … forwards`, but the old query only listed
+     *     `.phishing-bubble` — so for those three bubbles NOTHING was
+     *     suppressed. Only the floating PHISHING bubble was covered.
+     *  2. `animation: none` on the -floating variants also cancelled
+     *     `scan-bubble-out`, whose 8.2s delay is the auto-dismiss. The
+     *     JS timer still runs, but the element stayed fully opaque and
+     *     clickable because the fade no longer existed — so under
+     *     reduced motion the warning became PERMANENT. The fix is to
+     *     keep the auto-dismiss animation and drop only the decorative
+     *     ones.
+     *  3. `.scan-bubble-rail` (the `scan-rail-in` fade) was never
+     *     listed.
+     *  4. `.phishing-skip` and the orb/shimmer had their own separate
+     *     query blocks; consolidating means a future bubble cannot be
+     *     added and silently left un-animated.
+     *
+     *
+     * The bubbles' auto-dismiss is NOT a JS timer — there is no setTimeout
+     * anywhere in this component. The `scan-bubble-out 700ms ease-in
+     * 8200ms forwards` animation IS the dismiss. So the per-bubble list
+     * below is split rather than blanket-applied:
+     *   - decorative (infinite loops) and entrances: cancelled outright.
+     *   - the bubbles themselves: keep the auto-dismiss EXACTLY as-is, and
+     *     only neutralise the one-shot entrance. Cancelling them made the
+     *     warning permanent (it never faded); fast-forwarding the whole
+     *     `animation` list with 0.01ms made it flash and vanish instantly.
+     *     Both were regressions, and both are avoidable by naming the
+     *     entrance animation instead of writing `animation:`. */
     @media (prefers-reduced-motion: reduce) {
-        .phishing-bubble { animation: none; }
-        .smoke { animation: none; opacity: 0; }
+        /* Decorative loops and entrances — stop them outright. */
+        .smoke,
+        .scan-bubble-rail,
+        .scam-orb-ring,
+        .scam-orb-core,
+        .scam-shimmer,
+        .phishing-skip,
+        .phishing-spinner {
+            animation: none !important;
+        }
+        /* The smoke puffs' resting keyframe is opacity 0, so cancelling
+         * leaves them invisible anyway — stated explicitly so a future
+         * keyframe edit can't reintroduce frozen blobs over the text. */
+        .smoke { opacity: 0; }
+        /* Drop ONLY the entrance. The animation shorthand is restated
+         * in full because the `phish-bubble-in` entry has to disappear
+         * without disturbing the `scan-bubble-out` entry that follows it
+         * in the same comma list — a later `animation-name: none` would
+         * clear both. */
+        .scam-bubble-floating,
+        .phishing-bubble,
+        .phishing-bubble-floating,
+        .scam-bubble-borderline,
+        .spam-bubble-floating {
+            animation: phish-bubble-in 1ms linear, scan-bubble-out 700ms ease-in 8200ms forwards;
+        }
     }
 </style>

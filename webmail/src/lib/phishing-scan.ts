@@ -10,9 +10,13 @@ import { feedbackPayload } from './spam-feedback.svelte';
 import { apiUrl } from './api';
 
 // Bump on prompt/scale/OCR changes so stale entries don't show wrong UI.
-// v5: SPF/DKIM/DMARC verdicts now feed the scanner prompt, so a fail
-// that we couldn't see before may now flip a borderline message.
-const CACHE_KEY = 'webmail.phishing-scan.v5';
+// v5: SPF/DKIM/DMARC verdicts first fed the scanner prompt.
+// v6: the prompt now reads a `pass` as "not spoofed, keep looking" rather
+//     than as an all-clear, and treats `none` as unchecked instead of
+//     passed. Cached v5 verdicts were reasoned under the old reading, so
+//     reusing them would keep showing the over-confident "safe" answers
+//     this change exists to remove. One week of TTL re-scans them.
+const CACHE_KEY = 'webmail.phishing-scan.v6';
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const MAX_CACHE_ENTRIES = 500;
 

@@ -95,6 +95,11 @@
             body: m.text || '',
             html: m.html || '',
             headers: envelopeToHeaders(m.envelope),
+            // SPF/DKIM/DMARC describe the ENVELOPE sender, not the visible
+            // From: — the model weighs a fail as strong spoofing evidence
+            // and a pass as "not spoofed, keep looking". Without this the
+            // mobile scan is blind to the one hard signal the MTA gives us.
+            auth: m.auth ?? null,
             attachments: m.attachments,
             path,
             uid: m.uid

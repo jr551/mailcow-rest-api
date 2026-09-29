@@ -107,6 +107,10 @@ export async function runSpamSweep(opts: SweepOptions = {}): Promise<{
                 body: detail.text || '',
                 html: detail.html || '',
                 headers: envelopeToHeaders(detail.envelope),
+                // Same reasoning as the message views: without the
+                // envelope-sender verdicts the sweep ranks spoofed
+                // lookalike senders below genuine marketing mail.
+                auth: detail.auth ?? null,
                 attachments: detail.attachments,
                 path: inboxPath,
                 uid: item.uid
