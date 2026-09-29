@@ -1292,6 +1292,11 @@
                         </div>
                     {/if}
                     {#if settings.aiFeatures && isChatConfigured()}
+                        <!-- Opens the suggested-actions MENU. The panel-opener
+                             button further down previously shared its
+                             data-testid ("ai-btn"), which made the id
+                             ambiguous even though the two branches are
+                             mutually exclusive. -->
                         <div class="ai-tools-wrap">
                             <button
                                 type="button"
@@ -1299,7 +1304,7 @@
                                 onclick={() => openAiTools(d)}
                                 aria-haspopup="menu"
                                 aria-expanded={aiToolsOpen}
-                                data-testid="ai-btn"
+                                data-testid="ai-tools-btn"
                             >
                                 <Icon name="wand" size={12} /> Other AI
                             </button>
@@ -1367,11 +1372,24 @@
                                 </div>
                             {/if}
                         </div>
-                    {:else if settings.aiFeatures && aiAvailable()}
+                    {/if}
+                    <!-- The AI PANEL (Summarize / Draft / Action items /
+                         Translate) is its own surface from the suggested-
+                         actions menu above, and it used to live in an
+                         `{:else if}` of that menu's branch. Since both are
+                         live for a configured account, the panel button was
+                         NEVER rendered in the normal case and the panel was
+                         unreachable from a message — the three tests that
+                         exercise it were failing because the feature was
+                         genuinely missing, not because the tests were wrong.
+                         So the opener is now independent: it shows whenever AI
+                         is available, and the menu sits beside it. -->
+                    {#if settings.aiFeatures && aiAvailable()}
                         <button type="button" class="btn btn-secondary ai-btn-other" onclick={onAi} data-testid="ai-btn">
-                            <Icon name="wand" size={12} /> Other AI
+                            <Icon name="sparkles" size={12} /> AI tools
                         </button>
-                    {:else if settings.aiFeatures && capabilities.loaded}
+                    {/if}
+                    {#if settings.aiFeatures && !aiAvailable() && capabilities.loaded}
                         <button
                             type="button"
                             class="btn btn-secondary ai-btn-setup"

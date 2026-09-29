@@ -61,17 +61,32 @@
         // and the last items (GPS, refresh) are unreachable. On a short
         // viewport the options list genuinely is taller than the space
         // available, so cap the rendered box to what fits and let the list
-        // scroll inside it. Measured before clamping, because capping is
-        // what makes the height known. NOTE the cap lives in `menuMaxHeight`
-        // state — the reactive style= attribute below rewrites the whole
-        // style string whenever menuX/menuY change, so an imperative
-        // el.style.maxHeight would be wiped before it ever painted.
+        // scroll inside it.
+        //
+        // The cap must be CLEARED before measuring, and the measurement must
+        // be `scrollHeight` (the content's natural height), not `offsetHeight`
+        // (the CLAMPED height). Measuring offsetHeight made this function
+        // non-idempotent: once the cap was applied, offsetHeight equalled the
+        // cap, so the `> avail` test went false and the next call removed the
+        // cap it had just set — leaving a 236px menu at a `top` computed as
+        // though it were 184px, hanging off the bottom of a 200px window. The
+        // resize listener and the editingLocation effect both call this again,
+        // so that happened on every open. scrollHeight ignores max-height, so
+        // it reports the same natural height however many times we measure.
+        //
+        // The cap lives in `menuMaxHeight` state — the reactive style=
+        // attribute below rewrites the whole style string whenever
+        // menuX/menuY change, so an imperative el.style.maxHeight would be
+        // wiped before it ever painted.
         menuMaxHeight = null;
         await tick();
         const avail = window.innerHeight - MENU_MARGIN * 2;
-        menuMaxHeight = el.offsetHeight > avail ? `${avail}px` : null;
+        // Read the width from the same uncapped layout, so every number below
+        // comes from one consistent measurement.
         const w = el.offsetWidth;
-        const h = Math.min(el.offsetHeight, avail);
+        const natural = el.scrollHeight;
+        menuMaxHeight = natural > avail ? `${avail}px` : null;
+        const h = Math.min(natural, avail);
         menuX = Math.min(menuX, Math.max(MENU_MARGIN, window.innerWidth - w - MENU_MARGIN));
         menuY = Math.min(menuY, Math.max(MENU_MARGIN, window.innerHeight - h - MENU_MARGIN));
     }

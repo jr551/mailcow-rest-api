@@ -29,8 +29,34 @@
             return users.length > 0;
         } catch { return false; }
     }
-    let autoLoggingIn = $state(hasRememberedReturnUser());
+    // True when this Login is shown over an existing inbox to add a second account.
+    // Declared before the auto-login seed below, which reads it.
+    const isAddAccountMode = $derived(authState.addingAccount && authState.sessions.length > 0);
+
+    // Auto-login is only ever a COLD-START convenience. This Login is also
+    // mounted over a live inbox when adding a second account, and that
+    // mount is not a cold start: there is no reason to sign anyone in,
+    // because the point of the view is to enter a DIFFERENT account.
+    //
+    // hasRememberedReturnUser() used to be the sole seed for this flag, so
+    // anyone with "remember me" ticked hit "Add another account" and got
+    // the "Welcome back — signing you in…" spinner INSTEAD of the form —
+    // and it never cleared, because the effect below is gated on
+    // !addingAccount and so never runs to reset it. The card was dead:
+    // no email field, no submit, and a cancel button as the only way out.
+    // A returning user could not add a second account at all.
+    let autoLoggingIn = $state(!isAddAccountMode && hasRememberedReturnUser());
     let autoTried = false; // gate so we only attempt once per mount
+
+    // Adding an account must also cancel an auto-login already in flight
+    // (the effect is skipped while addingAccount, so it can no longer
+    // finish and clear the flag on its own).
+    $effect(() => {
+        if (authState.addingAccount && autoLoggingIn) {
+            autoLoggingIn = false;
+            setPending(false);
+        }
+    });
 
     // Lightweight bot deterrent. After 2 failed attempts (or page-load
     // detection of suspicious automation) we surface a 5-second-old math
@@ -61,9 +87,6 @@
     let interacted = $state(false);
     function markInteracted() { interacted = true; }
     let captchaRequired = $derived(failCount >= 2 || (!interacted && failCount >= 1));
-
-    // True when this Login is shown over an existing inbox to add a second account.
-    const isAddAccountMode = $derived(authState.addingAccount && authState.sessions.length > 0);
 
     function wasRecentlyLoggedOut(): boolean {
         try {
