@@ -10,8 +10,7 @@
     import { getCachedScan } from '../lib/phishing-scan';
     import Icon from './Icon.svelte';
     import { buildThreads, type Thread } from '../lib/threads';
-    import { type InboxSortRanking } from '../lib/api';
-    import { sortInboxClient } from '../lib/sort-inbox-client';
+    import { sortInboxClient, type InboxSortRanking } from '../lib/sort-inbox-client';
     import type { MessageListItem } from '../lib/api';
     import { playSortDone, playClick } from '../lib/sounds.svelte';
     import { runSpamSweep, bulkMove, findArchiveFolder, findTrashFolder, type SweepCandidate } from '../lib/spam-sweep';
@@ -21,6 +20,8 @@
     import MenuSubmenu, { type SubmenuItem } from './MenuSubmenu.svelte';
     import RuleFromMessageDialog from './RuleFromMessageDialog.svelte';
     import { domainPattern, rootDomainPattern } from '../lib/domain-scope';
+    import { addMailRule } from '../lib/api';
+    import { listOutboundWebhooks, isOutboundWebhooksUnavailable } from '../lib/outbound-webhooks';
 
     interface ScanState { scanned: number; total: number; reason: string }
     interface Props {
@@ -57,7 +58,15 @@
     }: Props = $props();
 
     // Right-click context menu on a row.
+    // `x`/`y` are the ANCHOR (where the pointer was, or the row's rect for
+    // the keyboard path). They are deliberately not the render position:
+    // see ctxPos / placeCtx for why the final position cannot be known until
+    // the menu has been measured on screen.
     let ctx = $state<{ uid: number; x: number; y: number } | null>(null);
+    // Resolved viewport position for the menu, written by placeCtx() once the
+    // menu is in the document and has a measurable box. Rendered from this,
+    // not from ctx.x/ctx.y.
+    let ctxPos = $state<{ left: number; top: number } | null>(null);
     // The row to hand focus back to when the menu closes. Without a
     // keyboard path into the menu, closeCtx just nulled `ctx` and focus
     // stayed wherever the pointer happened to be; now that the menu is
@@ -69,10 +78,136 @@
     // the detached <ul> from the previous open.
     let ctxEl: HTMLUListElement | null = $state(null);
 
+    // Gap kept between the menu and every viewport edge, and the smallest
+    // gap used when a menu is flipped above its anchor. 8px is enough to
+    // show that the menu continues past the edge without crowding the
+    // window furniture; deliberately the same value MenuSubmenu uses so
+    // the two agree on where a "flush" edge is.
+    const CTX_MARGIN = 8;
+    // The menu is `position: fixed`, so the box it must fit inside is the
+    // VIEWPORT, not the message list. The list scrolls underneath it while
+    // the menu stays put, which is exactly why the anchor has to be the
+    // window and not any ancestor.
+    function clampCtx(anchorX: number, anchorY: number, w: number, h: number) {
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+        // A menu taller/wider than the viewport itself can only be clamped
+        // to the top-left and allowed to overflow: the CSS caps max-height
+        // at 70vh and gives it overflow-y:auto, so it scrolls internally
+        // and every item stays reachable. Subtracting a margin from a
+        // negative available space would push the menu off the far edge.
+        if (w >= vw - CTX_MARGIN * 2 || h >= vh - CTX_MARGIN * 2) {
+            return {
+                left: Math.max(CTX_MARGIN, Math.min(anchorX, vw - w - CTX_MARGIN)),
+                top: Math.max(CTX_MARGIN, Math.min(anchorY, vh - h - CTX_MARGIN))
+            };
+        }
+        // Vertical: prefer BELOW the anchor, which is what a context menu
+        // anchored at the pointer is expected to do. Flip ABOVE when below
+        // would run off the bottom AND above has room — flipping beats
+        // clamping here because a clamped menu is no longer next to the
+        // row the user pointed at, and "the menu jumped to the top of the
+        // screen" is its own bug. The old code did neither on the pointer
+        // path: it wrote e.clientY straight into `top`, so a right-click in
+        // the lower third put the menu's bottom items below the fold where
+        // they could not be clicked.
+        let top = anchorY;
+        if (anchorY + h > vh - CTX_MARGIN) {
+            const flipped = anchorY - h;
+            top = flipped >= CTX_MARGIN ? flipped : Math.max(CTX_MARGIN, vh - h - CTX_MARGIN);
+        }
+        top = Math.max(CTX_MARGIN, Math.min(top, vh - h - CTX_MARGIN));
+        // Horizontal: prefer to the RIGHT of the anchor, flip LEFT when it
+        // would overflow and left has room, then clamp as the backstop for
+        // a menu wider than the space on either side. A right-click near the
+        // right edge ran off-screen the same way the bottom did.
+        let left = anchorX;
+        if (anchorX + w > vw - CTX_MARGIN) {
+            const flipped = anchorX - w;
+            left = flipped >= CTX_MARGIN ? flipped : Math.max(CTX_MARGIN, vw - w - CTX_MARGIN);
+        }
+        left = Math.max(CTX_MARGIN, Math.min(left, vw - w - CTX_MARGIN));
+        return { left, top };
+    }
+
+    /**
+     * Measure the open menu and write its clamped position.
+     *
+     * Re-measurement is the whole point. The previous fix GUESSED a height
+     * — the keyboard path subtracted a hard-coded 80px — and that guess was
+     * wrong the moment the menu gained or lost an item, so v0.20.0 shipped
+     * a clamp whose target was never the real box and it read as "the
+     * clamping doesn't work". `getBoundingClientRect` on the element that
+     * is actually on screen is the only number that cannot drift.
+     */
+    function placeCtx() {
+        if (!ctx || !ctxEl) return;
+        const r = ctxEl.getBoundingClientRect();
+        const next = clampCtx(ctx.x, ctx.y, r.width, r.height);
+        // Write only on a real change. placeCtx runs from a scroll handler
+        // on every frame, and assigning a fresh object each time re-renders
+        // the whole menu subtree for no visible difference.
+        if (ctxPos && ctxPos.top === next.top && ctxPos.left === next.left) return;
+        ctxPos = next;
+    }
+
+    // The menu is inside the {#if ctx} block, so ctxEl only exists while it
+    // is open. Tracking the open state (rather than registering listeners
+    // imperatively in openCtx) means a torn-down menu tears its listeners
+    // down with it — there is no window listener left pointing at a
+    // detached node. Same pattern MenuSubmenu uses for its panel.
+    // ctxPos is deliberately NOT read here. An earlier version read it to
+    // "re-run when the menu changed", which made this effect depend on a
+    // value it also writes: every placeCtx() produced a new object, the
+    // effect re-ran, and it never settled — leaving the resize/scroll
+    // listeners unregistered, so the menu silently kept its pre-resize
+    // position. The menu's box changing is observed directly below instead.
+    $effect(() => {
+        if (!ctx || !ctxEl) return;
+        placeCtx();
+        const reposition = () => placeCtx();
+        // Capture phase on scroll so a scroll inside ANY ancestor (the
+        // message list, the reading pane, the window) re-clamps, not just
+        // the document's own scroll.
+        window.addEventListener('scroll', reposition, true);
+        window.addEventListener('resize', reposition);
+        // The menu's own box can change while the anchor stays put — a
+        // submenu opening, the item list changing, a font finishing load.
+        // Measuring is the only way to notice, and a stale height is what
+        // makes a clamp look broken even though the code is running.
+        const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(reposition) : null;
+        ro?.observe(ctxEl);
+        return () => {
+            window.removeEventListener('scroll', reposition, true);
+            window.removeEventListener('resize', reposition);
+            ro?.disconnect();
+        };
+    });
+
+    /**
+     * Re-clamp once a submenu opens.
+     *
+     * The Move and webhook submenus render INSIDE this <ul>, and a folder
+     * list long enough to scroll changes the host menu's scroll state.
+     * Re-running placeCtx one tick after the panel appears is cheap and
+     * keeps the menu honest instead of assuming the first measurement
+     * still holds. (The panel itself is position:fixed, so it is the
+     * HOST menu that needs re-measuring, not the panel.)
+     */
+    $effect(() => {
+        if (!ctx) return;
+        if (submenuOpen()) void tick().then(placeCtx);
+    });
+
     function openCtx(e: MouseEvent, uid: number) {
         e.preventDefault();
         e.stopPropagation();
         ctx = { uid, x: e.clientX, y: e.clientY };
+        // Anchor only. The rendered position comes from placeCtx() once the
+        // menu is measurable, so nothing has to be re-guessed here — the
+        // previous `top: ${ctx.y}px` wrote the raw pointer Y and that IS
+        // the reported bug.
+        ctxPos = null;
         ctxRow = e.currentTarget as HTMLElement;
         ctxSelectRow(uid);
         // Deliberately does NOT move focus. The pointer user never had focus
@@ -144,6 +279,11 @@
         // which Svelte only unmounts after this handler returns.
         const focusInMenu = !!ctxEl && ctxEl.contains(document.activeElement as Node);
         ctx = null;
+        // Drop the resolved position with the menu. Leaving it set means the
+        // next open renders one frame at the PREVIOUS menu's coordinates
+        // before placeCtx re-measures, which is a visible jump at the old
+        // spot.
+        ctxPos = null;
         if (wasOpen && focusInMenu && ctxRow?.isConnected) ctxRow.focus();
         ctxRow = null;
     }
@@ -152,9 +292,14 @@
      *  key handling and must not have focus stolen by the parent walk. */
     function ctxItems(): HTMLElement[] {
         if (!ctxEl) return [];
+        // The submenu's own trigger IS part of this walk: it is a menu item
+        // like any other, and excluding it (as this did) made the whole Move
+        // submenu unreachable by keyboard — the arrows skipped straight past
+        // it and Tab closes the menu. Only the submenu's PANEL is excluded,
+        // because MenuSubmenu owns the arrows inside it.
         return Array.from(
             ctxEl.querySelectorAll<HTMLElement>('button[role="menuitem"]:not(:disabled)')
-        ).filter((b) => !b.closest('.submenu'));
+        ).filter((b) => !b.closest('.submenu-panel'));
     }
 
     function focusCtxItem(i: number) {
@@ -165,9 +310,9 @@
     /**
      * APG menu pattern: ArrowDown/ArrowUp walk the items, Home/End jump to
      * the ends. MenuSubmenu owns its own panel's arrows, so anything from
-     * inside a .submenu is left alone — it stops at the trigger too, and
-     * the parent walk would then yank focus straight back out of the
-     * submenu the user just opened.
+     * inside a .submenu is left alone — including its trigger, which walks
+     * the host menu itself (MenuSubmenu's onTriggerKeydown) rather than
+     * letting this walk yank focus back out of a panel the user just opened.
      */
     function ctxMenuKey(e: KeyboardEvent) {
         if (!ctx || (e.target as HTMLElement)?.closest?.('.submenu')) return;
@@ -231,13 +376,14 @@
         const r = el.getBoundingClientRect();
         e.preventDefault();
         e.stopPropagation();
-        // Clamped to the viewport so a row scrolled near an edge doesn't
-        // open a menu that's half off-screen.
-        ctx = {
-            uid,
-            x: Math.min(r.left + 24, window.innerWidth - 240),
-            y: Math.min(r.bottom + 4, window.innerHeight - 80)
-        };
+        // Anchor only, exactly as the pointer path. The old code clamped
+        // here against a hard-coded 240x80 — a guess about the menu's size
+        // that stopped being true the moment the item list changed. The
+        // measurement in placeCtx() supersedes it and also flips above the
+        // row, which this could never do: for a row in the lower third,
+        // `r.bottom + 4` is already past where the menu can fit below.
+        ctx = { uid, x: r.left + 24, y: r.bottom + 4 };
+        ctxPos = null;
         ctxRow = el;
         // Same highlight as the pointer path, so the row the keyboard menu
         // belongs to is visibly the row the menu will act on — otherwise
@@ -272,6 +418,98 @@
             await bulkMoveSelected(dest);
         } else {
             onMove?.(target, dest);
+        }
+    }
+
+    // ── "Send to external webhook" ─────────────────────────────────────────
+    //
+    // The user asked for "always send from this sender" — a PERSISTENT rule,
+    // not a one-off send of the message under the cursor. So this creates the
+    // same rule the rule dialog would have built (condition from-contains on
+    // the right-clicked sender, action { type: 'webhook', webhookId }), which
+    // the server compiles to `fileinto :create ".wh-<id>"; stop;` and the
+    // outbound forwarder picks up. The dialog is deliberately NOT reopened
+    // here: it is a form for editing, and the point of this item is one
+    // click, not a second form to fill in with values already known.
+    //
+    // Loaded LAZILY, on first open of the submenu, because a list that only
+    // matters after a deliberate right-click should not cost a request on
+    // every page render. Refreshed on every open so a webhook created in
+    // Settings during this session shows up without a reload.
+    let webhookItems = $state<SubmenuItem[] | null>(null);
+    let webhookLoading = $state(false);
+    let webhookNote = $state<string | null>(null);
+
+    /**
+     * Load the webhook list for the submenu, folding the three "no
+     * webhooks" cases into one honest sentence each.
+     *
+     * A dead menu item is worse than a missing one: a trigger that opens an
+     * empty panel reads as a bug, and a trigger that isn't there at all is
+     * just a feature the user hasn't set up. So unavailable (the server
+     * predates the endpoint) and none-configured are stated, not rendered
+     * as a selection the user can fail to make.
+     */
+    async function loadWebhookTargets() {
+        if (webhookLoading) return;
+        webhookLoading = true;
+        webhookNote = null;
+        try {
+            const { webhooks } = await listOutboundWebhooks();
+            webhookItems = webhooks.map((w) => ({ key: w.id, label: w.label || w.url }));
+            if (!webhooks.length) {
+                webhookNote = 'No webhooks yet — add one in Settings → Outbound webhooks.';
+            }
+        } catch (err) {
+            webhookItems = [];
+            // 404/501 means the SERVER has no such endpoint. Anything else
+            // is a different failure, and saying "not available on this
+            // server" for a network blip would send the user off to check
+            // their server config when the truth is a timeout.
+            webhookNote = isOutboundWebhooksUnavailable(err)
+                ? 'Outbound webhooks are not available on this server.'
+                : 'Could not load your webhooks — try again in a moment.';
+        } finally {
+            webhookLoading = false;
+        }
+    }
+
+    /**
+     * Create the persistent "always forward this sender here" rule, then
+     * close the menu.
+     *
+     * closeCtx() before the await, and `from` resolved before it, for the
+     * same reason every other item in this menu does it: closeCtx nulls
+     * `ctx` synchronously, so anything still reading ctx afterwards throws.
+     */
+    async function sendSenderToWebhook(webhookId: string) {
+        const target = ctx?.uid;
+        if (target == null) return;
+        const from = rowOf(target)?.envelope?.from?.[0]?.address;
+        closeCtx();
+        if (!from) {
+            showToast('error', 'That message has no sender address to match on');
+            return;
+        }
+        try {
+            // One MailRuleInput object, which is what api.addMailRule takes —
+            // not three positional args. The name is the sender address so
+            // the list in Settings reads as "who did I point at what", which
+            // is the question a user has when they come back to disable one.
+            await addMailRule({
+                name: from,
+                condition: { type: 'from-contains', value: from },
+                action: { type: 'webhook', webhookId }
+            });
+            // The future-only wording is the single most common source of
+            // "I made the rule and nothing happened" — Sieve runs on arrival,
+            // nothing re-runs against the mailbox. RuleFromMessageDialog
+            // already says this in its body; reuse the same claim here
+            // rather than inventing a third variant of it.
+            showToast('success', `Mail from ${from} will go to that webhook as it arrives`);
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : 'Could not create the rule';
+            showToast('error', msg);
         }
     }
 
@@ -1511,12 +1749,20 @@
     {#if m}
         {@const isUnread = unread(m.flags)}
         {@const isFlagged = flagged(m.flags)}
+        <!-- The position attributes are written by placeCtx() once the menu
+             is measurable, not from ctx.x/ctx.y directly: the menu is
+             position:fixed, so its final spot depends on how big it turned
+             out to be, which cannot be known before it is in the document.
+             Until that first measurement lands ctxPos is null and the menu
+             gets no top/left at all, so it renders at the viewport origin
+             for a single frame — .msg-ctx-unplaced hides that frame rather
+             than flashing the whole menu into the top-left corner. -->
         <ul
-            class="msg-ctx"
+            class={ctxPos ? 'msg-ctx' : 'msg-ctx msg-ctx-unplaced'}
             role="menu"
             bind:this={ctxEl}
             aria-label="Message actions"
-            style={`top: ${ctx.y}px; left: ${ctx.x}px;`}
+            style={ctxPos ? `top: ${ctxPos.top}px; left: ${ctxPos.left}px;` : undefined}
             onclick={(e) => e.stopPropagation()}
             oncontextmenu={(e) => e.preventDefault()}
             data-testid="msg-ctx"
@@ -1557,6 +1803,33 @@
                     items={moveTargets}
                     onSelect={moveTo}
                     testid="ctx-move"
+                />
+            {/if}
+            <!-- "Send to external webhook" — the persistent version of
+                 "always send from this sender". Sits directly under "Create
+                 rule from message" because it IS one: a from-contains rule
+                 with a webhook action, created with the values the user has
+                 already indicated by right-clicking instead of a form to
+                 refill. Its own submenu rather than inline items because the
+                 webhook count belongs to the user, not to us, and inlining
+                 it would make this menu's height unbounded — same reasoning
+                 as "Move to…" above.
+
+                 The trigger is shown whenever the message has a From
+                 address, even with zero webhooks configured: the empty
+                 panel says where to make one. Hiding the trigger instead
+                 would mean the user has no way to discover the feature
+                 exists. The genuinely hidden case is a message with no
+                 From address at all, where there is no rule to key on. -->
+            {#if m.envelope.from?.[0]?.address}
+                <MenuSubmenu
+                    label="Send to external webhook…"
+                    icon="globe"
+                    items={webhookItems ?? []}
+                    emptyText={webhookLoading ? 'Loading your webhooks…' : webhookNote}
+                    onSelect={sendSenderToWebhook}
+                    onOpen={loadWebhookTargets}
+                    testid="ctx-webhook"
                 />
             {/if}
             <li class="sep"></li>
@@ -1691,17 +1964,6 @@
         gap: 12px;
         font-size: 12px;
     }
-    .header-action {
-        display: inline-flex;
-        align-items: center;
-        gap: 3px;
-        padding: 2px 6px;
-        font-size: 11px;
-        color: var(--text-secondary);
-        border-radius: var(--radius-xs);
-        transition: background-color var(--transition-fast), color var(--transition-fast);
-    }
-    .header-action:hover { background: var(--bg-hover); color: var(--text-primary); }
     /* Glowing accent button for the AI inbox briefing — sweeps a subtle
      * shimmer across itself so the eye finds it even at a glance. */
     .ai-summary-btn {
@@ -2267,6 +2529,12 @@
         z-index: 200;
         animation: fade-in 120ms cubic-bezier(0.2, 0.7, 0.2, 1);
     }
+    /* The single frame between mount and the first placeCtx() measurement.
+       position:fixed with no top/left resolves to the viewport origin, so
+       without this the menu visibly jumps from the top-left corner to the
+       pointer on every right-click. Hidden rather than opacity:0, so it
+       cannot be clicked or tabbed into at the wrong place either. */
+    .msg-ctx-unplaced { visibility: hidden; }
     .msg-ctx li { list-style: none; }
     .msg-ctx li.sep { height: 1px; margin: 4px 0; background: var(--border-subtle); }
     .msg-ctx button {

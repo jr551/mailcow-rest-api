@@ -417,8 +417,6 @@ class ManageSieveClient {
 module.exports = {
     ManageSieveClient,
     SCRIPT_NAME,
-    PRESERVED_MARKER,
-    RULES_HEADER,
     compileRulesScript,
     parseRules,
     buildBlockedRecipientsScript,

@@ -947,16 +947,6 @@
     .quick-tile-inbox-triage { --accent: var(--green, #10b981); }
     .quick-tile-meeting-prep { --accent: var(--amber, #f59e0b); }
 
-    .bg-task-banner {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 7px 12px;
-        background: color-mix(in srgb, var(--accent) 12%, var(--bg-surface));
-        border-bottom: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border-subtle));
-        font-size: 12.5px;
-    }
-
     /* Mobile live progress widget — same purple gradient as desktop
      * but tighter for the narrow viewport. */
     .bg-task-widget {
@@ -1015,23 +1005,6 @@
         max-width: 110px;
     }
     .bg-stat { margin-left: auto; opacity: 0.8; font-variant-numeric: tabular-nums; }
-    .bg-task-text {
-        flex: 1;
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-    .bg-task-spinner {
-        width: 11px;
-        height: 11px;
-        border-radius: 50%;
-        border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
-        border-top-color: var(--accent);
-        animation: bg-task-spin 0.9s linear infinite;
-        flex: 0 0 auto;
-    }
-    @keyframes bg-task-spin { to { transform: rotate(360deg); } }
     .bg-task-cancel {
         appearance: none;
         background: transparent;
@@ -1266,11 +1239,6 @@
         display: flex;
         flex-direction: column;
         gap: 8px;
-    }
-    .approval-reason {
-        margin: 0;
-        font-size: 14px;
-        color: var(--text-primary);
     }
     .approval-actions {
         display: flex;

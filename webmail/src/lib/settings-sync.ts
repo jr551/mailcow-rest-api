@@ -118,7 +118,7 @@ async function ensureFolder(): Promise<boolean> {
 
 /** Fetch the newest snapshot from the sync folder. Returns null when
  *  the folder is empty or doesn't exist. */
-export async function pullSettings(): Promise<SettingsSnapshot | null> {
+async function pullSettings(): Promise<SettingsSnapshot | null> {
     try {
         const list = await listMessages(SYNC_FOLDER, { page: 0, pageSize: 50 });
         if (!list?.messages?.length) return null;
@@ -150,7 +150,7 @@ export async function pullSettings(): Promise<SettingsSnapshot | null> {
  *  until the next push), and refuses to apply a snapshot older than
  *  what we last pushed (so a slow round-trip doesn't undo the user's
  *  most recent edit). */
-export function applySnapshot(remote: SettingsSnapshot): boolean {
+function applySnapshot(remote: SettingsSnapshot): boolean {
     if (remote.ts < lastPushTs) return false;
     let changed = false;
     // Settings: assign field-by-field so Svelte runes register the
@@ -193,7 +193,7 @@ export function applySnapshot(remote: SettingsSnapshot): boolean {
 /** Append a fresh snapshot to the sync folder, then prune older ones
  *  past KEEP_HISTORY. Coalesces concurrent calls so a burst of edits
  *  results in one push. */
-export async function pushSettings(): Promise<void> {
+async function pushSettings(): Promise<void> {
     if (inflightPush) return inflightPush;
     inflightPush = (async () => {
         try {
@@ -230,7 +230,7 @@ export async function pushSettings(): Promise<void> {
 /** Schedule a push 5s from now, resetting the timer if more changes
  *  land in the meantime. The chatty path during a settings panel
  *  session collapses to one push when the user stops fiddling. */
-export function debouncedPush(): void {
+function debouncedPush(): void {
     if (pushTimer) clearTimeout(pushTimer);
     pushTimer = setTimeout(() => {
         pushTimer = null;

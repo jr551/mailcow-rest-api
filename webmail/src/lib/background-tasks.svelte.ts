@@ -49,7 +49,7 @@ const state = $state<TasksState>({ active: [] });
 
 export function backgroundTasks(): TasksState { return state; }
 
-export function activeTaskFor(threadId: string): ActiveTask | undefined {
+function activeTaskFor(threadId: string): ActiveTask | undefined {
     return state.active.find((t) => t.threadId === threadId);
 }
 

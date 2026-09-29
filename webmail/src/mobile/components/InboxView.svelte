@@ -15,8 +15,7 @@
         type MessageDetail
     } from '../../lib/api';
     import { formatDate, senderShort, isTrackingEmail } from '../../lib/format';
-    import { type InboxSortRanking } from '../../lib/api';
-    import { sortInboxClient } from '../../lib/sort-inbox-client';
+    import { sortInboxClient, type InboxSortRanking } from '../../lib/sort-inbox-client';
     import { settings } from '../../lib/settings.svelte';
     import Icon from '../../components/Icon.svelte';
     import Avatar from '../../components/Avatar.svelte';

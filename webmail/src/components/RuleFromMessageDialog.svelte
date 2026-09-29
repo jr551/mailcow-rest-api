@@ -40,7 +40,7 @@
 
     // Condition vocabulary — kept byte-identical to Settings.svelte's
     // RULE_CONDITION_LABELS / RULE_ACTION_LABELS. These are NOT exported
-    // from Settings.svelte because that file is a 4700-line page component;
+    // from Settings.svelte because that file is a huge page component;
     // duplicating two literal maps is cheaper than exporting them from
     // there and coupling a modal's lifetime to the settings page. The
     // `*Has*` helpers below are the ones the form's conditional fields
@@ -294,6 +294,10 @@
     role="presentation"
     onclick={(e) => { if (e.target === e.currentTarget) onClose(); }}
 >
+    <!-- aria-describedby only while the note is actually rendered: with
+         rulesUnavailable (or before the seed effect has run) the id would
+         dangle, and a dialog whose description points at nothing is worse
+         than one with no description at all. -->
     <div
         bind:this={dialogEl}
         class="dialog fade-in"
@@ -301,7 +305,7 @@
         tabindex="-1"
         aria-modal="true"
         aria-labelledby="rule-from-msg-title"
-        aria-describedby="rule-future-only-note"
+        aria-describedby={seed && !rulesUnavailable ? 'rule-future-only-note' : undefined}
         data-testid="rule-from-message-dialog"
     >
         <header class="head">
@@ -441,23 +445,25 @@
                     {/if}
 
                     {#if ruleNeedsWebhook(actionType)}
-                        {#if outboundHooks.length === 0}
-                            <p class="muted notice" data-testid="rule-webhook-empty">
-                                No outbound webhooks yet — create one under
-                                <em>Settings → Outbound webhooks</em> first, or pick a
-                                different action.
-                            </p>
-                        {:else}
-                            <label class="row">
-                                <span class="label">Webhook</span>
-                                <select bind:value={actionWebhookId} data-testid="rule-action-webhook">
-                                    <option value="" disabled>Pick an outbound webhook…</option>
-                                    {#each outboundHooks as w (w.id)}
-                                        <option value={w.id}>{w.label} — {w.url}</option>
-                                    {/each}
-                                </select>
-                            </label>
-                        {/if}
+                        <!-- No empty state here, deliberately. The `webhook`
+                             option is only rendered when the list is non-empty
+                             (see the action select above), and the reconcile
+                             effect drops a seeded webhook action back to
+                             discard when it is not — so by the time this select
+                             can be shown it always has real options. The old
+                             "No outbound webhooks yet" paragraph could only
+                             ever render while the probe was still in flight,
+                             where it asserted an empty list before the list had
+                             loaded. -->
+                        <label class="row">
+                            <span class="label">Webhook</span>
+                            <select bind:value={actionWebhookId} data-testid="rule-action-webhook">
+                                <option value="" disabled>Pick an outbound webhook…</option>
+                                {#each outboundHooks as w (w.id)}
+                                    <option value={w.id}>{w.label} — {w.url}</option>
+                                {/each}
+                            </select>
+                        </label>
                     {/if}
                 </div>
 
@@ -479,8 +485,8 @@
                     <Icon name="info" size={13} />
                     <span>
                         Rules run on mail as it <strong>arrives</strong>. This rule will
-                        not be applied to the {seed.subject ? 'message you are looking at' : 'message you right-clicked'}
-                        or anything already in your mailbox.
+                        not be applied to this message or anything already in your
+                        mailbox.
                     </span>
                 </p>
             {/if}

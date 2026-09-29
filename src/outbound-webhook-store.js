@@ -5,7 +5,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const Database = require('better-sqlite3');
 const { sanitizeWebhookHeaders } = require('./utils/webhook-headers');
-const { webhookMailbox, WEBHOOK_MAILBOX_PREFIX } = require('./sieve-client');
+const { webhookMailbox } = require('./sieve-client');
 
 // User-created outbound webhooks ("email → webhook").
 //
@@ -279,8 +279,5 @@ function createOutboundWebhookStore({ filePath, secretBox, maxPerUser = 100 } = 
 
 module.exports = {
     createOutboundWebhookStore,
-    mailboxFor,
-    normalizePrepend,
-    MAILBOX_PREFIX: WEBHOOK_MAILBOX_PREFIX,
-    MAX_PREPEND
+    normalizePrepend
 };

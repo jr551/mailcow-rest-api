@@ -5,7 +5,7 @@
     import { authState, logoutRemote, setSession, bearerHeader, getSession } from '../../lib/auth.svelte';
     import { pwa, promptInstall, subscribePush, unsubscribePush, pushSubscriptionStatus } from '../../lib/pwa.svelte';
     import {
-        settings, capabilities, setProxyImages, setAlwaysAllowImages, setDefaultFromAddress,
+        settings, capabilities, setProxyImages, setDefaultFromAddress,
         setDensity, setGroupThreads, setPageSize, setAccountChipDisplay,
         setLlm, setUseCustomLlm, setAiFeatures,
         setPhishingScan, setTrackOpensDefault, setAiSuggestSubjectOnBlur, setDisplayName,
@@ -433,8 +433,8 @@
         <div class="ios-list">
             <div class="ios-row toggle-row">
                 <div class="toggle-info">
-                    <span class="row-label">Proxy images</span>
-                    <span class="muted small">Route remote images through the server</span>
+                    <span class="row-label">Load images via the privacy proxy</span>
+                    <span class="muted small">Remote images always load; this fetches them through our server so the sender's CDN never sees your IP</span>
                 </div>
                 <button
                     type="button"
@@ -446,21 +446,11 @@
                     <span class="toggle-knob"></span>
                 </button>
             </div>
-            <div class="ios-row toggle-row">
-                <div class="toggle-info">
-                    <span class="row-label">Always allow images</span>
-                    <span class="muted small">Skip the per-message prompt</span>
-                </div>
-                <button
-                    type="button"
-                    class="toggle-switch"
-                    class:on={settings.alwaysAllowImages}
-                    class:off={!settings.alwaysAllowImages}
-                    onclick={() => setAlwaysAllowImages(!settings.alwaysAllowImages)}
-                >
-                    <span class="toggle-knob"></span>
-                </button>
-            </div>
+            <!-- The "Always allow images" row is gone because there is no
+                 blocking any more — remote content always loads. The single
+                 row above is the whole of the mobile remote-content story
+                 and it matches the desktop panel exactly: images load, and
+                 this decides whether they are proxied. -->
             <div class="ios-row toggle-row">
                 <div class="toggle-info">
                     <span class="row-label">Phishing detection</span>

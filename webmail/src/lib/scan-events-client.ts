@@ -3,8 +3,9 @@
 // (meetings, flights, deliveries, deadlines), and returns structured
 // suggestions the UI can render as a checkbox table.
 //
-// Mirrors sort-inbox-client.ts: browser → LiteLLM proxy with the
-// per-user scoped key. Same cache + cooldown plumbing.
+// Mirrors sort-inbox-client.ts: the same endpoint resolution (the server's
+// proxy when configured, otherwise the user's provider). Same cache +
+// cooldown plumbing.
 
 import { settings, capabilities, aiAuthKey } from './settings.svelte';
 import { cachedChatCompletion } from './ai-cache.svelte';

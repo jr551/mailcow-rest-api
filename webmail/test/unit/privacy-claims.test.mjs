@@ -11,15 +11,16 @@
 // common case after a refactor moves a line. A silently-rotten citation is
 // worse than no citation, because it reads as provenance that was checked.
 //
-// It also pins the two invariants that are cheap to break and expensive to
+// It also pins the invariants that are cheap to break and expensive to
 // notice:
 //
-//   1. Images are blocked unless the user has stood images up, in BOTH
-//      readers, and the proxy setting must NOT be one of the ways through.
-//      (Regression guard for the "routing is not consent" rule.)
-//   2. The in-memory settings state and the persisted blob must resolve
-//      remote-image permission the same way, or the first session after an
-//      upgrade disagrees with every reload after it.
+//   1. Remote images are ALWAYS allowed and fetched through the proxy. The
+//      blocking path — the per-message "This message has remote content"
+//      prompt, the per-sender 30-day trust, and the `alwaysAllowImages`
+//      field — is gone, and these tests fail if any of it comes back or if
+//      an always-allow control survives as a silent no-op.
+//   2. The privacy copy does not overstate the proxy: it hides who fetched
+//      an image, not that the message was read.
 //
 // The migration behaviour itself is exercised end-to-end in
 // privacy-migration.test.mjs.
@@ -119,73 +120,152 @@ test('the server scrubber is reachable from exactly one route handler', () => {
     );
 });
 
-test('remote images are blocked unless the user allowed them', () => {
+// --- Remote images: always allowed, proxied ------------------------------
+//
+// These four replace the "blocked unless allowed" invariants that this file
+// used to carry. They are not deletions: the removal of the blocking path is
+// the single most user-visible behaviour change in the app (it is what made
+// "This message has remote content" appear on ordinary mail), and a test
+// file that quietly stopped covering it is how the state would silently come
+// back. Each one fails if the blocking machinery creeps back in, and the
+// last one fails if the privacy copy drifts away from what the code does.
+
+test('remote images are never gated behind a permission check', () => {
+    // The old rule was `alwaysAllowImages || isImageTrusted(sender)`. There is
+    // no equivalent any more, and that is the point: neither reader may
+    // reintroduce a per-message or per-sender gate, because the prompt is
+    // the thing we removed.
     for (const file of ['components/MessageDetail.svelte', 'mobile/components/MessageView.svelte']) {
         const src = read(file);
-        const allowDecision = src.match(/^\s*(?:allowImages|const shouldAllow)\s*=.*$/m);
-        assert.ok(allowDecision, `${file}: could not find the allow decision`);
+        for (const symbol of [
+            'allowImages',
+            'loadRemoteContent',
+            'loadRemoteImages',
+            'trustSender',
+            'isImageTrusted',
+            'trustImagesFromSender',
+            'settings.alwaysAllowImages'
+        ]) {
+            assert.ok(
+                !src.includes(symbol),
+                `${file}: still references ${symbol} — the remote-content blocking path must stay removed`
+            );
+        }
+    }
+});
+
+test('the "load remote content" prompt is gone from both readers', () => {
+    // The specific UI the user reported. Asserting on the copy text rather
+    // than a testid catches the prompt coming back under a new name.
+    for (const file of ['components/MessageDetail.svelte', 'mobile/components/MessageView.svelte']) {
+        const src = read(file);
         assert.ok(
-            !allowDecision[0].includes('proxyImages'),
-            `${file}: the proxy flag must not grant permission to load images — routing is not consent`
+            !src.includes('This message has remote content'),
+            `${file}: the remote-content prompt must not come back`
+        );
+        assert.ok(
+            !src.includes('Remote content blocked'),
+            `${file}: the mobile "Remote content blocked" card must not come back`
+        );
+        assert.ok(
+            !/load-remote-content/.test(src),
+            `${file}: the load-remote-content affordance must not come back`
         );
     }
 });
 
-test('the proxy still governs routing for images that ARE allowed', () => {
-    // Guards the other half of the rule: dropping the proxy from the
-    // permission check must not have silently disabled proxying entirely.
-    const desktop = read('components/MessageDetail.svelte');
-    assert.match(desktop, /useProxy\s*=\s*settings\.proxyImages\s*&&\s*allowImages/);
-
-    const mobile = read('mobile/components/MessageView.svelte');
-    assert.match(mobile, /proxyActive\s*=\s*shouldAllow\s*&&\s*settings\.proxyImages/);
-});
-
-test('a per-message override exists on both readers', () => {
-    // Without this, "blocked by default" would mean "permanently blocked".
-    // Bounded generously: the desktop handler optionally persists per-sender
-    // trust before flipping the flag, so the assignment is a few lines in.
+test('images still resolve remotely after sanitising', () => {
+    // The flip side of "always allowed": the readers must pass
+    // allowRemoteImages: true explicitly. sanitizeHtml DEFAULTS IT TO FALSE,
+    // so a reader that dropped the argument would silently blank every image
+    // in the mailbox while every other test still passed.
     assert.match(
         read('components/MessageDetail.svelte'),
-        /function loadRemoteContent\(\)\s*\{[\s\S]{0,400}?allowImages = true;/
+        /sanitizeHtml\([^)]*allowRemoteImages:\s*true/s
     );
     assert.match(
         read('mobile/components/MessageView.svelte'),
-        /function loadRemoteImages\(\)\s*\{\s*allowImages = true;/
+        /sanitizeHtml\([^)]*allowRemoteImages:\s*true/s
     );
 });
 
-test('the settings loader and the migration share one pre-flip rule', () => {
-    // If these diverge, the live state and the rewritten blob disagree for
-    // the session between the upgrade and the next reload.
+test('the proxy governs HOW images are fetched, on both readers', () => {
+    // Routing, not permission. Both readers must key proxying off the proxy
+    // flag and the health check alone — there is no longer an `allowImages`
+    // term to hang a permission check off.
     assert.match(
-        settingsSrc,
-        /preRemoteImagesAutoAllowed\(parsed\)/,
-        'load() must derive alwaysAllowImages through the shared pre-flip rule'
+        read('components/MessageDetail.svelte'),
+        /useProxy\s*=\s*settings\.proxyImages\s*&&\s*isProxyHealthy\(\)/
     );
     assert.match(
-        settingsSrc,
-        /parsed\.alwaysAllowImages = preRemoteImagesAutoAllowed\(parsed\)/,
-        'the migration must use the same rule the loader uses'
+        read('mobile/components/MessageView.svelte'),
+        /proxyActive\s*=\s*settings\.proxyImages\s*&&\s*remote/
+    );
+    assert.match(
+        read('mobile/components/MessageView.svelte'),
+        /if\s*\(\s*settings\.proxyImages\s*&&\s*remote\s*&&\s*isProxyHealthy\(\)/
     );
 });
 
-test('the privacy panel never derives its copy from the migration marker', () => {
-    // The marker exists only to stop the migration running twice. Reading it
-    // to decide what to TELL the user would reintroduce the lie the
-    // migration exists to avoid.
-    const remotePredicate = settingsSrc.match(/export function remoteImagesBlockedFor[\s\S]*?\n}/);
-    assert.ok(remotePredicate, 'remoteImagesBlockedFor() should exist as the single source of truth');
+test('no stale always-allow control survives anywhere in the UI', () => {
+    // A toggle wired to a field that no longer exists is the silent no-op
+    // class of bug: it renders, it toggles, it changes nothing. The mobile
+    // Settings screen had exactly this row.
+    for (const file of ['components/Settings.svelte', 'mobile/components/SettingsView.svelte']) {
+        const src = read(file);
+        assert.ok(
+            !src.includes('alwaysAllowImages') && !src.includes('setAlwaysAllowImages'),
+            `${file}: still renders an always-allow control for a field that no longer exists`
+        );
+    }
+    // The chat bridge must not advertise or accept it either: a tool that
+    // claims to set a setting that does nothing will confidently tell the
+    // user it changed their remote-image behaviour.
+    const chat = read('lib/chat.svelte.ts');
     assert.ok(
-        !remotePredicate[0].includes('remoteImagesDefaulted'),
-        'remoteImagesBlockedFor() must not read the migration marker'
+        !chat.includes('alwaysAllowImages'),
+        'lib/chat.svelte.ts still advertises or dispatches alwaysAllowImages'
     );
+});
 
+test('the privacy copy does not overstate what the proxy hides', () => {
+    // The panel may claim the proxy hides the reader's IP. It may NOT claim
+    // it hides that the message was read — the code says otherwise at
+    // src/routes/image-proxy.js:190,193 (24h cache) and the sender still sees
+    // the fetch. An overstating privacy panel is worse than none, because it
+    // borrows trust from the control that does work.
     const panel = read('components/Settings.svelte');
-    const stateLine = panel.match(/data-testid="privacy-image-state"/);
-    assert.ok(stateLine, 'the privacy panel should render a state line');
     assert.ok(
-        !/imagesBlocked\s*=\s*\$derived\([^)]*remoteImagesDefaulted/.test(panel),
-        'the panel must derive the image state from remoteImagesBlockedFor, not the marker'
+        !/not the fact that you read|never knows you (read|opened)|cannot tell (that )?you read/i.test(panel),
+        'the privacy panel must not claim the proxy hides that the message was read'
     );
+    assert.ok(
+        /not <em>that you read the message<\/em>|not \*that you read the message\*/i.test(panel),
+        'the privacy panel should state the limit explicitly: it hides who fetched, not that you read'
+    );
+
+    // And the citable version must carry the same limit, so the two cannot
+    // disagree with the UI that renders it.
+    assert.match(
+        factsSrc,
+        /id:\s*'image-proxy-limit'[\s\S]{0,700}?not that you read the message/i,
+        'privacy-facts.ts must carry an image-proxy-limit claim stating the honest boundary'
+    );
+    assert.match(
+        factsSrc,
+        /src\/routes\/image-proxy\.js:190,193/,
+        'the image-proxy-limit claim must cite the daily cap and the 24h cache'
+    );
+});
+
+test('every cited line number is still inside its file', () => {
+    // Kept from the original file: a silently-rotten citation reads as
+    // provenance that was checked, which is worse than no citation.
+    for (const c of citations()) {
+        const file = resolve(c.file);
+        if (file === null) continue; // covered by the test above
+        const lines = file.split('\n').length;
+        assert.ok(c.start <= lines, `${c.file}:${c.start} is past end of file (${lines} lines)`);
+        assert.ok(c.end <= lines, `${c.file}:${c.end} is past end of file (${lines} lines)`);
+    }
 });

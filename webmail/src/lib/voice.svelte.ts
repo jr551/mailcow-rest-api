@@ -51,7 +51,7 @@ if (isSpeechSynthesisAvailable()) {
     } catch { /* older Safari */ }
 }
 
-export function listLocalVoices(): LocalVoice[] {
+function listLocalVoices(): LocalVoice[] {
     if (_voices.length === 0) loadVoices();
     return _voices;
 }
@@ -59,7 +59,7 @@ export function listLocalVoices(): LocalVoice[] {
 // Legacy export — same shape as the old hard-coded ElevenLabs list,
 // but now backed by the system's installed voices. The Settings surface
 // can render it directly without changes.
-export const ELEVEN_VOICES: { id: string; name: string }[] = new Proxy([], {
+const ELEVEN_VOICES: { id: string; name: string }[] = new Proxy([], {
     get(_t, prop) {
         const v = listLocalVoices();
         if (prop === 'length') return v.length;

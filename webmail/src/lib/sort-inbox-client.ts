@@ -1,11 +1,12 @@
-// Client-side AI inbox-sort. Calls the LiteLLM proxy directly from the
-// browser using the per-user scoped key from /v1/ai/config.
+// Client-side AI inbox-sort. Calls the AI endpoint the app is configured
+// with — the server's same-origin /v1/ai/llm proxy when the server has AI
+// configured, otherwise the user's own provider — authenticating with the
+// session token (proxied) or the user's key.
 //
 // Why client-side: the imap-rest server runs on a host whose outbound
-// route to a LiteLLM proxy is flaky (intermittent 10-30s connect timeouts),
-// so /v1/ai/sort-inbox routinely 502s. The browser → proxy path is
-// reliable, and the per-user budget enforcement still applies via the
-// scoped LiteLLM key.
+// route to the AI provider is flaky (intermittent 10-30s connect timeouts),
+// so /v1/ai/sort-inbox routinely 502s. The browser → endpoint path is
+// reliable.
 
 import { settings, capabilities, aiAuthKey } from './settings.svelte';
 import { cachedChatCompletion } from './ai-cache.svelte';

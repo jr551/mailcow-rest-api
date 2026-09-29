@@ -54,6 +54,7 @@ const imageProxyRoutes = require('./routes/image-proxy');
 const telemetryRoutes = require('./routes/telemetry');
 const webhookInboxRoutes = require('./routes/webhook-inbox');
 const outboundWebhookRoutes = require('./routes/outbound-webhooks');
+const linkCheckRoutes = require('./routes/link-check');
 const { createWebhookInboxStore } = require('./webhook-inbox-store');
 const { createMailcowDb } = require('./mailcow-db');
 const { createSieveManager } = require('./sieve-manager');
@@ -651,6 +652,7 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
     await app.register(addressBookRoutes, { pool });
     await app.register(messageRoutes, { pool, ocrCache, imapCache });
     await app.register(aiRoutes, { aiCache });
+    await app.register(linkCheckRoutes);
     await app.register(sendRoutes, { db: mailcowDb, smtp: config.smtp, pool, trackingStore, getPublicBaseUrl, imapCache });
     await app.register(pushRoutes, { pushStore, lookup: pushLookup });
 

@@ -73,7 +73,7 @@ const FOLD_AT = 73;
 
 // A vCard is a text file inside a message; an unbounded one is a
 // write-amplification vector against the user's IMAP store and a
-// pathological parse for the reader. 8 KB is far above any real card.
+// pathological parse for the reader. MAX_FIELD is far above any real card.
 const MAX_FIELD = 400;
 
 function foldLine(line) {
@@ -393,13 +393,8 @@ module.exports = {
     isAddressBookMailbox,
     MAX_CONTACTS,
     newUid,
-    buildVCard,
     buildVCardMessage,
-    parseVCard,
     extractVCard,
-    parseAddressInput,
-    isDeliverable,
     normalizeContact,
-    trimToCap,
-    cleanField
+    trimToCap
 };

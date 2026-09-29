@@ -663,7 +663,6 @@
     /* Rotate caret when the folder's expanded — easier to detect via the
      * .folder.expanded sibling pattern above; if grouping changes we have
      * a fallback that checks isFolderExpanded directly. */
-    .folder.expanded > .caret-icon { transform: rotate(90deg); }
     .caret-spacer { flex: 0 0 auto; width: 18px; height: 1px; }
     .folder {
         flex: 1;

@@ -25,9 +25,3 @@ export function recordLatency(sample: LatencySample) {
     _state.lastMs = sample.ms;
     _state.lastOk = sample.ok;
 }
-
-export function clearLatency() {
-    _state.samples = [];
-    _state.lastMs = null;
-    _state.lastOk = true;
-}

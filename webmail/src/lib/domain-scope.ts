@@ -110,7 +110,7 @@ function isIpLiteral(host: string): boolean {
  * cannot parse, which is exactly the "don't crash, hide the option" case the
  * callers want.
  */
-export function normaliseDomain(domain: string): string | null {
+function normaliseDomain(domain: string): string | null {
     const raw = domain.trim().toLowerCase();
     // Whitespace and the address delimiters mean this was never a bare host
     // (a full address, a display name, an unparseable header) — refuse it
@@ -142,7 +142,7 @@ export function normaliseDomain(domain: string): string | null {
  * dot (`localhost`), an IP literal, or a host that is only a public suffix
  * with nothing registered under it.
  */
-export function rootDomain(domain: string): string | null {
+function rootDomain(domain: string): string | null {
     const host = normaliseDomain(domain);
     if (!host || isIpLiteral(host) || !host.includes('.')) return null;
 
@@ -164,7 +164,7 @@ export function rootDomain(domain: string): string | null {
 }
 
 /** The full host of an address, or null when it has none worth blocking. */
-export function domainOf(address: string | null | undefined): string | null {
+function domainOf(address: string | null | undefined): string | null {
     if (!address) return null;
     // Take the LAST @: a local part may legally contain an unquoted @ in
     // mailcow's parser, and the domain is whatever follows the final one.

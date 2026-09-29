@@ -1,27 +1,33 @@
-// Remote images went from auto-loading to blocked-by-default, and the way
-// that was rolled out is the part worth pinning down.
+// Remote images went from blocked-by-default to ALWAYS ALLOWED THROUGH THE
+// PROXY, and the rollout is the part worth pinning down.
 //
-// The flip is invisible until it is wrong: if an upgrading user silently
-// loses every image in their mailbox, nothing throws, no test elsewhere
-// fails, and the report is "images stopped working" weeks later. So the
+// This reverses v0.19.0, which deliberately made blocking the default and
+// used a migration to protect the users who had been auto-loading images all
+// along. That protection is exactly what is now in the way: anyone left on
+// `alwaysAllowImages: false` keeps a "This message has remote content"
+// overlay on every message with an image in it, and once the toggle that
+// produced the state is deleted there is no longer any way out of it. That
+// is the deployed symptom this release fixes.
+//
+// The flip is invisible until it is wrong in both directions, so the
 // migration's contract is asserted directly, here:
 //
-//   * a NEW profile (no stored blob) resolves to BLOCKED — that is the
-//     whole point of the change;
-//   * an EXISTING profile keeps exactly the behaviour it had, because the
-//     old auto-allow condition accepted EITHER `alwaysAllowImages` OR
-//     `proxyImages`, and `proxyImages` shipped defaulting to true;
+//   * a NEW profile (no stored blob) resolves to proxied-and-allowed;
+//   * an EXISTING profile stuck in the blocked state is MOVED OUT of it —
+//     the field is deleted and the proxy is forced on — because with
+//     blocking gone a stored `proxyImages: false` can only mean "connect to
+//     the sender's CDN from the user's own browser", i.e. hand over their IP;
 //   * live in-memory state and the persisted blob always agree, since a
 //     disagreement makes the first session after an upgrade behave
 //     differently from every reload after it;
 //   * the migration is idempotent, so it cannot re-flip a profile the user
-//     has since changed by hand.
+//     has since changed by hand — including a user who deliberately turns
+//     the proxy back off, who must NOT be re-proxied on the next load.
 //
 // The module is loaded through esbuild (already a webmail dependency) with
 // the Svelte rune globals and the two local imports stubbed, so this
-// exercises the real load() + migrateRemoteImagesDefault code path rather
-// than a re-implementation of it.
-
+// exercises the real load() + migrateRemoteImagesAlwaysAllowed code path
+// rather than a re-implementation of it.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -93,77 +99,85 @@ async function resolve(blob) {
         try { persisted = JSON.parse(after); } catch { persisted = null; } // corrupt blob
     }
     return {
-        live: mod.settings.alwaysAllowImages,
+        // The only image setting left. Live state and the persisted blob are
+        // compared directly rather than through a predicate, because there
+        // is no predicate left to disagree about.
+        proxied: mod.settings.proxyImages,
         persisted,
-        raw: after,
-        blocked: mod.remoteImagesBlockedFor(true)
+        raw: after
     };
 }
 
-// The pre-flip world: the reader auto-allowed when `alwaysAllowImages OR
-// proxyImages` was set, so the proxy flag alone granted permission. That
-// conflation is what this release removed, and it produced a real
-// regression: a user who had turned the proxy OFF was flipped to BLOCKING
-// on upgrade, because `proxyImages: false` failed the old rule. The proxy
-// says how an image is fetched, not whether it may load, so only an
-// explicit always-allow counts as prior consent.
-const PRE_FLIP_COMMON = JSON.stringify({ alwaysAllowImages: false, proxyImages: true });
-// BOTH flags explicitly off: the one pre-flip shape that was already
-// strict, so it stays strict through the migration.
-const PRE_FLIP_STRICT = JSON.stringify({ alwaysAllowImages: false, proxyImages: false });
-// Proxy off but always-allow never set: auto-allowed before the flip via the
-// proxy term, so it must keep auto-allowing. Treating the proxy flag as
-// consent-by-absence is the regression this release fixed.
-const PRE_FLIP_PROXY_OFF = JSON.stringify({ proxyImages: false });
-const PRE_FLIP_ALWAYS_ON = JSON.stringify({ alwaysAllowImages: true, proxyImages: true });
-const PRE_FLIP_LEGACY_BLOB = JSON.stringify({ groupThreads: true }); // no image keys at all
+// The shapes that existed immediately before this release, i.e. what an
+// upgrading profile can actually hold on disk.
+const BLOCKED_BY_DEFAULT = JSON.stringify({
+    alwaysAllowImages: false, proxyImages: true, remoteImagesDefaulted: true
+});
+// The profile that was explicitly strict: blocking AND no proxy. Under the
+// old reader this is the one shape that was already blocking.
+const BLOCKED_NO_PROXY = JSON.stringify({
+    alwaysAllowImages: false, proxyImages: false, remoteImagesDefaulted: true
+});
+// Auto-allowing, no prompt, proxy on — where most users already were.
+const ALLOWED_PROXY_ON = JSON.stringify({ alwaysAllowImages: true, proxyImages: true });
+// A blob predating both image settings entirely.
+const LEGACY_BLOB = JSON.stringify({ groupThreads: true });
 
-test('a brand-new profile gets the blocked-by-default behaviour', async () => {
+test('a brand-new profile loads images through the proxy', async () => {
     const r = await resolve(null);
-    assert.equal(r.live, false);
-    assert.equal(r.blocked, true, 'images must be blocked for a fresh profile');
+    assert.equal(r.proxied, true, 'a fresh profile must proxy remote images');
 });
 
-test('an existing profile keeps the images it already had', async () => {
-    // Only an explicit always-allow counted as consent. Everything else —
-    // including a user who had switched the proxy off — auto-allowed through
-    // the old condition, so all of them keep loading images after the
-    // upgrade. The privacy win lands on NEW profiles, which have no blob.
-    for (const [name, blob, expectAllowed] of [
-        ['proxy on (the shipped default)', PRE_FLIP_COMMON, true],
-        ['proxy off, always-allow unset', PRE_FLIP_PROXY_OFF, true],
-        ['both flags explicitly off (already strict)', PRE_FLIP_STRICT, false],
-        ['always-allow on', PRE_FLIP_ALWAYS_ON, true],
-        ['a blob predating both image settings', PRE_FLIP_LEGACY_BLOB, true]
+test('every profile stuck in the blocked state is moved out of it', async () => {
+    // The point of the migration. Both of these profiles would otherwise
+    // still be showing the "This message has remote content" overlay after
+    // the upgrade, with the toggle that produced it deleted and no way back.
+    for (const [name, blob] of [
+        ['blocked by default', BLOCKED_BY_DEFAULT],
+        ['blocked and proxy off', BLOCKED_NO_PROXY],
+        ['allowed with proxy on', ALLOWED_PROXY_ON],
+        ['a blob predating both image settings', LEGACY_BLOB]
     ]) {
         const r = await resolve(blob);
-        assert.equal(r.live, expectAllowed, `${name}: should keep alwaysAllowImages=${expectAllowed}`);
-        assert.equal(r.blocked, !expectAllowed, `${name}: blocked state should be ${!expectAllowed}`);
+        assert.equal(r.proxied, true, `${name}: must resolve to proxied after the migration`);
+        assert.ok(
+            r.persisted && !('alwaysAllowImages' in r.persisted),
+            `${name}: the dead alwaysAllowImages field must be deleted from the blob`
+        );
+        assert.equal(r.persisted.proxyImages, true, `${name}: the proxy flag must be forced on`);
     }
 });
+
 
 test('live state and the persisted blob never disagree', async () => {
-    for (const blob of [PRE_FLIP_COMMON, PRE_FLIP_PROXY_OFF, PRE_FLIP_STRICT, PRE_FLIP_ALWAYS_ON, PRE_FLIP_LEGACY_BLOB]) {
+    for (const blob of [BLOCKED_BY_DEFAULT, BLOCKED_NO_PROXY, ALLOWED_PROXY_ON, LEGACY_BLOB]) {
         const r = await resolve(blob);
         assert.equal(
-            r.live, r.persisted.alwaysAllowImages,
+            r.proxied, r.persisted.proxyImages,
             'the first session after an upgrade must behave like every reload after it'
         );
-        assert.equal(r.persisted.remoteImagesDefaulted, true, 'the profile should be marked as migrated');
     }
 });
 
-test('the migration is idempotent and does not re-flip a profile', async () => {
-    // Once marked, the migration must leave the stored value alone — a user
-    // who has since turned images off must not have them turned back on by
-    // the next load.
-    const userTurnedThemOff = JSON.stringify({
-        alwaysAllowImages: false, proxyImages: true, remoteImagesDefaulted: true
+test('the migration runs once and then leaves the profile alone', async () => {
+    // The stamp is what separates "opted out before the upgrade" from "opted
+    // out after it". Without one, a stored `proxyImages: false` is a
+    // pre-upgrade profile and MUST be forced back onto the proxy — that is
+    // the entire migration, and it is why the stamp is needed rather than a
+    // state predicate: the predicate cannot tell those two apart and would
+    // re-proxy the user on every single reload, which is the same class of
+    // bug as the prompt itself (a setting that overrides the user).
+    const preUpgradeOptOut = JSON.stringify({ proxyImages: false });
+    const forced = await resolve(preUpgradeOptOut);
+    assert.equal(forced.proxied, true, 'a pre-upgrade opt-out must be moved onto the proxy');
+
+    const postUpgradeOptOut = JSON.stringify({
+        proxyImages: false, remoteImagesAlwaysAllowed: true, density: 'compact'
     });
-    const r = await resolve(userTurnedThemOff);
-    assert.equal(r.live, false, 'a post-flip profile must be read literally');
-    assert.equal(r.persisted.alwaysAllowImages, false);
-    assert.equal(r.blocked, true);
+    const r = await resolve(postUpgradeOptOut);
+    assert.equal(r.proxied, false, 'a deliberate choice to load images directly must survive');
+    assert.equal(r.persisted.proxyImages, false, 'and must be left as the user set it');
+    assert.equal(r.persisted.density, 'compact', 'an untouched setting must survive the read');
 });
 
 test('a corrupt stored blob falls back to the new-profile defaults', async () => {
@@ -172,7 +186,6 @@ test('a corrupt stored blob falls back to the new-profile defaults', async () =>
     // (migrateStripClientRules does the same) — we do not want a migration
     // to destroy a blob it merely failed to understand.
     const r = await resolve('{not json');
-    assert.equal(r.live, false, 'should fall back to blocked-by-default');
-    assert.equal(r.blocked, true);
+    assert.equal(r.proxied, true, 'should fall back to the always-allow-through-proxy default');
     assert.equal(r.raw, '{not json', 'a blob we cannot parse should not be rewritten');
 });

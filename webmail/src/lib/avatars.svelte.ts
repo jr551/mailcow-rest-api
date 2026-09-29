@@ -211,11 +211,11 @@ function viaProxy(upstream: string): string {
     return apiUrl(`/v1/proxy/icon?u=${encodeURIComponent(upstream)}`);
 }
 
-export function avatarUrl(_email: string, hash: string, size = 80): string {
+function avatarUrl(_email: string, hash: string, size = 80): string {
     return viaProxy(`https://www.gravatar.com/avatar/${hash}?d=404&s=${size}`);
 }
 
-export function faviconUrl(domain: string, _size = 64): string {
+function faviconUrl(domain: string, _size = 64): string {
     // DuckDuckGo's icon proxy returns a real 404 for unknown domains
     // (Google's s2/favicons returns a generic globe, which we can't tell
     // apart from a real hit). The image itself is served as PNG.
@@ -225,7 +225,7 @@ export function faviconUrl(domain: string, _size = 64): string {
 // simple-icons CDN. The trailing `/333333` forces a charcoal silhouette
 // regardless of the brand's natural palette so a wall of mixed tiles
 // looks uniform. Dark mode CSS in Avatar.svelte inverts to off-white.
-export function simpleIconUrl(slug: string): string {
+function simpleIconUrl(slug: string): string {
     return viaProxy(`https://cdn.simpleicons.org/${encodeURIComponent(slug)}/333333`);
 }
 
@@ -350,7 +350,7 @@ function writeMyAvatars(m: MyAvatarMap) {
 const _myAvatars = $state<{ map: MyAvatarMap }>({ map: readMyAvatars() });
 export const myAvatars = _myAvatars;
 
-export function getMyAvatar(email: string | null | undefined): string | null {
+function getMyAvatar(email: string | null | undefined): string | null {
     if (!email) return null;
     return _myAvatars.map[email.toLowerCase()] || null;
 }

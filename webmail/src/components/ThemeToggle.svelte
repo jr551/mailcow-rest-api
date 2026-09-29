@@ -11,12 +11,15 @@
     //
     // The popover follows the convention the rest of the topbar already
     // uses (see WeatherChip / Layout's account menu): a plain absolutely
-    // positioned panel, an mousedown listener on document to dismiss, and
-    // Escape to close. The one thing it borrows from the modal layer is
-    // trapFocus, because a popover that the user can Tab straight out of
-    // while it is still visually open is a keyboard trap in the other
-    // direction — worse than no trap, because focus lands somewhere
-    // unrelated and the panel is still on screen.
+    // positioned panel and Escape to close. It dismisses on outside click
+    // with a full-viewport scrim rather than a document mousedown listener,
+    // and it takes Escape at the window in the CAPTURE phase — see
+    // onWindowKey for why the panel itself is the wrong place for it. The
+    // one thing it borrows from the modal layer is trapFocus, because a
+    // popover that the user can Tab straight out of while it is still
+    // visually open is a keyboard trap in the other direction — worse than
+    // no trap, because focus lands somewhere unrelated and the panel is
+    // still on screen.
 
     import { onDestroy } from 'svelte';
     import { themeState, setTheme, effectiveTheme, type Theme } from '../lib/theme.svelte';
@@ -56,9 +59,15 @@
     const icon = $derived(themeState.theme === 'dark' ? 'moon' : themeState.theme === 'light' ? 'sun' : 'monitor');
     const resolved = $derived(effectiveTheme());
 
-    const accentName = $derived(
-        ACCENT_SWATCHES.find((s) => s.hex.toLowerCase() === (skinState.accentOverride ?? '').toLowerCase())?.label
+    // The swatch matching the live override, or null when there is none —
+    // including the case of a CUSTOM hex from Settings' colour input, which
+    // matches no curated swatch. That case drives the roving-tabindex
+    // fallback below: "no swatch is selected" must not mean "no swatch is
+    // reachable".
+    const accentSwatch = $derived(
+        ACCENT_SWATCHES.find((s) => s.hex.toLowerCase() === (skinState.accentOverride ?? '').toLowerCase()) ?? null
     );
+    const accentName = $derived(accentSwatch?.label);
 
     const triggerLabel = $derived(
         `Appearance — ${labels[themeState.theme]} mode`
@@ -92,6 +101,24 @@
         else openPanel();
     }
 
+    /**
+     * Escape closes the popover — handled at the WINDOW, in the capture
+     * phase, not on the panel, for two reasons that both bite in practice.
+     *
+     * A click on the panel's own padding (or the gap between its sections)
+     * blurs focus to <body>, and a handler bound to the panel then never
+     * sees the key at all: the popover stayed open while the Escape fell
+     * through to Layout's document handler, which closed the reading pane
+     * behind it. And capture puts us in front of that handler, which is
+     * registered first and would otherwise win the bubble order. (Same
+     * contract as RuleFromMessageDialog.)
+     */
+    function onWindowKey(e: KeyboardEvent) {
+        if (!open || e.key !== 'Escape') return;
+        e.stopPropagation();
+        closePanel();
+    }
+
     function pick(hex: string) {
         setCustomAccent(hex);
     }
@@ -108,17 +135,26 @@
      * would step straight past them. Selection follows focus, as the pattern
      * requires, so arrowing through previews the accent live.
      *
-     * Radios only respond to the axis they are laid out on, and the swatch
-     * grid is 5 columns wide, so Up/Down move by a full row.
+     * Both axes, in both groups: the APG radio pattern binds Up/Down as
+     * well as Left/Right ("only the axis it is laid out on" is the TABLIST
+     * rule, not the radio one), and the swatch grid is 5 columns wide, so
+     * Up/Down there move by a full row.
      */
     function onRadioKey(e: KeyboardEvent, group: 'mode' | 'accent') {
         const horizontal = group === 'mode';
         const keys: Record<string, number> = horizontal
-            ? { ArrowRight: 1, ArrowLeft: -1 }
+            ? { ArrowRight: 1, ArrowLeft: -1, ArrowDown: 1, ArrowUp: -1 }
             : { ArrowRight: 1, ArrowLeft: -1, ArrowDown: 5, ArrowUp: -5 };
         const step = keys[e.key];
         if (!step) return;
         e.preventDefault();
+        // stopPropagation, not just preventDefault: Layout's document-level
+        // keydown moves the message selection on ArrowUp/ArrowDown and does
+        // not check defaultPrevented, so without this one ArrowDown both
+        // walked the palette and changed the message open behind the
+        // popover. (MenuSubmenu and MessageList's context menu stop these
+        // keys for exactly the same reason.)
+        e.stopPropagation();
 
         const current = e.currentTarget as HTMLElement;
         const group_ = current.closest('[role="radiogroup"]');
@@ -134,6 +170,8 @@
 
     onDestroy(() => stopTrap?.());
 </script>
+
+<svelte:window onkeydowncapture={onWindowKey} />
 
 <div class="theme-toggle-host">
     <button
@@ -161,9 +199,17 @@
             class="appearance-panel"
             bind:this={panelEl}
             role="dialog"
-            aria-label="Appearance"
+            tabindex="-1"
+            aria-labelledby="appearance-title"
             data-testid="appearance-panel"
-            onkeydown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); closePanel(); } }}
+            onkeydown={(e) => {
+                // The two radio groups stop the arrows at the target; this
+                // catches the close and reset buttons, where an unhandled
+                // ArrowUp/ArrowDown would otherwise reach Layout's document
+                // handler and move the message selection behind the popover.
+                // (Escape is not handled here — see onWindowKey.)
+                if (e.key === 'ArrowUp' || e.key === 'ArrowDown') e.stopPropagation();
+            }}
         >
             <div class="panel-head">
                 <span class="panel-title" id="appearance-title">Appearance</span>
@@ -217,10 +263,11 @@
 
                 <div class="swatches" role="radiogroup" aria-label={`Accent colour${activeSkin ? ` over the ${activeSkin.label} skin` : ''}`}>
                     <!-- Roving tabindex. The `i === 0` fallback below matters:
-                         with no override layered, NO swatch is selected, so a
-                         naive `selected ? 0 : -1` would leave the entire row
-                         out of the tab order and a keyboard user could never
-                         reach the accents at all. -->
+                         whenever no swatch is selected — no override at all,
+                         or a custom hex that matches none of them — a naive
+                         `selected ? 0 : -1` would leave the entire row out of
+                         the tab order and a keyboard user could never reach
+                         the accents at all. -->
                     {#each ACCENT_SWATCHES as s, i (s.id)}
                         {@const selected = (skinState.accentOverride ?? '').toLowerCase() === s.hex.toLowerCase()}
                         <button
@@ -229,7 +276,7 @@
                             class="swatch"
                             class:selected
                             aria-checked={selected}
-                            tabindex={selected || (skinState.accentOverride === null && i === 0) ? 0 : -1}
+                            tabindex={selected || (!accentSwatch && i === 0) ? 0 : -1}
                             title={s.label}
                             data-testid={`accent-${s.id}`}
                             onkeydown={(e) => onRadioKey(e, 'accent')}

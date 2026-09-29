@@ -44,7 +44,7 @@ export function findTrashFolder(mailboxes: Mailbox[]): string | null {
     return named ? named.path : null;
 }
 
-export function findInboxFolder(mailboxes: Mailbox[]): string | null {
+function findInboxFolder(mailboxes: Mailbox[]): string | null {
     const inbox = mailboxes.find((m) => m.specialUse === '\\Inbox');
     if (inbox) return inbox.path;
     const named = mailboxes.find((m) => /^inbox$/i.test(m.name));

@@ -52,7 +52,6 @@
         }
         return dims;
     });
-    let fontSize = $derived(`${Math.max(10, Math.round(size * 0.42))}px`);
 </script>
 
 <span
@@ -121,7 +120,6 @@
         object-fit: cover;
         display: block;
     }
-    .initial { letter-spacing: 0; }
     .silhouette {
         opacity: 0.92;
         flex-shrink: 0;

@@ -198,7 +198,5 @@ module.exports = {
     parseBasicAuth,
     parseBearerAuth,
     verifyWithDovecot,
-    createAuthHook,
-    isSwaggerPath,
-    isWebmailPath
+    createAuthHook
 };

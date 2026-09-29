@@ -48,7 +48,7 @@
     import ShortcutPopup from './ShortcutPopup.svelte';
     import ShortcutEmbed from './ShortcutEmbed.svelte';
     import BulkBar from './BulkBar.svelte';
-    import { getShortcuts, blockSender as apiBlockSender, type Shortcut } from '../lib/api';
+    import { getShortcuts, blockSender as apiBlockSender, bulkDeleteMessages, type Shortcut } from '../lib/api';
     import { shortcutsItems, embeddedShortcut, popupShortcut } from '../lib/shortcuts-store';
     import { probeCapabilities, settings, setHideSidebar } from '../lib/settings.svelte';
     import { SKINS, skinState } from '../lib/skins.svelte';
@@ -56,7 +56,7 @@
     import { toggleSelected, clearSelection, selectAllVisible } from '../lib/store.svelte';
     import * as cache from '../lib/cache';
     import { startNetworkWatchdog, withTimeout } from '../lib/network-watchdog.svelte';
-    import { playNotify, playSent, playClick, primeAudio, sounds, setMuted } from '../lib/sounds.svelte';
+    import { playNotify, playSent, playClick, playShred, primeAudio, sounds, setMuted } from '../lib/sounds.svelte';
     import { pwa, promptInstall } from '../lib/pwa.svelte';
     import { recordEnvelope, loadAddressBook } from '../lib/address-book.svelte';
     import { ensureCountry, geoipCache, flagEmoji } from '../lib/geoip.svelte';
@@ -1073,10 +1073,41 @@
      * alternative — a separate onBlockDomain callback — meant a second copy
      * of confirm → blockSender → toast → error, and those copies drift.
      *
-     * Both the confirm and the success toast name the exact pattern, because
-     * `*@example.com` is a far bigger hammer than `someone@example.com` and
-     * the user has to see which one they are about to swing. This matches the
-     * wording doAiBlockSender already uses for its own patterns.
+     * Blocking also DELETES what the sender already left in this mailbox.
+     * That is the whole point of the request this was built for: "blocking a
+     * sender should delete an email". Blocking only stops future mail, so
+     * the folder still fills with the spam the user just decided they do not
+     * want, and the action they took looks like it did nothing.
+     *
+     * Scope, and why it is this scope:
+     *   - The mailbox the action was taken in, and only that one. A blanket
+     *     sweep of every folder would destroy mail the user filed into
+     *     Archive on purpose, and the context menu has no way to show them
+     *     what would be lost across folders. Scoping to the folder in front
+     *     of the user is the only scope that is visible before the
+     *     confirmation and truthful after it.
+     *   - Every match, not just the right-clicked message. The user asked
+     *     for the sender's mail to be gone; deleting one message out of the
+     *     forty that sender put there is not a smaller version of that, it
+     *     is a different action. The count is computed server-side by
+     *     IMAP SEARCH, so it covers mail on pages the list never loaded.
+     *   - Bulk-selected rows are NOT used as the delete set. They are a
+     *     different intent: the user ticked them for a different action
+     *     (mark read, archive). Right-clicking one of them and blocking
+     *     its sender should still remove that sender's whole trail from the
+     *     folder, not just the ticked subset.
+     *
+     * The delete is a separate step from the block, and that ordering is
+     * deliberate: the block is cheap, idempotent and reversible (Settings →
+     * blocked senders), while the delete is neither. Doing the block first
+     * means a delete that fails still leaves the user with future mail
+     * blocked and an honest error, rather than the reverse — mail gone,
+     * sender still sending.
+     *
+     * This is scoped to the folder and does not touch the hidden `.wh-*`
+     * mailboxes the outbound-webhook forwarder polls: those messages are
+     * in flight, not filed, and "keep the message in the mailbox" is the
+     * webhook's own `keep` setting's business, not this action's.
      */
     async function blockSenderForUid(uid: number, pattern?: string) {
         const m = ui.messages.find((x) => x.uid === uid);
@@ -1085,14 +1116,105 @@
             showToast('error', 'No sender address on this message');
             return;
         }
-        if (!confirm(`Block all mail matching ${addr}?`)) return;
+        const folder = ui.selectedPath;
+        // Counted with a DRY RUN, before the block, and named in the
+        // confirmation. Two things depend on this being a dry run rather
+        // than a real delete used as a probe: a destructive action whose
+        // size the user cannot see is not consented to, and probing with a
+        // real delete would expunge the mail BEFORE the confirm — so
+        // cancelling would leave the folder already cleaned. The server
+        // opens the mailbox read-only for a dry run, so the count itself
+        // cannot delete anything either.
+        let doomed = 0;
+        try {
+            doomed = (await bulkDeleteMessages(folder, { sender: addr, dryRun: true })).matched;
+        } catch (err) {
+            // A search failure must not become "0 messages" — that would
+            // turn an unreachable mailbox into a confirmation promising a
+            // clean folder. Fall through with the count unknown and say so.
+            doomed = -1;
+        }
+        const scope = doomed < 0
+            ? `Block all mail matching ${addr}?\n\nThe message count in ${folder} could not be read, so existing messages may or may not be deleted.`
+            : `Block all mail matching ${addr} and permanently delete ${doomed} existing message${doomed === 1 ? '' : 's'} from ${folder}?\n\nThis cannot be undone.`;
+        if (!confirm(scope)) return;
         try {
             await apiBlockSender(addr);
-            showToast('success', `Blocked ${addr}`);
         } catch (err) {
             const msg = err instanceof ApiError ? (err.detail || err.title) : (err as Error).message;
             showToast('error', msg || 'Could not block sender');
+            return;
         }
+        // Deleted after the block, as reasoned above. The count is not
+        // trusted from the probe above: whatever this call actually matches
+        // is what gets expunged, and what it reports is what the toast says.
+        try {
+            const res = await bulkDeleteMessages(folder, { sender: addr });
+            if (res.deleted) {
+                // Local state: drop the rows and the cached folder so the
+                // list cannot show messages the server has just removed.
+                // The detail pane too — a deleted message left on screen
+                // behind a "deleted 3" toast reads as the delete failing.
+                const gone = new Set(
+                    ui.messages
+                        .filter((x) => matchesSenderPattern(x.envelope?.from?.[0]?.address, addr))
+                        .map((x) => x.uid)
+                );
+                ui.messages = ui.messages.filter((x) => !gone.has(x.uid));
+                ui.messagesTotal = Math.max(0, ui.messagesTotal - res.deleted);
+                if (ui.selectedUid !== null && gone.has(ui.selectedUid)) {
+                    ui.selectedUid = null;
+                    ui.detail = null;
+                }
+                // Bulk ticks on rows that no longer exist would survive as
+                // ghost uids and make the next bulk action silently miss
+                // them. Reassigned rather than mutated: the store's own
+                // toggle does the same, because a $state Set only notifies
+                // on identity change.
+                if ([...gone].some((g) => ui.selected.has(g))) {
+                    ui.selected = new Set([...ui.selected].filter((s) => !gone.has(s)));
+                }
+                cache.invalidatePath(currentUser(), folder);
+                // Only when something was actually destroyed: the shred cue
+                // is feedback about deletion, and firing it for a 0-match
+                // block would claim mail was destroyed when none was.
+                playShred();
+            }
+            showToast(
+                'success',
+                res.deleted
+                    ? `Blocked ${addr} — deleted ${res.deleted} from ${folder}`
+                    : `Blocked ${addr}`
+            );
+        } catch (err) {
+            // The block stands. Say exactly that, rather than a generic
+            // failure that implies the whole action rolled back.
+            const msg = err instanceof ApiError ? (err.detail || err.title) : (err as Error).message;
+            showToast('error', `Blocked ${addr}, but the delete failed: ${msg || 'unknown error'}`);
+            void refreshMessages({ force: true });
+        }
+    }
+
+    /**
+     * Does an address match the rspamd `blacklist_from` pattern?
+     *
+     * Only used to prune already-rendered rows after the server has done the
+     * real expunge — the authoritative match is the server's IMAP SEARCH.
+     * It still has to agree with that search, though: a client that prunes
+     * fewer rows than were deleted leaves deleted mail on screen, which is
+     * the bug this whole flow exists to fix. So it implements the same two
+     * shapes rspamd's `from` supports: an exact address, and a `*` wildcard
+     * matched against the whole address (which is how `*@example.com` gets
+     * its meaning).
+     */
+    function matchesSenderPattern(address: string | null | undefined, pattern: string): boolean {
+        if (!address) return false;
+        if (!pattern.includes('*')) return address.toLowerCase() === pattern.toLowerCase();
+        const re = new RegExp(
+            '^' + pattern.replace(/[.*+?^${}()|[\]\\]/g, (c) => (c === '*' ? '[\\s\\S]*' : '\\' + c)) + '$',
+            'i'
+        );
+        return re.test(address);
     }
 
     async function archiveMessage(uid: number) {
@@ -1287,9 +1409,17 @@
     }
 
     function onKey(e: KeyboardEvent) {
-        // Ignore when typing in inputs.
+        // Ignore when typing in inputs — and in a <select>.
+        //
+        // SELECT is not a nicety: the arrow branches below call
+        // preventDefault, and on a focused <select> that CANCELS the
+        // control's own option change (verified in Chromium). So without
+        // this, ArrowDown on any select in the app — the rule dialog's
+        // "When"/"Then", every Settings dropdown — moved the message
+        // selection behind the open modal and played the click sound
+        // instead of changing the option the user was pointing at.
         const target = e.target as HTMLElement;
-        if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+        if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)) {
             if (e.key === 'Escape') {
                 if (ui.composeOpen) ui.composeOpen = false;
                 if (ui.aiPanelOpen) ui.aiPanelOpen = false;
@@ -1541,17 +1671,35 @@
         >
             <Icon name={settings.hideSidebar ? 'panelLeftOpen' : 'panelLeftClose'} size={16} />
         </button>
+        <!-- Outlook's command bar is: launcher, account name, one wide
+             rounded search field, then an icon cluster. The search field is
+             the hero; the product name is a quiet watermark in the corner.
+             So the brand collapses to icon + a single small wordmark, and
+             the "Mail / imap-rest" two-line lockup is gone — it read as two
+             competing labels at a weight that competed with the field the
+             user is actually looking at. OWA's own account name still shows
+             here via .brand-user (skin-outlook's extras reveal it), so the
+             "who am I signed in as" answer stays next to the launcher. -->
         <div class="brand">
             <div class="logo" aria-hidden="true">
-                <Icon name="mail" size={18} />
+                <Icon name="mail" size={16} />
             </div>
-            <span class="brand-name">
-                <span class="brand-mark">Mail</span><span class="brand-sub">imap-rest</span>
-            </span>
-            <!-- Outlook skin only: OWA shows the signed-in user in the header.
-                 Hidden by default; skin-outlook's extras CSS reveals it. -->
+            <span class="brand-mark">Mail</span>
+            <!-- Outlook skin only: OWA shows the signed-in user in the
+                 header, next to the launcher. Hidden by default and revealed
+                 by the skin's extras CSS.
+
+                 This used to render a literal 👤 emoji, which was wrong twice
+                 over: it duplicated the real avatar already in the
+                 right-hand cluster, and an emoji is not an identity. It shows
+                 the account's own picture now. `aria-hidden` because the
+                 account menu button on the right already announces the same
+                 identity — two live regions saying the same thing is noise. -->
             <span class="brand-user" aria-hidden="true">
-                <span class="brand-user-emoji">👤</span>{authState.activeUser?.split('@')[0] || ''}
+                {#if authState.activeUser}
+                    <Avatar email={authState.activeUser} size={20} />
+                {/if}
+                {authState.activeUser?.split('@')[0] || ''}
             </span>
         </div>
         <div class="search-wrap">
@@ -1611,15 +1759,32 @@
             {/if}
         </div>
         <div class="header-actions">
-            {#if serverPingState === 'offline'}
-                <span class="server-ping ping-offline" title="API server unreachable" data-testid="server-ping" aria-label="API offline">
-                    <span class="ping-dot"></span>
-                    <span class="ping-radar"></span>
-                    <span class="ping-label">offline</span>
-                </span>
-            {:else}
-                <LatencyChip />
-            {/if}
+            <!-- Fixed-width slot, always mounted.
+                 The readout used to be a bare conditional: `<LatencyChip/>`
+                 when reachable, `.server-ping` when not. Those two are
+                 different widths (63–81 px, measured) AND the chip's own
+                 width tracks the digits it prints, so every ping cycle
+                 re-negotiated how much room the actions cluster needed and
+                 the `flex: 1` search field absorbed the difference — the
+                 search box's right edge moved ~18.7 px on an
+                 offline→online transition, and ~6.7 px purely from the ms
+                 figure going 2 digits → 1.
+                 The slot owns the width instead: `flex: 0 0 var(--topbar-latency-w)`
+                 with a tabular figure inside, so the number appearing,
+                 widening, or turning into "offline" cannot resize the row.
+                 Both children are absolutely positioned into that box and
+                 centred, so they also can't contribute height. -->
+            <div class="latency-slot">
+                {#if serverPingState === 'offline'}
+                    <span class="server-ping ping-offline" title="API server unreachable" data-testid="server-ping" aria-label="API offline">
+                        <span class="ping-dot"></span>
+                        <span class="ping-radar"></span>
+                        <span class="ping-label">offline</span>
+                    </span>
+                {:else}
+                    <LatencyChip />
+                {/if}
+            </div>
             <!-- A skin that hides the ambient chips does it with CSS that
                  * only covers .weather-wrap, so the chip's options menu (a
                  * sibling of the wrapper) would survive as an orphan
@@ -2248,49 +2413,85 @@
         min-height: 100dvh;
         background: var(--bg-base);
     }
+    /* Outlook command bar geometry.
+     *
+     * Two things were fighting here. The 16 px gap with six 36 px rows of
+     * wildly different intrinsic heights let the chip, the theme toggle's
+     * labelled pill and the account button each define their own rhythm;
+     * and `.brand { min-width: 220px }` pinned a quarter of the header to
+     * two words of text.
+     *
+     * Now: one fixed height for every row (--topbar-h), a 2px gap so the
+     * right-hand cluster reads as a single group with OWA's tight spacing,
+     * and a brand that sizes to its content.
+     *
+     * --topbar-latency-w is load-bearing, not cosmetic — see .latency-slot. */
     .topbar {
+        --topbar-h: 40px;
+        /* Wide enough for the widest thing that ever lands in the slot: the
+         * sparkline chip (81.27 px measured at 3 digits + "ms") or the
+         * "offline" pill (63.27 px). 88 px clears both, so the digit count
+         * and the live/offline swap can never move the row. */
+        --topbar-latency-w: 88px;
         flex: 0 0 auto;
         display: flex;
         align-items: center;
-        gap: 16px;
-        padding: 10px 16px;
+        gap: 2px;
+        min-height: var(--topbar-h);
+        padding: 6px 12px;
         background: var(--bg-surface);
         border-bottom: 1px solid var(--border-subtle);
     }
     .brand {
         display: flex;
         align-items: center;
-        gap: 10px;
-        min-width: 220px;
+        gap: 8px;
+        /* Was `min-width: 220px` — a fixed reservation that existed only to
+         * stop the brand pushing the search field around as the account name
+         * grew, and that cost the header 220 px of field for two words. The
+         * brand now sizes to its content and the field takes the space. */
+        min-width: 0;
+        /* The brand is chrome, not content: it shrinks first when the window
+         * narrows so the search field stays usable. */
+        flex: 0 1 auto;
+        margin-right: 8px;
+    }
+
+    /* The rail toggle is OWA's app launcher — the first control of the
+       command bar, so it gets the same 34px square as the cluster rather
+       than the 30px it inherited from the generic .btn-ghost padding. */
+    .topbar > .sidebar-toggle {
+        width: 34px;
+        height: 34px;
+        flex: 0 0 auto;
+        padding: 0;
+        gap: 0;
+        border-radius: var(--radius-sm);
+        justify-content: center;
     }
     .logo {
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        width: 32px;
-        height: 32px;
-        border-radius: var(--radius-md);
+        width: 26px;
+        height: 26px;
+        flex: 0 0 auto;
+        border-radius: var(--radius-sm);
         background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 60%, #d268f4));
         color: var(--text-on-accent);
     }
-    .brand-name {
-        display: inline-flex;
-        flex-direction: column;
-        line-height: 1;
-        gap: 2px;
-    }
+    /* One small wordmark. The old two-line "Mail" over "IMAP-REST" lockup was
+       a 15px bold heading over a 10px caps subheading — two labels competing
+       with the field the user is actually looking at. This is a watermark,
+       so it sits at --text-tertiary: under the Outlook skin it would
+       otherwise be the one high-contrast item between the account name and
+       the field, which is exactly what OWA's header is not. */
     .brand-mark {
-        font-size: 15px;
-        font-weight: 700;
-        letter-spacing: -0.02em;
-        color: var(--text-primary);
-    }
-    .brand-sub {
-        font-size: 10px;
+        font-size: 13px;
         font-weight: 600;
-        letter-spacing: 0.06em;
-        text-transform: uppercase;
+        letter-spacing: -0.01em;
         color: var(--text-tertiary);
+        white-space: nowrap;
     }
     .brand-user {
         display: none;
@@ -2301,16 +2502,23 @@
         color: var(--text-secondary);
         white-space: nowrap;
     }
+    /* The search field is the hero of an Outlook command bar: wide, fully
+       rounded, and taller than the icon buttons around it. */
     .search-wrap {
-        flex: 1;
-        max-width: 720px;
+        flex: 1 1 auto;
+        /* Was 720px. Outlook's field runs most of the bar's width, and the
+           old cap left a dead 500px slab of background to the right of the
+           search box on a wide window — the thing that made the bar read as
+           "generic app" rather than "mail client". */
+        max-width: 920px;
         display: flex;
         align-items: center;
-        gap: 8px;
+        gap: 10px;
         background: var(--bg-base);
         border: 1px solid var(--border-subtle);
-        border-radius: var(--radius-md);
-        padding: 0 12px;
+        /* OWA's field is a full pill, not a rounded rectangle. */
+        border-radius: 999px;
+        padding: 0 14px;
         color: var(--text-tertiary);
         transition: border-color var(--transition-fast), background var(--transition-fast);
         position: relative;
@@ -2378,9 +2586,17 @@
     }
     .search-wrap input {
         flex: 1;
+        min-width: 0;
         border: none;
         background: transparent;
-        padding: 9px 0;
+        /* 14px/1.4 (≈20px) + 10px padding = ~40px, a few pixels taller than
+           the 34px icon buttons. That height difference is the cue that makes
+           the bar read as "a command bar with a search box in it" rather than
+           "a toolbar with one wide button" — and 14px is OWA's own search
+           type size, so the placeholder stops shouting. */
+        font-size: 14px;
+        line-height: 1.4;
+        padding: 10px 0;
         color: var(--text-primary);
     }
     .search-wrap input:focus { outline: none; box-shadow: none; }
@@ -2418,8 +2634,69 @@
     .header-actions {
         display: flex;
         align-items: center;
-        gap: 8px;
+        /* The topbar's 2px gap is for launcher/brand vs field; INSIDE the
+           icon cluster OWA packs tighter still. A 2px gap plus the buttons'
+           own 8px padding gives a 10px icon-to-icon pitch, which is what
+           makes the right-hand side read as one group. */
+        gap: 2px;
+        flex: 0 0 auto;
         margin-left: auto;
+    }
+    /* Every control in the cluster is the same square, so the eye reads a
+       row of targets rather than a row of differently-sized widgets.
+       `flex-shrink: 0` is what actually finishes the job: without it the
+       cluster's contents (weather chip, calendar ticker, account email) are
+       what the browser gives up space to on a narrow window, and the bar's
+       layout shifts as those chips appear and disappear. */
+    .header-actions :global(.btn-ghost),
+    .header-actions :global(.theme-toggle) {
+        width: 34px;
+        height: 34px;
+        flex: 0 0 auto;
+        padding: 0;
+        gap: 0;
+        border-radius: var(--radius-sm);
+        justify-content: center;
+    }
+    /* The theme toggle prints "Auto" / "Light" / "Dark" next to its icon.
+       In a command bar that label is noise — the panel it opens is the
+       labelled thing — and it was the widest item in the cluster, so it set
+       the cluster's width. Icon only now; the label keeps its accessible
+       name via the button's aria-label (see ThemeToggle's triggerLabel). */
+    .header-actions :global(.theme-toggle .hidden-on-narrow) {
+        display: none;
+    }
+
+    /* THE LAYOUT-SHIFT FIX.
+     *
+     * Measured before: with the latency readout mounted conditionally, the
+     * search field's width moved 573.22 → 591.22 → 579.91 px across a
+     * single offline→online ping cycle — up to 18.7 px of horizontal
+     * travel caused by a health check the user did not ask for. The cause
+     * is two-fold: `.server-ping` and `LatencyChip` are different widths,
+     * and the chip's own width tracks its digit count (74.58 px at 1 digit,
+     * 81.27 px at 3).
+     *
+     * The slot is the fix. `flex: 0 0 <width>` means the row's share of the
+     * bar is decided by a token and never by what is printed inside it, so
+     * the digit count, a "–" → "812" transition, or the whole live/offline
+     * swap cannot propagate. Both children are absolutely positioned and
+     * centred inside it so they contribute no width AND no height — the
+     * offline pill is 24px tall against the chip's 18px, and in flow that
+     * difference would nudge the bar's vertical centring too. */
+    .latency-slot {
+        position: relative;
+        flex: 0 0 var(--topbar-latency-w);
+        width: var(--topbar-latency-w);
+        align-self: center;
+        height: 26px;
+        margin: 0 6px;
+    }
+    .latency-slot > * {
+        position: absolute;
+        inset: 0;
+        margin: auto;
+        height: fit-content;
     }
     .server-ping {
         position: relative;
@@ -2455,9 +2732,6 @@
         0%   { transform: translateY(-50%) scale(0.6); opacity: 0.85; }
         80%, 100% { transform: translateY(-50%) scale(2.6); opacity: 0; }
     }
-    .server-ping.ping-slow .ping-dot,
-    .server-ping.ping-slow .ping-radar { background: #d18c1d; border-color: #d18c1d; }
-    .server-ping.ping-slow { color: #d18c1d; }
     .server-ping.ping-offline .ping-dot { background: var(--danger); }
     .server-ping.ping-offline .ping-radar { border-color: var(--danger); animation-duration: 1s; }
     .server-ping.ping-offline { color: var(--danger); }
@@ -2484,19 +2758,32 @@
         font-weight: 600;
         margin-left: 4px;
     }
+    /* The account chip is the last item in the cluster, so it wears the
+       cluster's squared rhythm instead of the round, boxed pill it had.
+       Outlook's account control is a labelled one, not an avatar in a
+       lozenge — and dropping the box also stops the bar's right edge from
+       stepping as the address or the account count changes length. */
     .user {
         display: flex;
         align-items: center;
         gap: 8px;
-        padding: 4px 10px 4px 4px;
-        border-radius: var(--radius-md);
-        background: var(--bg-base);
-        border: 1px solid var(--border-subtle);
+        height: 34px;
+        padding: 0 8px 0 4px;
+        border-radius: var(--radius-sm);
+        background: transparent;
+        border: 1px solid transparent;
         color: var(--text-primary);
-        transition: background-color var(--transition-fast), border-color var(--transition-fast);
+        transition: background-color var(--transition-fast), color var(--transition-fast);
         cursor: pointer;
+        /* Don't let the cluster's flex rules squeeze the contents when the
+           address is long: the bar would trade avatar-and-label for width,
+           and a 26px round avatar rendered at 12px wide reads as an oval,
+           not an account. The label truncates instead (`.user-email`). */
+        min-width: 0;
+        flex-shrink: 0;
     }
-    .user:hover { background: var(--bg-hover); border-color: var(--border-soft); }
+    .user > :global(.avatar) { flex: 0 0 auto; }
+    .user:hover { background: var(--bg-hover); }
     .user .caret { color: var(--text-tertiary); margin-left: 2px; }
     .account-menu {
         position: absolute;
@@ -2573,12 +2860,6 @@
     }
     .account-row:hover .account-signout { opacity: 1; }
     .account-signout:hover { background: var(--danger-soft); color: var(--danger); }
-    .account-meta {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        padding: 8px 10px 6px;
-    }
     .account-mark {
         display: inline-flex;
         align-items: center;
@@ -2614,7 +2895,10 @@
     .user-email { max-width: 220px; font-size: 13px; }
     @media (max-width: 720px) {
         .user-email { display: none; }
-        .brand-name { display: none; }
+        /* Was `.brand-name` — the two-line lockup is gone, so this rule had
+           nothing left to hide and the wordmark stayed put. Target the
+           wordmark itself: on a phone the field matters more than the name. */
+        .brand-mark { display: none; }
     }
     .body {
         flex: 1;

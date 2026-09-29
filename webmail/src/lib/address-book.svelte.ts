@@ -601,7 +601,7 @@ export function contactNameFor(address: string): string {
 }
 
 /** Every contact, name-sorted, for the editable list in Settings. */
-export function allContacts(): Contact[] {
+function allContacts(): Contact[] {
     return [..._state.contacts].sort((a, b) =>
         (a.name || a.address).localeCompare(b.name || b.address)
     );

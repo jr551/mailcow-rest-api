@@ -192,4 +192,8 @@ function scrubMessages(messages) {
     return { messages: cleaned, counts, redacted };
 }
 
-module.exports = { scrubText, scrubMessages, scrubPii, scrubMessagesPii, luhnValid };
+module.exports = {
+    scrubText,
+    scrubMessages,
+    scrubMessagesPii
+};

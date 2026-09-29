@@ -1,6 +1,7 @@
 // One-shot LLM call that turns the visible inbox into a single-paragraph
-// summary + a severity-coloured action list. Same pattern as
-// email-actions.svelte.ts: browser → user's OpenAI-compatible provider.
+// summary + a severity-coloured action list. Same endpoint resolution as
+// email-actions.svelte.ts: the server's proxy when AI is configured there,
+// otherwise the user's OpenAI-compatible provider.
 
 import { settings, capabilities, aiAuthKey } from './settings.svelte';
 import { cachedChatCompletion } from './ai-cache.svelte';

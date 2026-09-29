@@ -1352,25 +1352,6 @@
     .bubble.streaming {
         box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
     }
-    .bg-task-banner {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        padding: 8px 14px;
-        background: color-mix(in srgb, var(--accent) 10%, var(--bg-surface));
-        border-bottom: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border-subtle));
-        font-size: 12.5px;
-    }
-    .bg-task-text { flex: 1; min-width: 0; }
-    .bg-task-spinner {
-        width: 12px;
-        height: 12px;
-        border-radius: 50%;
-        border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
-        border-top-color: var(--accent);
-        animation: bg-task-spin 0.9s linear infinite;
-    }
-    @keyframes bg-task-spin { to { transform: rotate(360deg); } }
     .bg-task-cancel {
         appearance: none;
         background: transparent;
@@ -1383,7 +1364,6 @@
     }
     .bg-task-cancel:hover { background: var(--bg-hover); color: var(--text-primary); }
     @media (prefers-reduced-motion: reduce) {
-        .bg-task-spinner { animation: none; }
     }
 
     /* Rich live-progress widget shown above the chat scroll while a

@@ -132,7 +132,11 @@
         color: var(--text-tertiary, var(--text-secondary));
         border: 1px solid var(--border-subtle);
         background: var(--bg-base);
-        opacity: 0.85;
+        /* No `opacity` here. The whole chip used to be 0.85 and the spark
+         * canvas another 0.85 on top, so on the accent bar the ms figure
+         * composited down to roughly 3:1 and read as a smudge. Opacity
+         * multiplies contrast, and this chip is text first — the tone
+         * colours below carry the signal that opacity was standing in for. */
     }
     .spark {
         display: block;
@@ -144,8 +148,8 @@
     .unit { opacity: 0.6; margin-left: 1px; }
 
     /* Tone hints — subtle; the canvas is the primary signal. */
-    .lat-chip.tone-good   { color: var(--text-secondary); }
-    .lat-chip.tone-slow   { color: #d18c1d; border-color: color-mix(in srgb, #d18c1d 30%, var(--border-subtle)); }
+    .lat-chip.tone-good   { color: var(--text-primary); }
+    .lat-chip.tone-slow   { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 30%, var(--border-subtle)); }
     .lat-chip.tone-bad    { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 30%, var(--border-subtle)); }
     @media (max-width: 720px) {
         .lat-chip .spark { display: none; }

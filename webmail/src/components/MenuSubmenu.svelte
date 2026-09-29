@@ -29,9 +29,10 @@
       and clamped to the bottom edge so a long folder list scrolls instead of
       running off-screen.
 
-    The panel renders as a sibling of the trigger <li> rather than inside it,
-    so a host menu's `overflow-y: auto` cannot clip it. Callers put this
-    inside a `role="menu"` <ul>.
+    The panel lives INSIDE the trigger's <li> (so the host <ul role="menu">
+    keeps valid list nesting) but is position:fixed, which is what keeps a
+    host menu's `overflow-y: auto` from clipping it. Callers put this inside
+    a `role="menu"` <ul>.
 -->
 <script lang="ts">
     import { tick } from 'svelte';
@@ -61,8 +62,28 @@
          * submenu reads as part of the same menu rather than a bolt-on.
          */
         width?: number;
+        /**
+         * Called every time the panel is about to open, after it has been
+         * mounted. Lets a caller fetch a list lazily — the panel opening is
+         * the first time anyone has asked for this data, so asking on mount
+         * would be a request per page render for a menu most users never
+         * touch.
+         *
+         * The panel opens immediately and renders whatever `items`
+         * currently holds: this is a notification, not a gate. A caller
+         * that wants a spinner refetches and mutates `items`, and the host
+         * re-renders when the fetch resolves.
+         */
+        onOpen?: () => void;
+        /**
+         * Shown in place of the item list when there is nothing to pick —
+         * "no webhooks configured", "not available on this server". An empty
+         * panel with no explanation reads as a broken menu, and a broken
+         * menu is worse than a menu that says why it has nothing.
+         */
+        emptyText?: string | null;
     }
-    let { label, icon, items, onSelect, testid, width = 220 }: Props = $props();
+    let { label, icon, items, onSelect, testid, width = 220, onOpen, emptyText = null }: Props = $props();
 
     let open = $state(false);
     let triggerEl = $state<HTMLButtonElement | null>(null);
@@ -122,6 +143,11 @@
         if (open) return;
         open = true;
         place();
+        // Fired AFTER `open = true` so a caller that refetches and mutates
+        // `items` lands in a panel that is already mounted and will
+        // re-render. Firing it before would swap the list out from under a
+        // panel that had not measured itself yet.
+        onOpen?.();
     }
 
     /** Open and drop focus into the list (keyboard / tap path). */
@@ -202,6 +228,32 @@
                 e.preventDefault();
                 void openWithFocus();
                 break;
+            case 'ArrowDown':
+            case 'ArrowUp': {
+                // The host menu owns the walk — except that MessageList's
+                // walk deliberately skips everything inside .submenu (so it
+                // cannot yank focus out of an open panel), and MessageDetail's
+                // Move menu has no walk at all. Left unhandled, the key then
+                // reached Layout's document handler, which moves the message
+                // selection behind the open menu. So the trigger owns these
+                // two: walk the panel when it is open, the host menu when it
+                // is not.
+                e.preventDefault();
+                e.stopPropagation();
+                if (open) {
+                    focusAt(e.key === 'ArrowDown' ? 0 : panelButtons().length - 1);
+                    break;
+                }
+                const host = triggerEl?.closest('[role="menu"]');
+                const items = Array.from(
+                    host?.querySelectorAll<HTMLElement>('button[role="menuitem"]:not(:disabled)') ?? []
+                );
+                const at = triggerEl ? items.indexOf(triggerEl) : -1;
+                if (at === -1) break;
+                const step = e.key === 'ArrowDown' ? 1 : -1;
+                items[(at + step + items.length) % items.length]?.focus();
+                break;
+            }
             case 'Escape':
                 // Escape on an ALREADY-OPEN submenu is consumed here. On a
                 // closed one it is deliberately not intercepted, so it
@@ -389,6 +441,16 @@
         animation: submenu-in 110ms cubic-bezier(0.2, 0.7, 0.2, 1);
     }
     .submenu-panel li { list-style: none; }
+    .submenu-empty {
+        padding: 8px 10px;
+        font-size: 11.5px;
+        line-height: 1.4;
+        color: var(--text-tertiary);
+        /* Wraps, unlike the item buttons beside it: the text is a sentence
+           pointing somewhere, not a label that can be ellipsised into
+           meaninglessness. */
+        white-space: normal;
+    }
     .submenu-panel button {
         display: block;
         width: 100%;

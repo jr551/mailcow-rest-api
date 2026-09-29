@@ -22,8 +22,17 @@
         // glow so the user's eye is drawn to it. Used in reply mode.
         ghostPlaceholder?: boolean;
         onChange?: (html: string) => void;
+        /** Imperative handle for inserting content from outside the
+         *  editor. Compose's AI reply suggestion needs this: the component
+         *  only ever PUSHES `html` out via onUpdate, so assigning to the
+         *  bound variable from the parent silently does nothing to the
+         *  Tiptap document. Without a handle, "accept the suggestion"
+         *  looks like it worked — the state changed — while the editor
+         *  the user is typing in still shows the old body, and their next
+         *  keystroke overwrites the change. */
+        api?: { insertHtml?: (html: string) => void };
     }
-    let { html = $bindable(''), placeholder = 'Write your message…', ghostPlaceholder = false, onChange }: Props = $props();
+    let { html = $bindable(''), placeholder = 'Write your message…', ghostPlaceholder = false, onChange, api }: Props = $props();
 
     let mountEl: HTMLDivElement | undefined = $state();
     let editor: Editor | null = null;
@@ -109,6 +118,33 @@
         if (isActive('heading', { level })) editor?.chain().focus().setParagraph().run();
         else editor?.chain().focus().toggleHeading({ level }).run();
     }
+
+    /** Append HTML to the end of the document.
+     *
+     *  Appends rather than inserting at the cursor: this is used for
+     *  "here is a suggested reply", and the user is mid-sentence. Yanking
+     *  the caret somewhere to drop the text in would be exactly the kind
+     *  of interruption the feature exists to avoid. The content lands
+     *  after what they have written, which is also the order they read.
+     *
+     *  Tiptap still fires onUpdate for a programmatic edit, so the parent
+     *  sees the new HTML through the same path the user's own typing
+     *  uses — one source of truth, no reconciliation. */
+    function insertHtml(fragment: string) {
+        if (!editor || !fragment) return;
+        // insertContent takes an HTML string and parses it against the
+        // document schema itself. Hand-rolling a ProseMirror slice here
+        // would mean importing DOMParser from @tiptap/pm/model, which
+        // shadows the platform DOMParser of the same name and is an easy
+        // way to get "DOMParser.fromSchema is not a function" at runtime
+        // — the string form is the supported path and does the same job.
+        editor.chain().focus('end').insertContent(fragment).run();
+    }
+    $effect(() => {
+        if (!api) return;
+        api.insertHtml = insertHtml;
+        return () => { delete api.insertHtml; };
+    });
     function alignLeft()   { editor?.chain().focus().setTextAlign('left').run(); }
     function alignCenter() { editor?.chain().focus().setTextAlign('center').run(); }
     function alignRight()  { editor?.chain().focus().setTextAlign('right').run(); }

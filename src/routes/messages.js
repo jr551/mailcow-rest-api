@@ -8,6 +8,7 @@ const {
     flagsOpSchema,
     moveOpSchema,
     listMessagesQuerySchema,
+    bulkDeleteMessagesBodySchema,
     problemSchema
 } = require('../schemas');
 const { notFound, badRequest, problem } = require('../errors');
@@ -142,11 +143,6 @@ function buildSearch(input) {
         return { criteria: { or: [{ subject: input }, { from: input }, { body: input }] }, requireAttachment };
     }
     return { criteria, requireAttachment };
-}
-
-// Back-compat shim for callers that only want the IMAP criteria.
-function buildSearchCriteria(input) {
-    return buildSearch(input).criteria;
 }
 
 
@@ -585,5 +581,97 @@ module.exports = async function messageRoutes(app, { pool, ocrCache, imapCache }
         cache?.invalidateFolderUid(req.creds.hash, mboxPath);
         cache?.invalidateFolderStatus(req.creds.hash, mboxPath);
         reply.code(204).send();
+    });
+
+    // Bulk delete for the "block this sender" flow. The one-uid DELETE above
+    // is the wrong shape there: a blocked sender's mail is however many
+    // messages the folder happens to hold, and having the client loop over
+    // them turns one user action into N round-trips, N chances to fail
+    // halfway, and — worst — a partial delete the client cannot report
+    // honestly. One authorised call, one UID EXPUNGE, one result.
+    //
+    // `sender` runs the pattern as an IMAP SEARCH rather than trusting the
+    // client to hand over the uids it happened to have loaded: the list is
+    // paged, so a client-side match would silently leave the sender's older
+    // mail behind while the confirmation said "12 deleted". Doing the
+    // search server-side is what makes the count in the response equal the
+    // count that was expunged.
+    app.delete('/v1/mailboxes/:path(^.*)/messages', {
+        schema: {
+            tags: ['messages'],
+            summary: 'Delete messages in bulk, by uid list or by sender pattern',
+            body: bulkDeleteMessagesBodySchema,
+            response: {
+                200: {
+                    type: 'object',
+                    properties: {
+                        path: { type: 'string' },
+                        matched: { type: 'integer' },
+                        deleted: { type: 'integer' }
+                    }
+                },
+                404: problemSchema
+            }
+        }
+    }, async (req, reply) => {
+        const mboxPath = decodeMailboxPathParam(req);
+        const { uids, sender, dryRun } = req.body;
+        const hasUids = Array.isArray(uids);
+        const hasSender = typeof sender === 'string';
+        if (hasUids && hasSender) {
+            throw badRequest('Send either uids or sender, not both');
+        }
+        // Checked explicitly rather than left to the schema's minProperties,
+        // because `dryRun` has a default: a body of {} comes out of
+        // validation carrying { dryRun: false }, which satisfies the
+        // property count and falls through to search({ from: undefined }).
+        // An IMAP SEARCH with an undefined FROM is not an empty search —
+        // it is a malformed one, and depending on the server it can match
+        // everything and hand the result to an expunge.
+        if (!hasUids && !hasSender) {
+            throw badRequest('Provide either uids or sender');
+        }
+        // An empty uid list is a legitimate no-op from the bulk-select path
+        // (selection emptied between render and click), so it is allowed —
+        // but only when the caller actually sent the field.
+        if (hasUids && uids.length === 0) {
+            reply.code(200).send({ path: mboxPath, matched: 0, deleted: 0 });
+            return;
+        }
+
+        const result = await withClient(pool, req.creds, (client) =>
+            // `readOnly`, so a dry run passes `dryRun` — NOT `!dryRun`.
+            // Inverting this reads plausible and is catastrophic: every
+            // real delete would open the mailbox read-only and the UID
+            // EXPUNGE would fail against a read-only mailbox.
+            withMailbox(client, mboxPath, !!dryRun, async () => {
+                // One UID EXPUNGE per request either way. The uid-list form
+                // is what the bulk-select path uses; the sender form is
+                // what the block flow uses.
+                const list = Array.isArray(uids)
+                    ? uids
+                    : (await client.search({ from: sender }, { uid: true })) || [];
+                // A dry run opens the mailbox READ-ONLY as well as skipping
+                // the expunge. Belt and braces: `readonly` is what actually
+                // makes a delete impossible here, and a future edit that
+                // dropped the dryRun guard would still be stopped by the
+                // server rather than by a missing if.
+                if (dryRun) return { matched: list.length, deleted: 0 };
+                if (!list.length) return { matched: 0, deleted: 0 };
+                const ok = await client.messageDelete(list, { uid: true });
+                // A false here means the server refused the range, not that
+                // it matched nothing — reporting 0 deleted for a refusal
+                // would read to the client as "cleaned up" on a folder that
+                // still holds every one of those messages.
+                if (!ok) throw problem(502, 'Delete failed', 'The server refused the expunge range');
+                return { matched: list.length, deleted: list.length };
+            })
+        );
+
+        if (result.deleted) {
+            cache?.invalidateFolderUid(req.creds.hash, mboxPath);
+            cache?.invalidateFolderStatus(req.creds.hash, mboxPath);
+        }
+        reply.code(200).send({ path: mboxPath, ...result });
     });
 };

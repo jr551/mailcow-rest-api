@@ -104,16 +104,12 @@ export function getCachedScan(path: string, uid: number): PhishingScanResult | n
     return entry.result;
 }
 
-export function setCachedScan(path: string, uid: number, result: PhishingScanResult): void {
+function setCachedScan(path: string, uid: number, result: PhishingScanResult): void {
     const cache = loadCache();
     cache[makeCacheKey(path, uid)] = { result, ts: Date.now() };
     pruneCache(cache);
     saveCache(cache);
 }
-
-// Confidence floor below which the UI should not render the "phishing!"
-// smoke — better to be quiet than to scare the user about a maybe.
-export const PHISHING_CONFIDENCE_FLOOR = 0.7;
 
 /** Strip HTML to plain text — keeps the LLM context lean. We retain inline
  *  text content and lose tags/scripts/styles. */
@@ -221,7 +217,6 @@ async function ocrInlineImages(html: string, signal?: AbortSignal): Promise<stri
 // Kept on PhishingScanInput for callers that already pass it; current
 // scan no longer uses attachments directly (tesseract works off inline
 // img tags), but keeping the field avoids a churn cascade.
-export type { Attachment };
 
 function trimInput(input: PhishingScanInput, ocrText: string): PhishingScanInput {
     let text = (input.body && input.body.trim().length > 0)
@@ -388,10 +383,4 @@ export function envelopeToHeaders(envelope: {
     if (envelope.messageId) lines.push(`Message-ID: ${envelope.messageId}`);
     if (envelope.inReplyTo) lines.push(`In-Reply-To: ${envelope.inReplyTo}`);
     return lines.join('\n');
-}
-
-export function clearPhishingCache(): void {
-    try {
-        localStorage.removeItem(CACHE_KEY);
-    } catch { /* noop */ }
 }

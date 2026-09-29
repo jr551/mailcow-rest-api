@@ -224,12 +224,6 @@ export function dismissIncident() {
     }
 }
 
-/** Clear all history. */
-export function clearHistory() {
-    state.history = [];
-    state.incident = null;
-}
-
 /** Refresh the page. */
 export function refreshPage() {
     location.reload();
@@ -364,19 +358,4 @@ export function installErrorDoctor() {
         }
         if (typeof origOnRejection === 'function') origOnRejection.call(window, ev);
     };
-}
-
-/** Wrap an async function so that rejected promises are reported to the doctor
- *  instead of becoming unhandled rejections.  Useful for fire-and-forget calls. */
-export function guard<T>(promise: Promise<T>, context?: string): Promise<T | undefined> {
-    return promise.catch((err) => {
-        const e = err instanceof Error ? err : new Error(String(err));
-        reportCriticalError({
-            type: 'api',
-            message: e.message,
-            stack: e.stack,
-            detail: context
-        });
-        return undefined;
-    });
 }

@@ -14,13 +14,11 @@ interface AiCooldownState {
 
 const state = $state<AiCooldownState>({ cooldownUntil: 0, reason: '' });
 
-export const aiCooldown = state;
-
 export function aiCooldownActive(): boolean {
     return state.cooldownUntil > Date.now();
 }
 
-export function aiCooldownSecondsLeft(): number {
+function aiCooldownSecondsLeft(): number {
     if (!aiCooldownActive()) return 0;
     return Math.max(0, Math.ceil((state.cooldownUntil - Date.now()) / 1000));
 }
@@ -35,16 +33,11 @@ export function aiCooldownLabel(): string {
 }
 
 /** Set the cooldown. Use the seconds value the LLM proxy reported. */
-export function setAiCooldown(seconds: number, reason: string): void {
+function setAiCooldown(seconds: number, reason: string): void {
     const ms = Math.max(0, seconds * 1000);
     state.cooldownUntil = Date.now() + ms;
     state.reason = reason;
     showToast('error', `AI is cooling down — ${aiCooldownLabel()} until it's available again. ${reason}`);
-}
-
-export function clearAiCooldown(): void {
-    state.cooldownUntil = 0;
-    state.reason = '';
 }
 
 /** Try to detect a cooldown error from a LiteLLM 429 detail string.

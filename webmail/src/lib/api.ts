@@ -314,6 +314,33 @@ export async function deleteMessage(path: string, uid: number): Promise<void> {
     return request('DELETE', `/v1/mailboxes/${encodeURIComponent(path)}/messages/${uid}`);
 }
 
+/**
+ * Expunge several messages from one mailbox in a single authorised call.
+ *
+ * The uid form is the bulk-select path. The `sender` form is what "block
+ * this sender" uses: passing the pattern rather than a client-computed uid
+ * list is what makes the delete complete, because the visible list is paged
+ * and a client-side match would leave the sender's older mail in place
+ * while the UI claimed otherwise. The server searches the mailbox for the
+ * pattern and expunges everything it finds.
+ *
+ * `matched` is what the server found, `deleted` what it actually expunged;
+ * they are equal on success, and the server reports `deleted: 0` on a
+ * refused range rather than claiming a clean-up it did not do.
+ *
+ * `dryRun` counts without expunging, and is how a caller finds out the
+ * number to put in a confirmation prompt. It opens the mailbox read-only
+ * server-side, so a dry run cannot delete by accident.
+ */
+export async function bulkDeleteMessages(
+    path: string,
+    opts: { uids?: number[]; sender?: string; dryRun?: boolean }
+): Promise<{ path: string; matched: number; deleted: number }> {
+    return request('DELETE', `/v1/mailboxes/${encodeURIComponent(path)}/messages`, {
+        body: opts.uids ? { uids: opts.uids, ...(opts.dryRun ? { dryRun: true } : {}) } : { sender: opts.sender, ...(opts.dryRun ? { dryRun: true } : {}) }
+    });
+}
+
 export async function getRawMessage(path: string, uid: number): Promise<string> {
     const res = await request<Response>('GET', `/v1/mailboxes/${encodeURIComponent(path)}/messages/${uid}/raw`, { raw: true });
     return res.text();
@@ -341,8 +368,13 @@ export async function summarizeMessage(text: string, maxWords = 120): Promise<{ 
     return request('POST', '/v1/ai/summarize', { body: withProvider({ text, maxWords }) });
 }
 
-export async function draftReply(thread: string, intent?: string): Promise<{ content: string; model: string }> {
-    return request('POST', '/v1/ai/draft-reply', { body: withProvider({ thread, intent: intent || undefined }) });
+// `opts.signal` is optional and additive — the AI panel's Draft button has
+// no lifetime to tie it to, but Compose's "suggest a reply" fires the moment
+// a reply window opens and must be cancellable the instant that window is
+// closed, otherwise closing a compose mid-generation leaves the request
+// running and burning tokens on a suggestion nobody will ever read.
+export async function draftReply(thread: string, intent?: string, opts: { signal?: AbortSignal } = {}): Promise<{ content: string; model: string }> {
+    return request('POST', '/v1/ai/draft-reply', { body: withProvider({ thread, intent: intent || undefined }), signal: opts.signal });
 }
 
 export async function extractActions(text: string): Promise<{ content: string; model: string }> {
@@ -351,54 +383,6 @@ export async function extractActions(text: string): Promise<{ content: string; m
 
 export async function translateMessage(text: string, target: string): Promise<{ content: string; model: string }> {
     return request('POST', '/v1/ai/translate', { body: withProvider({ text, target }) });
-}
-
-export interface InboxSortMessage {
-    uid: number;
-    subject?: string;
-    from?: { name?: string | null; address?: string | null }[];
-    to?: { name?: string | null; address?: string | null }[];
-    date?: string;
-}
-
-export interface InboxSortRanking {
-    uid: number;
-    /** 1 (low) → 5 (extreme — real-human waiting on the user). */
-    level: number;
-    /** Bucket the row UI renders to colour + group on. */
-    category?: 'human' | 'family' | 'important' | 'purchase' | 'notification' | 'marketing' | 'info';
-    /** True only when the AI thinks a real person sent this directly to
-     *  the user (not a no-reply, list, or mailmerge). */
-    human?: boolean;
-    reason: string;
-}
-
-/** Server-side sort-inbox. Kept for parity but the client-side variant
- *  in lib/sort-inbox-client.ts is preferred — the deploy host has a
- *  flaky route to the LiteLLM proxy, while the browser doesn't. */
-export async function sortInbox(messages: InboxSortMessage[]): Promise<{ rankings: InboxSortRanking[]; model: string }> {
-    return request('POST', '/v1/ai/sort-inbox', { body: withProvider({ messages }) });
-}
-
-export interface PhishingScanInput {
-    subject: string;
-    from: string;
-    to?: string;
-    body: string;
-    html?: string;
-    headers?: string;
-}
-
-export interface PhishingScanResult {
-    isPhishing: boolean;
-    confidence: number;
-    reasoning: string;
-    indicators: string[];
-    model: string;
-}
-
-export async function scanPhishing(input: PhishingScanInput): Promise<PhishingScanResult> {
-    return request('POST', '/v1/ai/phishing-scan', { body: withProvider({ ...input }) });
 }
 
 export interface SendResult {
@@ -742,7 +726,7 @@ function isAllDay(s?: string): boolean {
     return !!s && /^\d{4}-\d{2}-\d{2}$/.test(s);
 }
 
-export function normalizeCalendar(c: ApiCalendar): NormalizedCalendar {
+function normalizeCalendar(c: ApiCalendar): NormalizedCalendar {
     return {
         id: c.id,
         name: c.displayName || c.name || c.id,
@@ -750,7 +734,7 @@ export function normalizeCalendar(c: ApiCalendar): NormalizedCalendar {
     };
 }
 
-export function normalizeEvent(e: ApiCalendarEvent, calendarId: string): NormalizedEvent {
+function normalizeEvent(e: ApiCalendarEvent, calendarId: string): NormalizedEvent {
     const start = e.dtstart || '';
     const end = e.dtend || start;
     return {
@@ -833,14 +817,6 @@ export async function listCalendarEvents(
     return (r.events || []).map((e) => normalizeEvent(e, calendarId));
 }
 
-export async function getCalendarEvent(calendarId: string, uid: string): Promise<NormalizedEvent> {
-    const r = await calendarRequest<ApiCalendarEvent>(
-        'GET',
-        `/v1/me/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(uid)}`
-    );
-    return normalizeEvent(r, calendarId);
-}
-
 export interface CreateEventInput {
     title: string;
     start: string;
@@ -871,13 +847,6 @@ export async function createCalendarEvent(
 
 export async function deleteCalendarEvent(calendarId: string, uid: string): Promise<void> {
     return calendarRequest('DELETE', `/v1/me/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(uid)}`);
-}
-
-export async function getCalendarIcalLink(calendarId: string): Promise<string> {
-    // Authenticated URL — caller can use it directly inside the webmail
-    // (carries Bearer auth) but it is NOT shareable. Use IcalPublicToken
-    // helpers below for a token-based public subscription URL.
-    return apiUrl(`/v1/me/calendars/${encodeURIComponent(calendarId)}/ical`);
 }
 
 export interface IcalPublicToken {

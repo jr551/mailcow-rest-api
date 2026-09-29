@@ -19,10 +19,6 @@ function apply(theme: Theme) {
 const state = $state<{ theme: Theme }>({ theme: read() });
 apply(state.theme);
 
-export function getTheme(): Theme {
-    return state.theme;
-}
-
 export function setTheme(t: Theme) {
     state.theme = t;
     try { localStorage.setItem(STORAGE_KEY, t); } catch { /* noop */ }
@@ -30,12 +26,6 @@ export function setTheme(t: Theme) {
     // Subscribers (the skin palette) branch on the effective mode, so an
     // explicit toggle has to reach them too, not just an OS change.
     notifyWatchers();
-}
-
-export function nextTheme(t: Theme): Theme {
-    if (t === 'auto') return 'light';
-    if (t === 'light') return 'dark';
-    return 'auto';
 }
 
 

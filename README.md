@@ -35,7 +35,7 @@ docker run --rm -p 3001:3001 \
 | Area | What you get |
 |---|---|
 | 📬 Mail | Read, search, move, flag, delete, send, attachments, raw source |
-| 🤖 AI | Inbox sort, summarize, draft reply, phishing scan, translate (server-proxied, the provider key never reaches the browser) |
+| 🤖 AI | Inbox sort, summarize, draft reply, phishing scan, link-safety check, translate (server-proxied, the provider key never reaches the browser) |
 | 🔗 Webhook inboxes | Give a service a URL, its POSTs land in your INBOX |
 | 📤 Outbound webhooks | A mail-rule action POSTs matching mail (headers, body, attachments) to your URL |
 | 🔑 Agent links | One click → a 24 h pasteable credential for MCP/scripts |
@@ -364,3 +364,64 @@ IMAP_REST_USER=user@example.com \
 IMAP_REST_PASS='mailbox-password' \
 npm run mcp
 ```
+
+The webmail is a separate workspace with its own checks. From `webmail/`:
+
+```sh
+npm install
+npm run check                     # svelte-check
+npm run build                     # the SPA the image serves
+node --test test/unit/*.test.mjs  # unit — there is no `npm test` script here
+npm run test:e2e                  # playwright; builds first, never reuses a server
+```
+
+### Releasing
+
+The version in `package.json` is the single source of truth. A release is
+bump → commit → tag → GitHub release; the `v*` tag is what publishes the
+image, so the tag and the version must agree.
+
+```sh
+# 1. On a clean master, bump and commit.
+npm version 0.22.0 --no-git-tag-version
+git commit -am 'chore(release): v0.22.0'
+
+# 2. Tag and push. The tag triggers publish-image (amd64, tags `latest`).
+git tag v0.22.0 && git push origin master v0.22.0
+
+# 3. Wait for publish-image, then create the release page. The project's
+#    convention is `vX.Y.Z — short summary` with a bullet per user-visible
+#    change; write it from the actual commits, not from memory.
+gh run watch "$(gh run list --workflow publish-image --limit 1 \
+  --json databaseId -q '.[0].databaseId')" --exit-status
+gh release create v0.22.0 --title 'v0.22.0 — …' --notes-file notes.md
+
+# 4. Deploy. The host pulls `:master`, so it is the same image the tag
+#    published once the publish run has finished.
+ssh root@<mail-host> 'cd /opt/imap-rest-mailcow && \
+  docker compose pull imap-rest && docker compose up -d imap-rest'
+curl -s https://<api-host>/health | head -c 80
+```
+
+Deploying before `publish-image` completes pulls the *previous* image
+without complaint — the compose file tracks `:master`, not the version, so
+the health check reporting the old `version` is the only signal that the
+step order was wrong.
+
+#### What the gates are
+
+Before a release, all of these must be green, and they must be green
+*together* rather than individually:
+
+| Gate | Command | Cost |
+|---|---|---|
+| Server unit | `npm test` | ~10s |
+| Webmail unit | `cd webmail && node --test test/unit/*.test.mjs` | ~5s |
+| Types | `cd webmail && npx svelte-check --threshold error` | ~15s |
+| Build | `cd webmail && npm run build` | ~10s |
+| E2E | `cd webmail && npm run test:e2e` | ~3min |
+
+CI runs the same set. The e2e job is the slow one and the one that
+matters most: a suite that passes against a stale build is worse than no
+suite, which is why `playwright.config.ts` builds first and never reuses
+an existing preview server.

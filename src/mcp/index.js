@@ -409,4 +409,7 @@ if (require.main === module) {
     });
 }
 
-module.exports = { buildServer, loadConfig, RestClient, main };
+module.exports = {
+    RestClient,
+    main
+};

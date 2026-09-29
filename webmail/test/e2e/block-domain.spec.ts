@@ -19,6 +19,7 @@ import { applyMocks, login } from './fixtures';
 const HOST = 'mail.promo.example.co.uk';
 const SENDER = `deals@${HOST}`;
 
+
 /**
  * Serve an inbox containing exactly one message from `from`.
  *
@@ -49,6 +50,32 @@ async function mockSingleMessage(page: Page, uid: number, from: { name: string |
                 }]
             })
         });
+    });
+
+    // Registered AFTER the list route above, because Playwright evaluates the
+    // most-recently-registered matching handler first — so this must be
+    // added last to win the DELETE. The block flow dry-runs
+    // `DELETE /v1/mailboxes/{path}/messages` with { sender, dryRun:true } to
+    // count what it would remove BEFORE it blocks; the list route's
+    // `(\?|$)` tail also matches that query-less URL, so without this it
+    // answers a LIST body, `matched` comes back undefined, and the confirm
+    // dialog never appears.
+    await page.route(/\/v1\/mailboxes\/[^/]+\/messages$/, (route, request) => {
+        if (request.method() !== 'DELETE') return route.fallback();
+        let dryRun = false;
+        let sender = '';
+        try {
+            const b = request.postDataJSON() as { sender?: string; dryRun?: boolean };
+            dryRun = !!b?.dryRun;
+            sender = b?.sender ?? '';
+        } catch { /* treated as a real delete */ }
+        const matched = sender === (from[0]?.address ?? '') ? 1 : 0;
+        route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({ path: 'INBOX', matched, deleted: dryRun ? 0 : matched })
+        });
+        return undefined;
     });
 }
 
@@ -102,6 +129,12 @@ test('Block sender blocks the exact From address', async ({ page }) => {
     await openCtx(page);
     await page.getByRole('menuitem', { name: 'Block sender' }).click();
 
+    // Not synchronous any more: the flow dry-runs a DELETE to count the
+    // existing matches, shows a confirm naming that count, and only then
+    // POSTs the pattern. Waiting on the observable effect instead of asserting
+    // immediately is what makes this a test of the behaviour rather than of
+    // the microtask queue.
+    await expect.poll(() => blocked.length).toBeGreaterThan(0);
     expect(blocked).toEqual([SENDER]);
     // The dialog names the concrete pattern, so the user is never guessing
     // whether they are about to nuke a whole domain.
@@ -120,6 +153,7 @@ test('Block domain blocks *@ the full host, not the root', async ({ page }) => {
 
     // The full host INCLUDING the sub-labels. Reducing to the root here
     // would take out every other tenant under example.co.uk.
+    await expect.poll(() => blocked.length).toBeGreaterThan(0);
     expect(blocked).toEqual([`*@${HOST}`]);
     await expect(page.getByTestId('toast')).toContainText(`*@${HOST}`);
 });
@@ -135,6 +169,7 @@ test('Block root domain reduces past the multi-label public suffix', async ({ pa
 
     // example.co.uk — not mail.promo.example.co.uk, and emphatically not
     // co.uk, which is the whole point of the multi-label suffix table.
+    await expect.poll(() => blocked.length).toBeGreaterThan(0);
     expect(blocked).toEqual(['*@example.co.uk']);
     await expect(page.getByTestId('toast')).toContainText('*@example.co.uk');
 });

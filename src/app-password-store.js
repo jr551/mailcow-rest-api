@@ -215,6 +215,5 @@ module.exports = {
     createAppPasswordStore,
     looksLikeAppPassword,
     parseToken,
-    normalizeCidrs,
     TOKEN_PREFIX
 };

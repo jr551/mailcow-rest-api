@@ -119,4 +119,8 @@ function createIpAllowHook({ allowlist }) {
     };
 }
 
-module.exports = { parseAllowlist, isAllowed, createIpAllowHook, normalizeIp };
+module.exports = {
+    parseAllowlist,
+    isAllowed,
+    createIpAllowHook
+};

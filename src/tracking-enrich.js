@@ -173,4 +173,6 @@ async function buildOpenNotice({ subject, recipient, openedAt, ip, ua }) {
     return { text: lines.join('\n'), html };
 }
 
-module.exports = { buildOpenNotice, flagEmoji, parseUa, lookupGeo };
+module.exports = {
+    buildOpenNotice
+};

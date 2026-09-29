@@ -1172,9 +1172,20 @@ test('Settings: skin picker swaps the whole palette, and the accent layers over 
     expect(darkAccentText).toBe('hsl(262.1 83.3% 84.0%)');
 
     // And the skin's own DARK surface survives the layer — the whole point of
-    // a layer. This assertion used to expect #ffffff, Gmail's light surface,
-    // while the test ran in dark mode where it is #292a2d.
-    expect((await readVar('--bg-surface')).toLowerCase()).toBe('#292a2d');
+    // a layer. The value moved twice: #ffffff (Gmail's light surface) when
+    // the test ran in dark mode by accident, then #292a2d until the dark
+    // palette was re-layered so the page sits BELOW the list. Gmail's dark
+    // inversion is deliberate — #191a1c page, #25272a message list — so this
+    // asserts the current layering rather than a value the palette work moved.
+    expect((await readVar('--bg-surface')).toLowerCase()).toBe('#25272a');
+    // And the inversion is the point: the list must be lighter than the page.
+    // (`page` is Playwright's own fixture — do not shadow it here.)
+    const gmailDarkPage = (await readVar('--bg-base')).toLowerCase();
+    const lum = (hex: string): number => {
+        const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    expect(lum(gmailDarkPage), 'Gmail dark page must be darker than its list').toBeLessThan(lum('#25272a'));
 
     // Close Settings first — its overlay sits over the topbar, so the
     // theme toggle is not clickable while the modal is open.
