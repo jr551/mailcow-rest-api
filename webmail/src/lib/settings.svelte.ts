@@ -164,6 +164,17 @@ export interface Settings {
      *  topbar panel button, remembered here so a hidden rail survives
      *  reloads. */
     hideSidebar: boolean;
+    /** Group conversation messages into a single row in the list.
+     *
+     *  The declaration was removed by a dead-code sweep while the loader
+     *  (~:228), the fresh-profile default (~:297) and the setter (~:519)
+     *  all still carried it, and four components still read it. It was
+     *  invisible locally because the field is assigned through an object
+     *  literal, so nothing failed at runtime — CI's `svelte-check` caught it
+     *  because the PROPERTY was gone from the type. A field that exists at
+     *  runtime but not in the interface is the worst kind of rot: it works,
+     *  and the type system stops protecting anyone. */
+    groupThreads: boolean;
     /** Check a link's destination with VirusTotal before opening it.
      *
      *  DEFAULT ON, which is a considered choice rather than an oversight:
