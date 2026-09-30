@@ -54,6 +54,32 @@ const failedUrls = new Map<string, number>();
 const FAILED_TTL_MS = 30 * 60 * 1000;
 const FAILED_MAX = 500;
 
+// Per-image ceiling for the privacy proxy. The proxy itself is much
+// quicker; this exists so a HOST THAT NEVER RESPONDS cannot stall the
+// whole rewrite. 8s is long enough for a slow real image and short enough
+// that a message of ten dead tracking pixels becomes readable in seconds.
+const PROXY_IMAGE_TIMEOUT_MS = 8_000;
+
+/**
+ * Reject if `p` has not settled within `ms`.
+ *
+ * Honours an external AbortSignal so the message-close abort path still
+ * works — without it, switching messages mid-proxy would leave the timer
+ * running and a stale rewrite could still land.
+ */
+function withTimeout<T>(p: Promise<T>, ms: number, signal?: AbortSignal): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+        if (signal?.aborted) { reject(new Error('aborted')); return; }
+        const timer = setTimeout(() => reject(new Error('proxy image timeout')), ms);
+        const onAbort = () => { clearTimeout(timer); reject(new Error('aborted')); };
+        signal?.addEventListener('abort', onAbort, { once: true });
+        p.then(
+            (v) => { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); resolve(v); },
+            (e) => { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); reject(e); }
+        );
+    });
+}
+
 function isKnownBad(url: string): boolean {
     const at = failedUrls.get(url);
     if (at === undefined) return false;
@@ -141,8 +167,36 @@ export async function proxyImagesInHtml(
             if (signal?.aborted) return;
             const url = queue.shift();
             if (!url) return;
-            const dataUrl = await fetchAsDataUrl(url, signal);
-            if (dataUrl) replacements.set(url, dataUrl);
+            // PER-IMAGE TIMEOUT AND CATCH. Both are load-bearing, and
+            // neither was here before:
+            //
+            //  - Without the timeout, ONE stalled image (a host that accepts
+            //    the connection then never responds — common on tracking
+            //    pixels behind ad blockers and dead CDNs) blocks this
+            //    `await` forever. The `Promise.all` below never settles,
+            //    `proxiedSrcDoc` is never set, and the message stays stuck
+            //    on placeholder rendering — a body with no images and, for
+            //    an image-led newsletter, no readable text at all. That is
+            //    the "blank email" symptom, and it is completely silent:
+            //    no console error, no toast, nothing in the log.
+            //  - Without the catch, one rejecting fetch rejects the whole
+            //    worker and takes every OTHER image in the message with it,
+            //    for the same reason.
+            //
+            // A slow or broken image is precisely the case this function
+            // documents that it degrades through, so it must never be able
+            // to hold the message hostage.
+            try {
+                const dataUrl = await withTimeout(
+                    fetchAsDataUrl(url, signal),
+                    PROXY_IMAGE_TIMEOUT_MS,
+                    signal
+                );
+                if (dataUrl) replacements.set(url, dataUrl);
+            } catch {
+                // Leave this image's original src alone; the rewrite below
+                // keeps it, so it degrades to direct loading.
+            }
         }
     }
     await Promise.all(Array.from({ length: Math.min(CONCURRENCY, queue.length) }, () => worker()));

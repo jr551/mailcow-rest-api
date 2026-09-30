@@ -158,17 +158,25 @@ module.exports = Object.freeze({
     },
 
     ai: {
-        // Pluggable LLM provider. `kind` is openai | anthropic. `preset` is
-        // a shorthand for openai-compatible servers (mistral, openai, groq,
-        // together, ollama, perplexity, openrouter). Backward compat:
-        // MISTRAL_API_KEY still works (preset=mistral).
+        // Pluggable LLM provider for CHAT/AI features (summarize, draft,
+        // translate, phishing scan, sort). `kind` is openai | anthropic and
+        // `preset` is a shorthand baseUrl for an openai-compatible server.
+        //
+        // These deliberately do NOT fall back to the MISTRAL_* variables.
+        // MISTRAL_API_KEY exists for the OCR feature (attachments), and an
+        // OCR credential says nothing about where chat should be sent — yet
+        // the old code inferred `preset=mistral` from its mere presence, so
+        // enabling attachment OCR silently relabelled the chat provider as
+        // "mistral" in the UI and, with an empty LLM_BASE_URL, aimed chat at
+        // api.mistral.ai. Chat and OCR are separate features with separate
+        // credentials; each is configured only by its own variables.
         kind: process.env.LLM_PROVIDER || 'openai',
-        preset: process.env.LLM_PRESET || (process.env.MISTRAL_API_KEY ? 'mistral' : 'deepseek'),
-        apiKey: process.env.LLM_API_KEY || process.env.DEEPSEEK_API_KEY || process.env.MISTRAL_API_KEY || '',
+        preset: process.env.LLM_PRESET || 'deepseek',
+        apiKey: process.env.LLM_API_KEY || process.env.DEEPSEEK_API_KEY || '',
         baseUrl: process.env.LLM_BASE_URL || '',
-        model: process.env.LLM_MODEL || process.env.MISTRAL_CHAT_MODEL || '',
-        timeoutMs: num(process.env.LLM_TIMEOUT_MS || process.env.MISTRAL_CHAT_TIMEOUT_MS, 30_000),
-        maxInputChars: num(process.env.LLM_MAX_INPUT_CHARS || process.env.MISTRAL_CHAT_MAX_INPUT_CHARS, 24_000),
+        model: process.env.LLM_MODEL || '',
+        timeoutMs: num(process.env.LLM_TIMEOUT_MS, 30_000),
+        maxInputChars: num(process.env.LLM_MAX_INPUT_CHARS, 24_000),
         // Defaults to false — letting the SPA pass an arbitrary baseUrl turns
         // the server into an SSRF foothold. Operators opt in deliberately
         // (e.g. a vetted local Ollama deployment).

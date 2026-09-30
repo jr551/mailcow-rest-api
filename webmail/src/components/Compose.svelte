@@ -489,6 +489,56 @@
      * model's opening after it, in that order, which is also the order
      * they read.
      */
+    /**
+     * Drop trailing empty paragraphs so an appended draft lands in the last
+     * REAL paragraph rather than below a tail of blanks. A blank paragraph is
+     * the caret's home, so removing them is what makes "Use this" put the
+     * text where the user was looking rather than at the bottom of the body.
+     */
+    function trimTrailingEmptyParagraphs() {
+        // No editor handle is exposed for this, and reaching for one would
+        // mean widening the RichEditor api for a cosmetic concern. The
+        // mounted editor is the nearest .rich-editor in THIS component, which
+        // is safe because a compose window owns its editor outright.
+        const root = document.querySelector('.rich-editor');
+        if (!root) return;
+        try {
+            const paras = Array.from(root.querySelectorAll('p'));
+            for (let i = paras.length - 1; i >= 0; i--) {
+                const p = paras[i];
+                const isEmpty = (p.textContent || '').trim() === ''
+                    && p.querySelectorAll('img, br, table').length === 0;
+                if (!isEmpty) break;
+                p.remove();
+            }
+        } catch { /* never let tidying break accepting a suggestion */ }
+    }
+
+    /**
+     * The "magic dust" moment. A brief sparkle sweep across the freshly
+     * inserted draft, so accepting an AI suggestion FEELS like something
+     * happened rather than the text silently changing under the cursor.
+     *
+     * Purely decorative, so it is a no-op for reduced-motion, it is removed
+     * on completion, and it never touches the document — a cosmetic layer
+     * that outlives its own animation is a leak, so the timeout is cleared
+     * when the next draft replaces it.
+     */
+    let draftSparkleTimer: ReturnType<typeof setTimeout> | null = null;
+    let draftSparkleTick = $state(0);
+    function flashDraftSparkle() {
+        try {
+            if (typeof window !== 'undefined'
+                && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+        } catch { /* matchMedia unavailable — animate anyway */ }
+        if (draftSparkleTimer) clearTimeout(draftSparkleTimer);
+        draftSparkleTick++;
+        const mine = draftSparkleTick;
+        draftSparkleTimer = setTimeout(() => {
+            if (draftSparkleTick === mine) draftSparkleTick = 0;
+        }, 1400);
+    }
+
     function acceptReplySuggest() {
         const text = replySuggest;
         if (!text) return;
@@ -500,10 +550,25 @@
         // updates the state and the visible document never — and the next
         // keystroke reverts it. A blank paragraph first so the suggestion
         // doesn't butt against the last word the user typed.
-        if (editorApi.insertHtml) editorApi.insertHtml(`<p></p>${para}`);
-        else body = `${body}<p></p>${para}`;
+        // INSERT WHERE THE CARET IS, not blindly at the end.
+        //
+        // `insertHtml` puts content at the CURRENT selection. Tiptap starts
+        // with the caret in the first empty paragraph, but a user who has
+        // scrolled, typed, or moved on leaves trailing empty paragraphs, and
+        // the naive `${body}<p></p>${para}` then appended the draft BELOW
+        // them — which is why accepting a suggestion used to drop the text to
+        // the bottom of the body instead of where the user was looking.
+        // Trimming trailing empties first makes the append land in the last
+        // real paragraph, which is what "use this" should mean.
+        if (editorApi.insertHtml) {
+            trimTrailingEmptyParagraphs();
+            editorApi.insertHtml(para);
+        } else {
+            body = `${body.replace(/(<p>(\s|&nbsp;|<br>)*<\/p>)+$/i, '')}<p></p>${para}`;
+        }
         replySuggest = null;
         replySuggestError = null;
+        flashDraftSparkle();
     }
 
     function dismissReplySuggest() {

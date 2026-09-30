@@ -138,7 +138,16 @@
         // shadows the platform DOMParser of the same name and is an easy
         // way to get "DOMParser.fromSchema is not a function" at runtime
         // — the string form is the supported path and does the same job.
-        editor.chain().focus('end').insertContent(fragment).run();
+        // Insert at the CARET, not the end of the document.
+        //
+        // This used to call .focus('end') first, which moved the caret to the
+        // end of the document on every insert — so accepting an AI reply
+        // suggestion dropped the text at the BOTTOM of the body, far from
+        // where the user was reading, and the next keystroke continued from
+        // there. Without it the content lands at the user's selection, and
+        // the parent already positions the caret sensibly when a draft
+        // arrives (it appends after what has been typed).
+        editor.chain().insertContent(fragment).run();
     }
     $effect(() => {
         if (!api) return;

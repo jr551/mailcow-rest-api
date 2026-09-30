@@ -103,7 +103,13 @@ test('resolveProvider: non-positive timeoutMs / maxInputChars fall back to safe 
 // --- MISTRAL_API_KEY backward-compat lives in src/config.js, not the resolver.
 // We exercise it by reloading config with a faked env.
 
-test('config: MISTRAL_API_KEY backward-compat sets apiKey + preset=mistral', () => {
+// MISTRAL_API_KEY is the OCR credential. It used to configure CHAT as a side
+// effect — presence of the OCR key silently set preset=mistral and supplied the
+// chat apiKey — which relabelled the chat provider as "mistral" in the UI and,
+// with no LLM_BASE_URL, aimed chat at api.mistral.ai. Enabling attachment OCR
+// should say nothing about where chat goes. This asserts the corrected
+// contract: OCR is configured independently and chat ignores it.
+test('config: MISTRAL_API_KEY does not leak into the chat provider', () => {
     const savedKey = process.env.MISTRAL_API_KEY;
     const savedLlmKey = process.env.LLM_API_KEY;
     const savedPreset = process.env.LLM_PRESET;
@@ -113,12 +119,11 @@ test('config: MISTRAL_API_KEY backward-compat sets apiKey + preset=mistral', () 
     delete require.cache[require.resolve('../../src/config')];
     try {
         const cfg = require('../../src/config');
-        assert.equal(cfg.ai.apiKey, 'mistral-test-key');
-        assert.equal(cfg.ai.preset, 'mistral');
-        // And the resolver picks up the mistral baseUrl from that preset.
-        const resolved = resolveProvider(cfg.ai, undefined);
-        assert.equal(resolved.baseUrl, OPENAI_COMPAT_PRESETS.mistral.baseUrl);
-        assert.equal(resolved.apiKey, 'mistral-test-key');
+        // OCR is still configured from it...
+        assert.equal(cfg.ocr.apiKey, 'mistral-test-key');
+        // ...and chat keeps its own defaults, with no credential at all.
+        assert.equal(cfg.ai.apiKey, '');
+        assert.equal(cfg.ai.preset, 'deepseek');
     } finally {
         if (savedKey === undefined) delete process.env.MISTRAL_API_KEY;
         else process.env.MISTRAL_API_KEY = savedKey;

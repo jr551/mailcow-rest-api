@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { applyMocks, login, MOCK_USER, MOCK_PASS, messages } from './fixtures';
 import { mkdirSync } from 'node:fs';
 import { addDays, addMonths, format } from 'date-fns';
@@ -258,10 +258,26 @@ test('compose modal: Send button is disabled when SMTP is not configured', async
     await page.screenshot({ path: `${SCREEN_DIR}/08-compose-disabled.png`, fullPage: true });
 });
 
+
+/** Open the single AI menu in the reading-pane header. The three separate AI
+ *  buttons were consolidated into one, so anything reaching an AI action goes
+ *  through here first. */
+async function openAiMenu(page: Page) {
+    await page.getByTestId('ai-menu-btn').click();
+    await expect(page.getByTestId('ai-menu-pop')).toBeVisible();
+}
+
+/** Open the AI menu and choose an item from it — the action tests want the
+ *  end state, not the menu, so the click has to happen here. */
+async function chooseAiAction(page: Page, testid: string) {
+    await openAiMenu(page);
+    await page.getByTestId(testid).click();
+}
+
 test('AI panel summarizes and drafts a reply', async ({ page }) => {
     await login(page);
     await page.click('[data-testid=msg-row-1001]');
-    await page.click('[data-testid=ai-btn]');
+    await chooseAiAction(page, 'ai-tools-btn');
     await expect(page.getByTestId('ai-panel')).toBeVisible();
 
     await page.click('[data-testid=ai-summarize-btn]');
@@ -429,11 +445,15 @@ test('AI button is replaced by "Set up AI" when no provider configured', async (
     await login(page);
     await page.click('[data-testid=msg-row-1001]');
     await expect(page.getByTestId('ai-setup-btn')).toBeVisible();
-    await expect(page.getByTestId('ai-btn')).not.toBeVisible();
+    // Count, not "not visible": the AI menu is conditioned on AI being
+    // available, so with no provider the button must be ABSENT rather than
+    // present-and-hidden, and a leftover entry point would become a
+    // strict-mode duplicate for every other AI test.
+    await expect(page.getByTestId('ai-menu-btn')).toHaveCount(0);
 });
 
-// These two need a real service worker — the suite-wide block would make
-// them vacuous.
+// Two AI tests below need a real service worker — the suite-wide block would
+// make their routes unregisterable, so they opt back in.
 test.describe('service-worker tests', () => {
     test.use({ serviceWorkers: 'allow' });
 
@@ -850,8 +870,9 @@ test('Suggest event: AI extracts an event from an email and pops the modal pre-f
     await page.locator('[data-testid=msg-row-1001]').click();
     await expect(page.getByTestId('detail-subject')).toBeVisible();
 
-    // Click "AI Add to calendar" — opens the 5-card picker.
-    await page.getByTestId('suggest-event-btn').click();
+    // "Suggest a calendar event" now lives in the consolidated AI menu —
+    // chooseAiAction opens the menu and takes it, which opens the 5-card picker.
+    await chooseAiAction(page, 'suggest-event-btn');
     await expect(page.getByTestId('cal-options-pop')).toBeVisible();
     // Pick the first card → EventModal pre-fills.
     await page.getByTestId('cal-option-0').click();
@@ -1239,7 +1260,9 @@ test('AI panel exposes Summarize, Draft, Action items, and Translate', async ({ 
     await page.addInitScript(() => localStorage.setItem('webmail.theme', 'dark'));
     await login(page);
     await page.click('[data-testid=msg-row-1001]');
-    await page.click('[data-testid=ai-btn]');
+    // Open the AI menu and take the "AI tools" item, which is what actually
+    // raises the panel — opening the menu alone leaves it closed.
+    await chooseAiAction(page, 'ai-tools-btn');
     await page.click('[data-testid=ai-summarize-btn]');
     await page.click('[data-testid=ai-actions-btn]');
     await page.click('[data-testid=ai-translate-btn]');
@@ -1373,7 +1396,11 @@ test('Suggest event uses server AI config when no local key is set', async ({ pa
     await page.locator('[data-testid=msg-row-1001]').click();
     await expect(page.getByTestId('detail-subject')).toBeVisible();
 
-    // AI Calendar should appear first (before Other AI)
+    // The calendar action is a MENU ITEM now, so it only exists in the DOM
+    // while the menu is open. Prove both halves of that: absent from the
+    // toolbar before, present inside the menu after.
+    await expect(page.getByTestId('suggest-event-btn')).toHaveCount(0);
+    await openAiMenu(page);
     await expect(page.getByTestId('suggest-event-btn')).toBeVisible();
     await page.getByTestId('suggest-event-btn').click();
     await expect(page.getByTestId('cal-options-pop')).toBeVisible();
@@ -1387,30 +1414,78 @@ test('Suggest event uses server AI config when no local key is set', async ({ pa
     await expect(page.getByTestId('cal-evt-title')).toHaveValue('Server-config lunch');
 });
 
-test('Message detail exposes both AI buttons: wand "Other AI" menu and "AI tools" panel', async ({ page }) => {
+test('Message detail exposes ONE AI entry point covering every AI action', async ({ page }) => {
     await login(page);
     await page.locator('[data-testid=msg-row-1001]').click();
     await expect(page.getByTestId('detail-subject')).toBeVisible();
 
-    // The wand button opens the suggested-actions MENU. It used to share
-    // ai-btn with the panel opener, which made the id ambiguous between two
-    // buttons that are both live for a configured account; it is ai-tools-btn
-    // now.
-    const otherAiBtn = page.getByTestId('ai-tools-btn');
-    await expect(otherAiBtn).toBeVisible();
-    await expect(otherAiBtn).toContainText('Other AI');
-    // Verify the button uses the amber/warning class (ai-btn-other)
-    const classAttr = await otherAiBtn.getAttribute('class');
-    expect(classAttr).toContain('ai-btn-other');
+    // THREE separate AI buttons used to sit on this toolbar (AI Calendar,
+    // AI tools, Other AI), which read as clutter and made none of them look
+    // primary. They are now one AI menu, and this asserts the consolidated
+    // contract rather than the old layout: exactly one entry point, every
+    // action reachable from it, and each labelled so the user can tell what
+    // they are opening.
+    const menuBtn = page.getByTestId('ai-menu-btn');
+    await expect(menuBtn).toBeVisible();
 
-    // The other one opens the AI PANEL (Summarize / Draft / Action items /
-    // Translate) and is labelled "AI tools".
-    const aiPanelBtn = page.getByTestId('ai-btn');
-    await expect(aiPanelBtn).toBeVisible();
-    await expect(aiPanelBtn).toContainText('AI tools');
-    // And it must open a panel, not the menu — they are distinct surfaces.
-    await aiPanelBtn.click();
+    // The old standalone buttons must be gone, not merely restyled.
+    await expect(page.getByTestId('ai-btn')).toHaveCount(0);
+
+    await menuBtn.click();
+    const pop = page.getByTestId('ai-menu-pop');
+    await expect(pop).toBeVisible();
+    await expect(pop.locator('[role=menuitem]')).toHaveCount(3);
+
+    // The panel is the primary action, so it is the FIRST item.
+    const items = pop.locator('[role=menuitem]');
+    await expect(items.nth(0)).toContainText('AI tools');
+    await expect(items.nth(1)).toContainText('calendar event');
+    await expect(items.nth(2)).toContainText('Other AI actions');
+
+    // And it opens the panel, not another menu.
+    await items.nth(0).click();
+    await expect(pop).toHaveCount(0);
     await expect(page.getByTestId('ai-panel')).toBeVisible();
+});
+
+test('The AI menu dismisses on Escape, on outside click, and hands off to the suggestions popover', async ({ page }) => {
+    await login(page);
+    await page.locator('[data-testid=msg-row-1001]').click();
+    await expect(page.getByTestId('detail-subject')).toBeVisible();
+
+    const menuBtn = page.getByTestId('ai-menu-btn');
+    const pop = page.getByTestId('ai-menu-pop');
+
+    // Escape must close the menu AND be swallowed before Layout's document
+    // handler, which would clear the message selection and null out
+    // `ui.selectedUid`. Both halves matter and the second is the one that is
+    // easy to get wrong: the row highlight surviving proves the key never
+    // reached Layout, and the highlight is the only signal that Layout's
+    // handler did not run (the reading pane itself is remounted by
+    // `{#key d.uid}` and so stays on screen either way). Without
+    // `stopPropagation` in the key handler this row comes back unselected.
+    await openAiMenu(page);
+    await expect(page.locator('[data-testid=msg-row-1001]')).toHaveClass(/selected/);
+    await page.keyboard.press('Escape');
+    await expect(pop).toHaveCount(0);
+    await expect(page.locator('[data-testid=msg-row-1001]')).toHaveClass(/selected/);
+    await expect(page.getByTestId('detail-subject')).toBeVisible();
+
+    // The trigger is a proper menu button, so assistive tech is told the state.
+    await expect(menuBtn).toHaveAttribute('aria-haspopup', 'menu');
+    await expect(menuBtn).toHaveAttribute('aria-expanded', 'false');
+    await menuBtn.click();
+    await expect(menuBtn).toHaveAttribute('aria-expanded', 'true');
+
+    // The third item hands off to the EXISTING suggested-actions popover,
+    // which the menu replaced the standalone "Other AI" button for.
+    await page.getByTestId('ai-other-btn').click();
+    await expect(pop).toHaveCount(0);
+    await expect(page.getByTestId('ai-tools-pop')).toBeVisible();
+
+    // Outside click dismisses the popover too, not just the menu. The message
+    // body is used because it is guaranteed to sit outside every popover.
+    await page.getByTestId('detail-body').click({ position: { x: 5, y: 5 } });
     await expect(page.getByTestId('ai-tools-pop')).toHaveCount(0);
 });
 

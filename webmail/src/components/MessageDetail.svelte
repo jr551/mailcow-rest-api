@@ -1,6 +1,6 @@
 <script lang="ts">
     import { fade } from 'svelte/transition';
-    import { onDestroy } from 'svelte';
+    import { onDestroy, untrack } from 'svelte';
     import { ui, showToast } from '../lib/store.svelte';
     import { markSpam, markTrusted, isTrustedSender } from '../lib/spam-feedback.svelte';
     import { themeState } from '../lib/theme.svelte';
@@ -302,6 +302,15 @@
     let aiToolsError = $state<string | null>(null);
     let aiToolsAbort: AbortController | null = null;
 
+    // --- the single AI menu -------------------------------------------------
+    // The reading pane used to carry THREE overlapping AI entry points (AI
+    // Calendar, "Other AI", "AI tools") side by side, which read as clutter
+    // and made none of them look primary. They are now one button whose
+    // popover owns all of them. State lives here rather than on the toolbar
+    // button so the effect that resets popovers on message change can close
+    // it alongside the other two.
+    let aiMenuOpen = $state(false);
+
     async function openAiTools(d: MessageDetail) {
         if (aiToolsOpen) { closeAiTools(); return; }
         aiToolsOpen = true;
@@ -330,10 +339,23 @@
         if (aiToolsAbort) aiToolsAbort.abort();
         aiToolsAbort = null;
     }
+    /** Toggle the consolidated AI menu. Only one of the three popovers can be
+     *  useful at a time, so opening this one closes the other two — a
+     *  half-finished LLM request in a popover the user cannot see is worse
+     *  than throwing the result away. */
+    function toggleAiMenu() {
+        aiMenuOpen = !aiMenuOpen;
+        if (!aiMenuOpen) return;
+        closeCalOptions();
+        closeAiTools();
+    }
+
     function onWindowClick(e: MouseEvent) {
         const target = e.target as HTMLElement;
         if (aiToolsOpen && !target?.closest?.('.ai-tools-wrap')) closeAiTools();
         if (calOptionsOpen && !target?.closest?.('.cal-options-wrap')) closeCalOptions();
+        if (aiMenuOpen && !target?.closest?.('.ai-menu-wrap')) aiMenuOpen = false;
+
         // The Move menu had no outside-click dismissal of its own, so it
         // stayed open whenever focus went anywhere else in the window —
         // including a click on the message body. Match the other two.
@@ -349,10 +371,25 @@
     // message and clicking through to another left the new message's dropdown
     // already open, anchored to nothing. Reset them with the message.
     $effect(() => {
+        // Read the dependency FIRST, so this effect is tracked on the selected
+        // message and nothing else.
         void ui.selectedUid;
-        moveOpen = false;
-        calOptionsOpen = false;
-        closeAiTools();
+        // Untrack the flag resets below. Reading a $state flag and writing it
+        // in the same effect makes the effect depend on that flag too, so a
+        // later write re-runs the whole thing. That matters here because
+        // Layout's global Escape clears the selection: without the untrack,
+        // the Escape that closed the AI menu changed `ui.selectedUid`, which
+        // re-ran this effect and closed the menu again as a side effect of
+        // clearing the reading pane — so the key handler looked like it
+        // worked when it was doing nothing, and a test asserting it passed
+        // with the handler deleted. Untracked, the only thing that can re-run
+        // this effect is a different message.
+        untrack(() => {
+            moveOpen = false;
+            calOptionsOpen = false;
+            closeAiTools();
+            aiMenuOpen = false;
+        });
     });
 
     function runAction(a: EmailAction, d: MessageDetail) {
@@ -1097,7 +1134,31 @@
 <svelte:window
     onclick={onWindowClick}
     onkeydowncapture={(e) => {
-        if (e.key !== 'Escape' || !moveOpen) return;
+        if (e.key !== 'Escape') return;
+        // The AI menu and the two popovers it opens are dismissed by the same
+        // Escape contract as the Move menu: swallow the key so Layout's global
+        // handler does not also clear the selection and tear down the reading
+        // pane the user was reading. Topmost first — a popover opened from
+        // the menu sits above it, so that is what Escape should close.
+        if (aiToolsOpen) {
+            e.preventDefault();
+            e.stopPropagation();
+            closeAiTools();
+            return;
+        }
+        if (calOptionsOpen) {
+            e.preventDefault();
+            e.stopPropagation();
+            closeCalOptions();
+            return;
+        }
+        if (aiMenuOpen) {
+            e.preventDefault();
+            e.stopPropagation();
+            aiMenuOpen = false;
+            return;
+        }
+        if (!moveOpen) return;
         // Same two-stage Escape contract as the message-list context menu
         // (see MessageList.svelte): while the folder submenu is open, stand
         // down and let MenuSubmenu consume the key at the target, so the
@@ -1280,25 +1341,97 @@
                         </button>
                     </div>
                     {/if}
-                    {#if isChatConfigured()}
-                        <div class="cal-options-wrap">
+                    <!-- ONE AI entry point for the whole reading pane.
+                         The toolbar used to carry three overlapping buttons —
+                         "AI Calendar", "Other AI" and "AI tools" — which read
+                         as clutter and gave the user no hint which was the
+                         main one. The single button below opens a menu that
+                         lists every AI action, and the two popovers it hands
+                         off to keep their own markup (and their own testids)
+                         so neither their layout nor their tests had to move.
+
+                         The menu shows when AI is available, which is a
+                         superset of the two old conditions: the panel opener
+                         keyed off `aiAvailable()` and the popovers off
+                         `isChatConfigured()`, and every account that reaches
+                         either of those also has AI configured. The calendar
+                         item is additionally gated on `isChatConfigured()`
+                         because that is what the suggestion request needs. -->
+                    {#if settings.aiFeatures && aiAvailable()}
+                        <div class="ai-menu-wrap">
                             <button
                                 type="button"
-                                class="btn btn-secondary ai-cal-btn"
-                                onclick={() => suggestEvent(d)}
+                                class="btn btn-secondary ai-btn-other"
+                                onclick={toggleAiMenu}
                                 aria-haspopup="menu"
-                                aria-expanded={calOptionsOpen}
-                                title="Let the AI propose 5 calendar event options for this email"
-                                data-testid="suggest-event-btn"
+                                aria-expanded={aiMenuOpen}
+                                title="AI tools, calendar and suggested actions"
+                                data-testid="ai-menu-btn"
                             >
-                                {#if ui.suggestLoading}
-                                    <span class="spinner"></span>
-                                {:else}
-                                    <Icon name="sparkles" size={11} />
-                                    <Icon name="calendar" size={11} />
-                                {/if}
-                                <span>AI Calendar</span>
+                                <Icon name="sparkles" size={12} /> AI
+                                <Icon name="chevronDown" size={11} />
                             </button>
+                            {#if aiMenuOpen}
+                                <div
+                                    class="ai-menu-pop"
+                                    role="menu"
+                                    aria-label="AI actions"
+                                    data-testid="ai-menu-pop"
+                                    onclick={(e) => e.stopPropagation()}
+                                >
+                                    <button
+                                        type="button"
+                                        role="menuitem"
+                                        class="ai-menu-item"
+                                        onclick={() => { aiMenuOpen = false; onAi(); }}
+                                        data-testid="ai-tools-btn"
+                                    >
+                                        <span class="ai-menu-icon"><Icon name="sparkles" size={13} /></span>
+                                        <span class="ai-menu-text">
+                                            <span class="ai-menu-label">AI tools</span>
+                                            <span class="ai-menu-hint muted small">Summarize, draft, translate, actions</span>
+                                        </span>
+                                    </button>
+                                    {#if isChatConfigured()}
+                                        <button
+                                            type="button"
+                                            role="menuitem"
+                                            class="ai-menu-item"
+                                            onclick={() => { aiMenuOpen = false; void suggestEvent(d); }}
+                                            data-testid="suggest-event-btn"
+                                        >
+                                            <span class="ai-menu-icon"><Icon name="calendar" size={13} /></span>
+                                            <span class="ai-menu-text">
+                                                <span class="ai-menu-label">Suggest a calendar event</span>
+                                                <span class="ai-menu-hint muted small">Propose ways to schedule this email</span>
+                                            </span>
+                                        </button>
+                                    {/if}
+                                    <button
+                                        type="button"
+                                        role="menuitem"
+                                        class="ai-menu-item"
+                                        onclick={() => { aiMenuOpen = false; void openAiTools(d); }}
+                                        data-testid="ai-other-btn"
+                                    >
+                                        <span class="ai-menu-icon"><Icon name="wand" size={13} /></span>
+                                        <span class="ai-menu-text">
+                                            <span class="ai-menu-label">Other AI actions</span>
+                                            <span class="ai-menu-hint muted small">Suggested next steps for this email</span>
+                                        </span>
+                                    </button>
+                                </div>
+                            {/if}
+                            <!-- The two popovers the menu hands off to. They keep
+                                 their original bodies, styling and testids; the
+                                 menu is now what opens them, so the opener
+                                 buttons that used to sit beside it are gone.
+                                 They live INSIDE the menu's wrapper so an empty
+                                 one does not take a slot in the toolbar's flex
+                                 row (it would show up as phantom gap), while
+                                 `position: relative` still anchors each to the
+                                 AI button. -->
+                            <div class="cal-options-wrap">
                             {#if calOptionsOpen}
                                 <div
                                     class="cal-options-pop"
@@ -1362,24 +1495,7 @@
                                 </div>
                             {/if}
                         </div>
-                    {/if}
-                    {#if settings.aiFeatures && isChatConfigured()}
-                        <!-- Opens the suggested-actions MENU. The panel-opener
-                             button further down previously shared its
-                             data-testid ("ai-btn"), which made the id
-                             ambiguous even though the two branches are
-                             mutually exclusive. -->
                         <div class="ai-tools-wrap">
-                            <button
-                                type="button"
-                                class="btn btn-secondary ai-btn-other"
-                                onclick={() => openAiTools(d)}
-                                aria-haspopup="menu"
-                                aria-expanded={aiToolsOpen}
-                                data-testid="ai-tools-btn"
-                            >
-                                <Icon name="wand" size={12} /> Other AI
-                            </button>
                             {#if aiToolsOpen}
                                 <div
                                     class="ai-tools-pop"
@@ -1444,22 +1560,7 @@
                                 </div>
                             {/if}
                         </div>
-                    {/if}
-                    <!-- The AI PANEL (Summarize / Draft / Action items /
-                         Translate) is its own surface from the suggested-
-                         actions menu above, and it used to live in an
-                         `{:else if}` of that menu's branch. Since both are
-                         live for a configured account, the panel button was
-                         NEVER rendered in the normal case and the panel was
-                         unreachable from a message — the three tests that
-                         exercise it were failing because the feature was
-                         genuinely missing, not because the tests were wrong.
-                         So the opener is now independent: it shows whenever AI
-                         is available, and the menu sits beside it. -->
-                    {#if settings.aiFeatures && aiAvailable()}
-                        <button type="button" class="btn btn-secondary ai-btn-other" onclick={onAi} data-testid="ai-btn">
-                            <Icon name="sparkles" size={12} /> AI tools
-                        </button>
+                        </div>
                     {/if}
                     {#if settings.aiFeatures && !aiAvailable() && capabilities.loaded}
                         <button
@@ -2386,7 +2487,64 @@
             color-mix(in srgb, var(--warning) 28%, var(--bg-surface)),
             color-mix(in srgb, var(--warning) 14%, var(--bg-surface)));
     }
-    .ai-tools-wrap, .cal-options-wrap { position: relative; }
+    /* The AI menu shares .ai-tools-pop's box so the three popovers this
+     * toolbar can raise read as one family rather than three unrelated
+     * surfaces: same elevated background, hairline border, radius, shadow
+     * and fade-in. The wrapper is `position: relative` so the menu and the
+     * two popovers it hands off to all anchor to the same button. */
+    .ai-menu-wrap, .ai-tools-wrap, .cal-options-wrap { position: relative; }
+    .ai-menu-pop {
+        position: absolute;
+        top: calc(100% + 6px);
+        left: 0;
+        right: auto;
+        width: 300px;
+        max-width: calc(100vw - 24px);
+        background: var(--bg-elevated);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-md);
+        box-shadow: var(--shadow-lg);
+        z-index: 30;
+        padding: 6px;
+        animation: fade-in 160ms cubic-bezier(0.2, 0.7, 0.2, 1);
+    }
+    .ai-menu-item {
+        display: flex;
+        align-items: flex-start;
+        gap: 9px;
+        width: 100%;
+        padding: 7px 8px;
+        border-radius: var(--radius-sm);
+        text-align: left;
+        color: var(--text-primary);
+    }
+    .ai-menu-item:hover { background: var(--bg-hover); }
+    .ai-menu-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+    .ai-menu-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex: 0 0 auto;
+        margin-top: 1px;
+        color: var(--text-tertiary);
+    }
+    .ai-menu-text {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+    }
+    .ai-menu-label {
+        font-size: 12.5px;
+        font-weight: 600;
+        line-height: 1.3;
+    }
+    /* The hint is what tells three similar rows apart at a glance — "AI
+     * tools" alone does not say whether it opens a panel, a calendar picker
+     * or a suggestion list. */
+    .ai-menu-hint {
+        font-size: 11px;
+        line-height: 1.35;
+    }
     .cal-options-pop {
         position: absolute;
         top: calc(100% + 6px);
