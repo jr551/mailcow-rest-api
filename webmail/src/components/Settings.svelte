@@ -2831,7 +2831,7 @@
                             aria-expanded={showAiRules}
                         >
                             <span>
-                                <Icon name="sparkles" size={13} /> AI replies
+                                <Icon name="sparkles" size={13} /> AI Cloud Replies
                                 <span class="count">{takeover.senders.length}</span>
                             </span>
                             <Icon name={showAiRules ? 'chevronUp' : 'chevronDown'} size={14} />
@@ -3434,7 +3434,7 @@
                             </div>
                             <!-- Instructions, auto-send and the sign-off moved
                                  into the per-sender rules under Settings →
-                                 Rules ("AI replies") — each rule carries its
+                                 Rules ("AI Cloud Replies") — each rule carries its
                                  own behaviour now. -->
                             <div class="form-row" style="padding:0;border:none;background:none;">
                                 <div class="row-text">

@@ -391,7 +391,7 @@
                                         onclick={(e) => { e.stopPropagation(); onAutoReply!(a.refUid!, a.label); }}
                                         data-testid={`inbox-action-autoreply-${i}`}
                                     >
-                                        <Icon name="sparkles" size={11} /> AI reply
+                                        <Icon name="sparkles" size={11} /> AI Cloud Reply
                                     </button>
                                 {/if}
                                 {#if typeof a.refUid === 'number'}

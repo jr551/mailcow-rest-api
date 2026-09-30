@@ -1862,7 +1862,7 @@
                  resolved from the already-held `m` BEFORE closeCtx() nulls
                  ctx. -->
             <li><button type="button" role="menuitem" onclick={() => { openAiRules(m); closeCtx(); }}>
-                <Icon name="sparkles" size={12} /> AI replies…
+                <Icon name="sparkles" size={12} /> AI Cloud Reply…
             </button></li>
             {#if onMove && ui.mailboxes.length}
                 {@const bulkN = ui.selected.has(ctx.uid) ? ui.selected.size : 0}

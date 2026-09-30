@@ -282,7 +282,7 @@
                 <div class="head-title">
                     <span class="ai-badge" aria-hidden="true"><Icon name="sparkles" size={15} /></span>
                     <div class="head-copy">
-                        <h2 id="ai-rules-title">AI replies</h2>
+                        <h2 id="ai-rules-title">AI Cloud Reply</h2>
                         <p class="muted head-sub">Choose whose mail the assistant may answer.</p>
                     </div>
                 </div>
@@ -311,7 +311,7 @@
                              is the pattern the Allow button will create. -->
                         <div class="quick" data-testid="ai-rules-quick">
                             <div class="quick-copy">
-                                <strong>Allow AI replies from:</strong>
+                                <strong>Allow AI Cloud Reply to:</strong>
                                 <div class="quick-chips" role="group" aria-label="Sender scope">
                                     <button
                                         type="button"
@@ -508,7 +508,7 @@
             <footer class="foot">
                 <p class="muted small">
                     <Icon name="info" size={12} />
-                    <span>Master switch: Settings → AI → Let the assistant answer mail.</span>
+                    <span>Master switch is in Settings → AI → Let the assistant answer mail.</span>
                 </p>
             </footer>
         </div>
