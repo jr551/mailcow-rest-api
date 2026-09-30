@@ -99,12 +99,17 @@ function createImageProxyCache(opts) {
     }
 
     function evictToMakeRoom(neededBytes) {
-        while (totalSize() + neededBytes > maxBytes) {
+        // SUM(size) once per pass, then track the running total locally.
+        // The old loop re-ran the full-table SUM for every evicted row —
+        // O(rows_evicted * table_size) and ~2.4s worst case on one tick.
+        let total = totalSize();
+        while (total + neededBytes > maxBytes) {
             const row = oldestStmt.get();
             if (!row) break; // nothing left to evict
             // Deliberately NOT swallowed: a failing delete must terminate the
             // loop (via set()'s catch), not spin forever on the same row.
             deleteStmt.run(row.url);
+            total -= row.size;
         }
     }
 

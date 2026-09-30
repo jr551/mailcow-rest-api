@@ -142,6 +142,36 @@ self.addEventListener('fetch', (event) => {
         })());
         return;
     }
+    // Navigations go network-first. The shell is tiny and this is the one
+    // request that decides which code runs, so it must see the deploy as
+    // soon as it lands — a stale-while-revalidate shell serves the previous
+    // bundle for the whole session and defers every feature/bug-fix to the
+    // next visit. On failure we fall back to the cached shell so the app
+    // still opens offline.
+    if (req.mode === 'navigate') {
+        event.respondWith((async () => {
+            const cache = await caches.open(SHELL_CACHE);
+            try {
+                const res = await fetch(req);
+                if (res.ok && (res.type === 'basic' || res.type === 'default') && isSaneToCache(req, res)) {
+                    cache.put(req, res.clone()).catch(() => {});
+                    // Keep the canonical shell key warm for the offline path.
+                    if (url.pathname === '/webmail/' || url.pathname === '/webmail/index.html') {
+                        cache.put('/webmail/index.html', res.clone()).catch(() => {});
+                    }
+                }
+                return res;
+            } catch {
+                const cached = await cache.match(req)
+                    || await cache.match('/webmail/index.html')
+                    || await cache.match('/webmail/');
+                if (cached) return cached;
+                return new Response('offline', { status: 503, statusText: 'Offline' });
+            }
+        })());
+        return;
+    }
+
     if (!url.pathname.startsWith('/webmail/')) return;
 
     event.respondWith((async () => {

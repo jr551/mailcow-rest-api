@@ -118,7 +118,13 @@ async function fetchImage(url, { fetchImpl = global.fetch, lookup = dns.lookup, 
                 continue;
             }
             if (!res.ok) {
-                return { ok: false, status: res.status, reason: `Upstream returned ${res.status}` };
+                // A 5xx from upstream is OUR 502: we are the gateway and the
+                // upstream response was bad. Reporting res.status verbatim
+                // sent e.g. a 500 whose problem title said "Bad Gateway" —
+                // incoherent. 4xx still passes through (a missing image is
+                // a real 404); the detail keeps the real upstream status.
+                const status = res.status >= 500 ? 502 : res.status;
+                return { ok: false, status, reason: `Upstream returned ${res.status}` };
             }
             const contentType = res.headers.get('content-type') || 'application/octet-stream';
             const reader = res.body.getReader();
