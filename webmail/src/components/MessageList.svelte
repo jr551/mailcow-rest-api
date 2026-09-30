@@ -15,6 +15,7 @@
     import { runSpamSweep, bulkMove, findArchiveFolder, findTrashFolder, type SweepCandidate } from '../lib/spam-sweep';
     import { listMailboxes, modifyFlags } from '../lib/api';
     import { showToast } from '../lib/store.svelte';
+    import AIRulesModal from './AIRulesModal.svelte';
     import EventsScanPanel from './EventsScanPanel.svelte';
     import MenuSubmenu, { type SubmenuItem } from './MenuSubmenu.svelte';
     import RuleFromMessageDialog from './RuleFromMessageDialog.svelte';
@@ -519,6 +520,19 @@
     let ruleFromMessage = $state<MessageListItem | null>(null);
     function openRuleFromMessage(m: MessageListItem) {
         ruleFromMessage = m;
+    }
+
+    // "AI replies…" — right-click a message and manage the per-sender AI
+    // rules with that sender prefilled. Holding the resolved From address
+    // (not the uid, not ctx) is the same no-extra-fetch shape as
+    // ruleFromMessage above: the envelope is already on the row object.
+    // The modal itself handles an unavailable takeover API, so the menu
+    // item stays visible on every server.
+    let aiRulesOpen = $state(false);
+    let aiRulesSender = $state<string | null>(null);
+    function openAiRules(m: MessageListItem) {
+        aiRulesSender = m.envelope.from?.[0]?.address?.trim() || null;
+        aiRulesOpen = true;
     }
 
     /**
@@ -1683,6 +1697,12 @@
         />
     {/if}
 
+    <!-- Persistently mounted: the modal gates itself on `open`, so
+         reopening against a different right-clicked sender just re-seeds
+         its form on the open edge (and focus returns to the list row on
+         close). -->
+    <AIRulesModal bind:open={aiRulesOpen} sender={aiRulesSender} />
+
     <!-- Slow folder-switch overlay. Frosted glass over the rows area so
          the user can't confuse leftover mail from the previous folder with
          what's about to load. Only renders after ~280ms of loading — fast
@@ -1792,6 +1812,14 @@
                  the already-resolved `m` first sidesteps that entirely. -->
             <li><button type="button" role="menuitem" onclick={() => { openRuleFromMessage(m); closeCtx(); }}>
                 <Icon name="filter" size={12} /> Create rule from message
+            </button></li>
+            <!-- Always visible: the modal renders the muted "Not available
+                 on this server." line itself when the takeover API is
+                 missing. Same closeCtx-order trap as above — the sender is
+                 resolved from the already-held `m` BEFORE closeCtx() nulls
+                 ctx. -->
+            <li><button type="button" role="menuitem" onclick={() => { openAiRules(m); closeCtx(); }}>
+                <Icon name="sparkles" size={12} /> AI replies…
             </button></li>
             {#if onMove && ui.mailboxes.length}
                 {@const bulkN = ui.selected.has(ctx.uid) ? ui.selected.size : 0}
