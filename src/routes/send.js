@@ -172,6 +172,32 @@ function clipText(value, max = 200) {
     return raw.length > max ? `${raw.slice(0, max)}…` : raw;
 }
 
+// The page shown when an approval link no longer resolves. It used to say only
+// "This approval link is no longer valid", which is ambiguous at the exact
+// moment it matters: a reader cannot tell whether the message was sent and
+// the link merely went stale, or whether nothing happened at all. An approval
+// link dies on every service restart as well as after its one-hour TTL, so
+// this page is reached by ordinary operation, not just by carelessness. It
+// now states the one fact that is actually useful — that nothing was sent —
+// and what to do about it.
+function buildExpiredApprovalPage() {
+    return `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Approval expired</title>
+<style>body{font-family:sans-serif;max-width:600px;margin:40px auto;padding:0 16px;text-align:center}
+.error{color:#ef4444;font-size:48px;margin-bottom:16px}
+h1{margin:0 0 8px}
+p{color:#666}
+p.note{margin-top:24px;font-size:13px}</style></head>
+<body>
+<div class="error">❌</div>
+<h1>Approval expired</h1>
+<p><strong>Nothing was sent.</strong> This approval link is no longer valid.</p>
+<p class="note">Links stop working after one hour, and every pending approval is
+lost when the service restarts. The draft was not delivered to anyone.</p>
+</body></html>`;
+}
+
 function buildApprovalEmail({ from, to, subject, approveUrl, denyUrl }) {
     const toList = Array.isArray(to) ? to.join(', ') : to;
     const fromSafe = escapeEmailHtml(from);
@@ -466,18 +492,7 @@ module.exports = async function sendRoutes(app, { db, smtp, pool, trackingStore,
     }, async (req, reply) => {
         const entry = pendingStore.get(req.params.token);
         if (!entry) {
-            return reply.code(404).type('text/html').send(`<!DOCTYPE html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Expired</title>
-<style>body{font-family:sans-serif;max-width:600px;margin:40px auto;padding:0 16px;text-align:center}
-.error{color:#ef4444;font-size:48px;margin-bottom:16px}
-h1{margin:0 0 8px}
-p{color:#666}</style></head>
-<body>
-<div class="error">❌</div>
-<h1>Approval expired</h1>
-<p>This approval link is no longer valid.</p>
-</body></html>`);
+            return reply.code(404).type('text/html').send(buildExpiredApprovalPage());
         }
         const toList = Array.isArray(entry.to) ? entry.to.join(', ') : String(entry.to || '');
         return reply.type('text/html').send(`<!DOCTYPE html>
@@ -533,18 +548,7 @@ p{color:#666}</style></head>
 </body></html>`);
         } catch (err) {
             if (err.problem && err.problem.status === 404) {
-                reply.code(404).type('text/html').send(`<!DOCTYPE html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Expired</title>
-<style>body{font-family:sans-serif;max-width:600px;margin:40px auto;padding:0 16px;text-align:center}
-.error{color:#ef4444;font-size:48px;margin-bottom:16px}
-h1{margin:0 0 8px}
-p{color:#666}</style></head>
-<body>
-<div class="error">❌</div>
-<h1>Approval expired</h1>
-<p>This approval link is no longer valid.</p>
-</body></html>`);
+                reply.code(404).type('text/html').send(buildExpiredApprovalPage());
             } else {
                 req.log.warn({ err }, 'Approval send failed');
                 const detail = err && err.response ? `${err.response} (${err.message})` : err.message;

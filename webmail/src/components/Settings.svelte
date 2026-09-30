@@ -108,6 +108,8 @@
     import Icon from './Icon.svelte';
     import Avatar from './Avatar.svelte';
     import { ensureCountry, geoipCache, flagEmoji } from '../lib/geoip.svelte';
+    import { takeover, loadTakeover, setTakeoverEnabled, setTakeoverKnobs } from '../lib/takeover.svelte';
+    import type { TakeoverSettings } from '../lib/api';
     import type { IconName } from '../lib/icons';
 
     // Outlook's Settings is a three-column overlay: a category rail on the
@@ -1151,6 +1153,46 @@
         lastModelsSig = sig;
         void loadAiModels();
     });
+
+    // The takeover knobs are server state (the assistant runs on the
+    // server), so they are fetched, not read from local settings — same
+    // gating as the models fetch above: only when the AI section is open.
+    $effect(() => {
+        if (activeSection === 'ai' && !takeover.loaded && !takeover.unavailable) void loadTakeover();
+    });
+
+    async function onTakeoverEnabled(on: boolean) {
+        try {
+            await setTakeoverEnabled(on);
+        } catch (e) {
+            showToast('error', (e as Error).message || 'Could not change that setting');
+        }
+    }
+
+    // Knob edits are validated against the same ranges the server enforces,
+    // then snapped and echoed back from the server's effective value. The
+    // server is still the enforcer — this is just not to waste a round-trip.
+    async function onTakeoverNumber(key: 'maxRepliesPerHour' | 'minDelayMinutes' | 'lookbackHours', raw: string, min: number, max: number) {
+        const n = Number.parseInt(raw, 10);
+        if (!Number.isFinite(n)) return;
+        const v = Math.min(Math.max(n, min), max);
+        if (v !== n) showToast('info', `Kept between ${min} and ${max} — set to ${v}.`);
+        const patch: Partial<TakeoverSettings> = {};
+        patch[key] = v;
+        try {
+            await setTakeoverKnobs(patch);
+        } catch (e) {
+            showToast('error', (e as Error).message || 'Could not save that setting');
+        }
+    }
+
+    async function onTakeoverAttachments(on: boolean) {
+        try {
+            await setTakeoverKnobs({ considerAttachments: on });
+        } catch (e) {
+            showToast('error', (e as Error).message || 'Could not save that setting');
+        }
+    }
 
     async function handleEnableNotifications() {
         const token = getSession()?.token;
@@ -3037,6 +3079,127 @@
                             />
                             <span>{settings.aiFeatures ? 'On' : 'Off'}</span>
                         </label>
+                    </div>
+
+                    <!-- Server-side assistant takeover. Deliberately NOT
+                         gated on the client AI switch above: it runs on the
+                         server and would keep drafting if this browser's AI
+                         were off, so hiding it here would leave a server-side
+                         actor with no off switch. Every draft stops at the
+                         same approval email as any API send — nothing is
+                         ever sent on the assistant's own say-so. -->
+                    <div class="card" data-testid="settings-takeover">
+                        <h4><Icon name="sparkles" size={13} /> AI assistant takeover</h4>
+                        {#if takeover.unavailable}
+                            <p class="muted small">Not available on this server.</p>
+                        {:else}
+                            {#if !settings.aiFeatures && takeover.status?.enabled}
+                                <div class="banner warn" data-testid="takeover-ai-off-warning">
+                                    <Icon name="info" size={14} />
+                                    <span>
+                                        AI is off in this browser, but this server-side assistant is
+                                        still drafting replies. Turn it off below if that is not what
+                                        you want.
+                                    </span>
+                                </div>
+                            {/if}
+                            <div class="form-row" style="padding:0;border:none;background:none;">
+                                <div class="row-text">
+                                    <strong>Let the assistant draft replies</strong>
+                                    <span class="muted">
+                                        The assistant looks at unread mail that seems to need a reply,
+                                        drafts in your voice, and stops for your approval — it never
+                                        sends on its own. Each draft waits for your approval and
+                                        expires if you do not decide within an hour. Replies it sends
+                                        are signed "This reply came from my AI assistant."
+                                    </span>
+                                </div>
+                                <label class="toggle compact">
+                                    <input
+                                        type="checkbox"
+                                        checked={takeover.status?.enabled ?? false}
+                                        disabled={takeover.busy}
+                                        onchange={(e) => onTakeoverEnabled((e.currentTarget as HTMLInputElement).checked)}
+                                        data-testid="settings-takeover-enabled"
+                                    />
+                                    <span>{takeover.status?.enabled ? 'On' : 'Off'}</span>
+                                </label>
+                            </div>
+                            <div class="form-row" style="padding:0;border:none;background:none;">
+                                <div class="row-text">
+                                    <strong>Replies per hour (max)</strong>
+                                    <span class="muted">
+                                        Hard cap, enforced on the server. 0 pauses drafting completely.
+                                    </span>
+                                </div>
+                                <input
+                                    type="number"
+                                    min="0"
+                                    max="24"
+                                    step="1"
+                                    value={takeover.status?.maxRepliesPerHour ?? 1}
+                                    disabled={takeover.busy}
+                                    onchange={(e) => onTakeoverNumber('maxRepliesPerHour', (e.currentTarget as HTMLInputElement).value, 0, 24)}
+                                    data-testid="settings-takeover-rate"
+                                />
+                            </div>
+                            <div class="form-row" style="padding:0;border:none;background:none;">
+                                <div class="row-text">
+                                    <strong>Minimum delay (minutes)</strong>
+                                    <span class="muted">
+                                        Wait at least this long before a draft is submitted for
+                                        approval. Hard floor of 5 — the delay rides on top of your
+                                        approval, never instead of it.
+                                    </span>
+                                </div>
+                                <input
+                                    type="number"
+                                    min="5"
+                                    max="1440"
+                                    step="1"
+                                    value={takeover.status?.minDelayMinutes ?? 5}
+                                    disabled={takeover.busy}
+                                    onchange={(e) => onTakeoverNumber('minDelayMinutes', (e.currentTarget as HTMLInputElement).value, 5, 1440)}
+                                    data-testid="settings-takeover-delay"
+                                />
+                            </div>
+                            <div class="form-row" style="padding:0;border:none;background:none;">
+                                <div class="row-text">
+                                    <strong>Look-back (hours)</strong>
+                                    <span class="muted">
+                                        How far back to look for unanswered mail.
+                                    </span>
+                                </div>
+                                <input
+                                    type="number"
+                                    min="1"
+                                    max="720"
+                                    step="1"
+                                    value={takeover.status?.lookbackHours ?? 24}
+                                    disabled={takeover.busy}
+                                    onchange={(e) => onTakeoverNumber('lookbackHours', (e.currentTarget as HTMLInputElement).value, 1, 720)}
+                                    data-testid="settings-takeover-lookback"
+                                />
+                            </div>
+                            <div class="form-row" style="padding:0;border:none;background:none;">
+                                <div class="row-text">
+                                    <strong>Consider attachments</strong>
+                                    <span class="muted">
+                                        Read attachments when deciding whether a reply is needed.
+                                    </span>
+                                </div>
+                                <label class="toggle compact">
+                                    <input
+                                        type="checkbox"
+                                        checked={takeover.status?.considerAttachments ?? false}
+                                        disabled={takeover.busy}
+                                        onchange={(e) => onTakeoverAttachments((e.currentTarget as HTMLInputElement).checked)}
+                                        data-testid="settings-takeover-attachments"
+                                    />
+                                    <span>{takeover.status?.considerAttachments ? 'On' : 'Off'}</span>
+                                </label>
+                            </div>
+                        {/if}
                     </div>
 
                 {#if capabilities.caps && !capabilities.caps.configured}
