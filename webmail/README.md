@@ -95,6 +95,19 @@ npm run build          # writes webmail/dist/, excluded from the Docker context
 
 Run these from this `webmail/` directory. `VITE_DEV_API_TARGET` points the Vite dev proxy at a local API; in production the API serves the built files directly and no proxy is involved.
 
+`npm run check` is `svelte-check --tsgo`: it type-checks with the native Go
+compiler instead of `tsc`. That needs two TypeScript installs side by side —
+`typescript` stays on the 6.x line because svelte-check peers `^5 || ^6`, and
+`@typescript/native-preview` supplies the `tsgo` binary svelte-check shells out
+to. (The stable `typescript@7` package ships the same native compiler under a
+`tsc` bin name; installing it as an npm alias is the alternative recipe, but
+its `tsc` bin would then shadow the real TypeScript 6 `tsc` in
+`node_modules/.bin`, so the preview package is used instead.) `tsc` in
+`node_modules/.bin` therefore still reports 6.x; `tsgo` reports the 7.x
+nightly. `--tsgo` writes its transpiled overlay into `.svelte-check/`
+(gitignored).
+
+
 To test a build the way production serves it, point the API at it:
 
 ```sh

@@ -1,6 +1,7 @@
 node_modules
 dist
 .svelte-kit
+.svelte-check
 *.tsbuildinfo
 playwright-report
 test-results

@@ -448,7 +448,7 @@ Before a release, all of these must be green, and they must be green
 |---|---|---|
 | Server unit | `npm test` | ~10s |
 | Webmail unit | `cd webmail && node --test test/unit/*.test.mjs` | ~5s |
-| Types | `cd webmail && npx svelte-check --threshold error` | ~15s |
+| Types | `cd webmail && npm run check` | ~7s |
 | Build | `cd webmail && npm run build` | ~10s |
 | E2E | `cd webmail && npm run test:e2e` | ~3min |
 
