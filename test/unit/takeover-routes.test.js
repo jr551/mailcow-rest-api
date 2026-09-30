@@ -30,16 +30,18 @@ const SETTINGS_KEYS = ['enabled', 'maxRepliesPerHour', 'minDelayMinutes', 'lookb
 // In-memory stand-in for src/takeover-store.js with the same contract.
 // The routes are what is under test; this keeps the tests independent of
 // sqlite while behaving exactly like the real store (merge-patch set(),
-// unknown keys throw, resolve vs dismiss semantics).
+// unknown keys throw, resolve vs dismiss semantics, and the same sender
+// rule shape, pattern validation and case-insensitive duplicate refusal).
 function fakeStore() {
     const users = new Map();
-    const calls = { set: [], resolve: [], dismiss: [] };
+    const calls = { set: [], resolve: [], dismiss: [], addSender: [] };
     function u(user) {
         if (!users.has(user)) {
             users.set(user, {
                 state: { enabled: false, maxRepliesPerHour: 1, minDelayMinutes: 5, lookbackHours: 24, considerAttachments: false },
                 items: [],
-                decisions: []
+                decisions: [],
+                senders: []
             });
         }
         return users.get(user);
@@ -59,6 +61,49 @@ function fakeStore() {
             const s = u(user);
             s.state = { ...s.state, ...patch };
             return { ...s.state };
+        },
+        listSenders(user) { return u(user).senders.map((r) => ({ ...r })); },
+        addSender(user, body) {
+            calls.addSender.push({ user, body });
+            const pattern = String((body && body.pattern) || '').trim();
+            if (!(/.+@.+/.test(pattern) || /^@[^@\s]+$/.test(pattern))) {
+                throw new Error('takeover sender pattern must be a full email address or an @domain');
+            }
+            const s = u(user);
+            if (s.senders.some((r) => r.pattern.toLowerCase() === pattern.toLowerCase())) {
+                throw new Error(`takeover sender rule for ${pattern} already exists`);
+            }
+            const sender = {
+                id: `rule-${s.senders.length + 1}`,
+                pattern,
+                instructions: typeof body.instructions === 'string' ? body.instructions.slice(0, 2000) : '',
+                autoSend: body.autoSend !== false,
+                signReplies: body.signReplies !== false,
+                createdAt: Date.now()
+            };
+            s.senders.push(sender);
+            return { ...sender };
+        },
+        updateSender(user, id, patch) {
+            const s = u(user);
+            const sender = s.senders.find((r) => r.id === id);
+            if (!sender) return null;
+            for (const key of Object.keys(patch || {})) {
+                if (!['instructions', 'autoSend', 'signReplies'].includes(key)) {
+                    throw new Error(`Unknown takeover sender field: ${key}`);
+                }
+            }
+            if (patch.instructions !== undefined) sender.instructions = String(patch.instructions).slice(0, 2000);
+            if (patch.autoSend !== undefined) sender.autoSend = patch.autoSend;
+            if (patch.signReplies !== undefined) sender.signReplies = patch.signReplies;
+            return { ...sender };
+        },
+        deleteSender(user, id) {
+            const s = u(user);
+            const idx = s.senders.findIndex((r) => r.id === id);
+            if (idx === -1) return false;
+            s.senders.splice(idx, 1);
+            return true;
         },
         listNeedsInput(user) {
             return u(user).items.filter((i) => i.status === 'open').map((i) => ({ ...i }));
@@ -119,6 +164,10 @@ test('unauthenticated requests are rejected', async (t) => {
     for (const req of [
         { method: 'GET', url: '/v1/me/takeover' },
         { method: 'PUT', url: '/v1/me/takeover', payload: { enabled: true } },
+        { method: 'GET', url: '/v1/me/takeover/senders' },
+        { method: 'POST', url: '/v1/me/takeover/senders', payload: { pattern: 'a@b.c' } },
+        { method: 'PATCH', url: '/v1/me/takeover/senders/abc', payload: { autoSend: false } },
+        { method: 'DELETE', url: '/v1/me/takeover/senders/abc' },
         { method: 'GET', url: '/v1/me/takeover/needs-input' },
         { method: 'POST', url: '/v1/me/takeover/needs-input/abc', payload: { advice: 'hi' } },
         { method: 'DELETE', url: '/v1/me/takeover/needs-input/abc' },
@@ -370,4 +419,129 @@ test('PUT enabled:true starts and wakes the worker; disabling stops it', async (
     });
     assert.equal(off.statusCode, 200);
     assert.equal(worker.calls.stop, 1, 'last user disabling stops the polling worker');
+});
+
+// --------------------------------------------------------------------------
+// Per-sender rules.
+// --------------------------------------------------------------------------
+
+test('PUT refuses the three knobs that moved to the per-sender rules', async (t) => {
+    const store = fakeStore();
+    const app = await buildApp({ store });
+    t.after(() => app.close());
+
+    for (const moved of [{ instructions: 'x' }, { autoSend: false }, { signReplies: false }]) {
+        const res = await app.inject({
+            method: 'PUT', url: '/v1/me/takeover',
+            headers: { authorization: AUTH },
+            payload: moved
+        });
+        assert.equal(res.statusCode, 400, `${Object.keys(moved)[0]} is no longer a global setting`);
+        assert.equal(store.calls.set.length, 0, 'a refused knob never reaches the store');
+    }
+});
+
+test('per-sender rules: a rule is added, listed, patched and deleted', async (t) => {
+    const store = fakeStore();
+    const app = await buildApp({ store });
+    t.after(() => app.close());
+
+    const created = await app.inject({
+        method: 'POST', url: '/v1/me/takeover/senders',
+        headers: { authorization: AUTH },
+        payload: { pattern: 'alice@vendor.example', instructions: 'Be brief.', autoSend: false }
+    });
+    assert.equal(created.statusCode, 201, created.body);
+    const sender = created.json().sender;
+    assert.equal(sender.pattern, 'alice@vendor.example');
+    assert.equal(sender.instructions, 'Be brief.');
+    assert.equal(sender.autoSend, false);
+    assert.equal(sender.signReplies, true, 'signReplies defaults to on');
+
+    const listed = await app.inject({ method: 'GET', url: '/v1/me/takeover/senders', headers: { authorization: AUTH } });
+    assert.equal(listed.statusCode, 200);
+    assert.deepEqual(listed.json().senders, [sender], 'the list shows exactly the one rule');
+
+    const patched = await app.inject({
+        method: 'PATCH', url: `/v1/me/takeover/senders/${sender.id}`,
+        headers: { authorization: AUTH },
+        payload: { signReplies: false }
+    });
+    assert.equal(patched.statusCode, 200);
+    assert.equal(patched.json().sender.signReplies, false);
+    assert.equal(patched.json().sender.autoSend, false, 'the untouched fields survive the patch');
+
+    const removed = await app.inject({
+        method: 'DELETE', url: `/v1/me/takeover/senders/${sender.id}`,
+        headers: { authorization: AUTH }
+    });
+    assert.equal(removed.statusCode, 204);
+    assert.deepEqual((await app.inject({ method: 'GET', url: '/v1/me/takeover/senders', headers: { authorization: AUTH } })).json().senders, []);
+});
+
+test('per-sender rules: bad patterns, duplicates and unknown fields are refused', async (t) => {
+    const store = fakeStore();
+    const app = await buildApp({ store });
+    t.after(() => app.close());
+
+    // The pattern shape is the store's law; the route maps a refusal to a
+    // 400. (The bare-Fastify harness serialises problem bodies to {} — the
+    // refusal wording itself is pinned by the store tests.)
+    for (const bad of ['alice', '@', 'plain-text']) {
+        const res = await app.inject({
+            method: 'POST', url: '/v1/me/takeover/senders',
+            headers: { authorization: AUTH },
+            payload: { pattern: bad }
+        });
+        assert.equal(res.statusCode, 400, `"${bad}" is not a rule pattern`);
+    }
+    assert.equal(store.calls.addSender.length, 3, 'each refusal was attempted at the store');
+    assert.equal(store.listSenders(TEST_USER).length, 0, 'and none of them persisted');
+
+    await app.inject({
+        method: 'POST', url: '/v1/me/takeover/senders',
+        headers: { authorization: AUTH },
+        payload: { pattern: 'alice@vendor.example' }
+    });
+    const dup = await app.inject({
+        method: 'POST', url: '/v1/me/takeover/senders',
+        headers: { authorization: AUTH },
+        payload: { pattern: 'ALICE@VENDOR.EXAMPLE' }
+    });
+    assert.equal(dup.statusCode, 400, 'a duplicate rule is refused case-insensitively');
+    assert.equal(store.listSenders(TEST_USER).length, 1, 'the duplicate added nothing');
+
+    const unknownField = await app.inject({
+        method: 'POST', url: '/v1/me/takeover/senders',
+        headers: { authorization: AUTH },
+        payload: { pattern: 'bob@vendor.example', patern: 'typo' }
+    });
+    assert.equal(unknownField.statusCode, 400);
+    assert.equal(store.listSenders(TEST_USER).length, 1, 'the refused rule added nothing');
+
+    const patchUnknown = await app.inject({
+        method: 'PATCH', url: '/v1/me/takeover/senders/rule-1',
+        headers: { authorization: AUTH },
+        payload: { pattern: 'x@y.z' }
+    });
+    assert.equal(patchUnknown.statusCode, 400, 'the pattern is not patchable');
+});
+
+test('per-sender rules: an unknown id is 404 on patch and delete', async (t) => {
+    const store = fakeStore();
+    const app = await buildApp({ store });
+    t.after(() => app.close());
+
+    const patched = await app.inject({
+        method: 'PATCH', url: '/v1/me/takeover/senders/nope',
+        headers: { authorization: AUTH },
+        payload: { autoSend: false }
+    });
+    assert.equal(patched.statusCode, 404);
+
+    const deleted = await app.inject({
+        method: 'DELETE', url: '/v1/me/takeover/senders/nope',
+        headers: { authorization: AUTH }
+    });
+    assert.equal(deleted.statusCode, 404);
 });

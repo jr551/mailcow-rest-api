@@ -9,6 +9,7 @@ const crypto = require('node:crypto');
 
 const { createTakeoverStore } = require('../../src/takeover-store');
 const { createSecretBox } = require('../../src/secret-box');
+const Database = require('better-sqlite3');
 
 // A stand-in for secret-box: these tests are about the store's behaviour, not
 // about AES. A reversible marker keeps the assertions readable — and lets one
@@ -36,10 +37,7 @@ test('a user who has never touched the feature gets the documented defaults', ()
         maxRepliesPerHour: 1,
         minDelayMinutes: 5,
         lookbackHours: 24,
-        considerAttachments: false,
-        instructions: '',
-        autoSend: true,
-        signReplies: true
+        considerAttachments: false
     });
     store.close();
 });
@@ -51,10 +49,7 @@ test('operator defaults apply to a user who has never touched the feature', () =
         maxRepliesPerHour: 3,
         minDelayMinutes: 5,
         lookbackHours: 48,
-        considerAttachments: true,
-        instructions: '',
-        autoSend: true,
-        signReplies: true
+        considerAttachments: true
     });
     store.close();
 });
@@ -74,10 +69,7 @@ test('set merges a patch and returns the state that is actually in force', () =>
         maxRepliesPerHour: 1,
         minDelayMinutes: 30,
         lookbackHours: 24,
-        considerAttachments: false,
-        instructions: '',
-        autoSend: true,
-        signReplies: true
+        considerAttachments: false
     });
     assert.deepStrictEqual(store.get(USER), state);
     store.close();
@@ -104,9 +96,13 @@ test('set rejects a typo rather than silently ignoring it', () => {
     assert.throws(() => store.set(USER, { maxRepliesPerHours: 3 }), /Unknown takeover setting: maxRepliesPerHours/);
     assert.throws(() => store.set(USER, { minDelayMinutes: 'five' }), /must be a number/);
     assert.throws(() => store.set(USER, { enabled: 'yes' }), /must be a boolean/);
+    // The three knobs that moved to the per-sender rules are no longer
+    // global settings either: sending one must be a refusal, not a write.
+    assert.throws(() => store.set(USER, { instructions: 'x' }), /Unknown takeover setting: instructions/);
+    assert.throws(() => store.set(USER, { autoSend: false }), /Unknown takeover setting: autoSend/);
+    assert.throws(() => store.set(USER, { signReplies: false }), /Unknown takeover setting: signReplies/);
     assert.deepStrictEqual(store.get(USER), {
-        enabled: false, maxRepliesPerHour: 1, minDelayMinutes: 5, lookbackHours: 24, considerAttachments: false,
-        instructions: '', autoSend: true, signReplies: true
+        enabled: false, maxRepliesPerHour: 1, minDelayMinutes: 5, lookbackHours: 24, considerAttachments: false
     }, 'a rejected patch changes nothing');
     store.close();
 });
@@ -120,6 +116,180 @@ test('hasEnabledUsers sees a user who enabled takeover and logged out', () => {
     store.set(USER, { enabled: false });
     assert.strictEqual(store.hasEnabledUsers(), false);
     store.close();
+});
+
+// --------------------------------------------------------------------------
+// Per-sender rules.
+// --------------------------------------------------------------------------
+
+test('senders: a rule round-trips with its settings and documented defaults', () => {
+    const store = freshStore();
+    const created = store.addSender(USER, { pattern: 'alice@vendor.example' });
+    assert.deepStrictEqual(store.listSenders(USER), [{
+        id: created.id,
+        pattern: 'alice@vendor.example',
+        instructions: '',
+        autoSend: true,
+        signReplies: true,
+        createdAt: created.createdAt
+    }], 'autoSend and signReplies default to on, instructions to empty');
+    assert.match(created.id, /^[0-9a-f]+$/);
+    assert.ok(created.createdAt > 0);
+    // A fuller rule comes back exactly as written.
+    const full = store.addSender(USER, {
+        pattern: '@client.example',
+        instructions: 'Never promise delivery dates.',
+        autoSend: false,
+        signReplies: false
+    });
+    assert.deepStrictEqual(store.listSenders(USER)[1], {
+        id: full.id,
+        pattern: '@client.example',
+        instructions: 'Never promise delivery dates.',
+        autoSend: false,
+        signReplies: false,
+        createdAt: full.createdAt
+    });
+    store.close();
+});
+
+test('senders: pattern must be a full address or an @domain', () => {
+    const store = freshStore();
+    for (const good of ['alice@vendor.example', '@vendor.example', 'a@b']) {
+        store.addSender(USER, { pattern: good });
+        store.deleteSender(USER, store.listSenders(USER).find((s) => s.pattern === good).id);
+    }
+    for (const bad of ['', 'alice', '@', 'plain-text', null, undefined, 42, ' '.repeat(201)]) {
+        assert.throws(() => store.addSender(USER, { pattern: bad }), /pattern must be a full email address or an @domain/, `pattern ${JSON.stringify(bad)} must be refused`);
+    }
+    assert.throws(
+        () => store.addSender(USER, { pattern: `${'a'.repeat(201)}@vendor.example` }),
+        /at most 200 characters/
+    );
+    // Surrounding whitespace is trimmed before validation, not stored.
+    const trimmed = store.addSender(USER, { pattern: '  bob@vendor.example  ' });
+    assert.strictEqual(trimmed.pattern, 'bob@vendor.example');
+    store.close();
+});
+
+test('senders: a duplicate rule is refused case-insensitively', () => {
+    const store = freshStore();
+    store.addSender(USER, { pattern: 'alice@vendor.example' });
+    assert.throws(() => store.addSender(USER, { pattern: 'alice@vendor.example' }), /already exists/);
+    assert.throws(() => store.addSender(USER, { pattern: 'ALICE@VENDOR.EXAMPLE' }), /already exists/);
+    store.addSender(USER, { pattern: '@vendor.example' });
+    assert.throws(() => store.addSender(USER, { pattern: '@VENDOR.example' }), /already exists/);
+    assert.strictEqual(store.listSenders(USER).length, 2, 'a refused duplicate adds nothing');
+    store.close();
+});
+
+test('senders: the rules per user are bounded', () => {
+    const store = freshStore({ maxSendersPerUser: 2 });
+    store.addSender(USER, { pattern: 'a@x.example' });
+    store.addSender(USER, { pattern: 'b@x.example' });
+    assert.throws(() => store.addSender(USER, { pattern: 'c@x.example' }), /sender limit reached \(2\)/);
+    // Another user has their own budget.
+    store.addSender('other@example.com', { pattern: 'c@x.example' });
+    // Deleting frees a slot.
+    store.deleteSender(USER, store.listSenders(USER)[0].id);
+    assert.strictEqual(typeof store.addSender(USER, { pattern: 'd@x.example' }).id, 'string');
+    store.close();
+});
+
+test('senders: update merges over one rule; the pattern is not patchable', () => {
+    const store = freshStore();
+    const a = store.addSender(USER, { pattern: 'alice@vendor.example', instructions: 'Be brief.' });
+    store.addSender(USER, { pattern: 'bob@vendor.example' });
+
+    const updated = store.updateSender(USER, a.id, { autoSend: false, instructions: 'Be brief. Never guess a date.' });
+    assert.deepStrictEqual(updated, {
+        id: a.id,
+        pattern: 'alice@vendor.example',
+        instructions: 'Be brief. Never guess a date.',
+        autoSend: false,
+        signReplies: true,
+        createdAt: a.createdAt
+    });
+    // The sibling rule is untouched, and the update is durable.
+    assert.strictEqual(store.listSenders(USER)[1].autoSend, true);
+    assert.strictEqual(store.updateSender(USER, a.id, {}).autoSend, false);
+
+    assert.throws(() => store.updateSender(USER, a.id, { pattern: 'x@y.z' }), /Unknown takeover sender field: pattern/);
+    assert.throws(() => store.updateSender(USER, a.id, { autoSend: 'no' }), /autoSend must be a boolean/);
+    assert.strictEqual(store.updateSender(USER, 'no-such-id', { autoSend: true }), null, 'an unknown id reads as null');
+    store.close();
+});
+
+test('senders: delete removes exactly one rule and reports what it did', () => {
+    const store = freshStore();
+    const a = store.addSender(USER, { pattern: 'alice@vendor.example' });
+    const b = store.addSender(USER, { pattern: '@vendor.example' });
+    assert.strictEqual(store.deleteSender(USER, a.id), true);
+    assert.strictEqual(store.deleteSender(USER, a.id), false, 'deleting twice reports the second as not done');
+    assert.strictEqual(store.deleteSender(USER, 'no-such-id'), false);
+    assert.deepStrictEqual(store.listSenders(USER).map((s) => s.id), [b.id]);
+    store.close();
+});
+
+test('senders: an exact address rule beats an @domain rule, both case-insensitively', () => {
+    const store = freshStore();
+    const domain = store.addSender(USER, { pattern: '@vendor.example', instructions: 'domain rule' });
+    const exact = store.addSender(USER, { pattern: 'alice@vendor.example', instructions: 'exact rule' });
+
+    assert.strictEqual(store.findSenderRule(USER, 'alice@vendor.example').id, exact.id, 'exact wins over domain');
+    assert.strictEqual(store.findSenderRule(USER, 'ALICE@VENDOR.EXAMPLE').id, exact.id, 'exact match is case-insensitive');
+    assert.strictEqual(store.findSenderRule(USER, 'bob@vendor.example').id, domain.id, 'other locals fall to the domain rule');
+    assert.strictEqual(store.findSenderRule(USER, 'BOB@VENDOR.EXAMPLE').id, domain.id);
+    assert.strictEqual(store.findSenderRule(USER, 'carol@other.example'), null, 'an uncovered domain matches nothing');
+    assert.strictEqual(store.findSenderRule(USER, 'notvendor.example@evil.example'), null, 'a lookalike domain is not the rule');
+    assert.strictEqual(store.findSenderRule(USER, ''), null);
+    assert.strictEqual(store.findSenderRule(USER, undefined), null);
+    // An exact-only setup leaves everyone else unmatched.
+    store.deleteSender(USER, domain.id);
+    assert.strictEqual(store.findSenderRule(USER, 'bob@vendor.example'), null);
+    store.close();
+});
+
+test('senders: rules are per user', () => {
+    const store = freshStore();
+    store.addSender(USER, { pattern: 'alice@vendor.example' });
+    assert.strictEqual(store.listSenders('other@example.com').length, 0);
+    assert.strictEqual(store.findSenderRule('other@example.com', 'alice@vendor.example'), null,
+        'one user\'s rule never governs another user\'s assistant');
+    assert.strictEqual(store.findSenderRule(USER, 'alice@vendor.example').pattern, 'alice@vendor.example');
+    store.close();
+});
+
+test('sender instructions are stored through the secret box, not in the clear', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'takeover-store-'));
+    const filePath = path.join(dir, 'takeover.db');
+    const box = createSecretBox({
+        envValue: crypto.randomBytes(32).toString('hex'),
+        dataDir: dir,
+        logger: null
+    });
+
+    const store = createTakeoverStore({ filePath, secretBox: box });
+    const secret = 'Never promise delivery dates to anyone at vendor.example.';
+    const rule = store.addSender(USER, { pattern: 'alice@vendor.example', instructions: secret });
+
+    // It comes back in the clear to the owner, who owns it...
+    assert.strictEqual(store.findSenderRule(USER, 'alice@vendor.example').instructions, secret);
+    // ...but what is on disk is ciphertext — both different from the
+    // plaintext and not containing it anywhere in the database files.
+    const raw = new Database(filePath);
+    const stored = raw.prepare('SELECT instructions FROM takeover_senders WHERE id = ?').get(rule.id).instructions;
+    raw.close();
+    assert.notStrictEqual(stored, secret, 'the stored column is not the plaintext');
+    assert.ok(!stored.includes(secret), 'the plaintext appears nowhere in the stored column');
+
+    const onDisk = fs.readdirSync(dir)
+        .filter((name) => name !== 'credential-key')
+        .map((name) => fs.readFileSync(path.join(dir, name)))
+        .map((buf) => buf.toString('binary'));
+    assert.ok(!onDisk.some((blob) => blob.includes(secret)), 'the rule instructions are not in the database files');
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
 });
 
 // --------------------------------------------------------------------------
@@ -281,6 +451,7 @@ test('state survives closing the store and opening it again', () => {
     first.recordProcessed(USER, 'm1', 'drafted', T0);
     first.markReplySent(USER, 'm1', T0);
     first.enqueueNeedsInput(USER, item({ messageId: 'm2', reason: 'It needs the price.' }));
+    const rule = first.addSender(USER, { pattern: 'alice@vendor.example', instructions: 'Be brief.' });
     first.close();
 
     const second = createTakeoverStore({ filePath, secretBox: fakeBox });
@@ -291,6 +462,16 @@ test('state survives closing the store and opening it again', () => {
     const rows = second.listNeedsInput(USER);
     assert.strictEqual(rows.length, 1);
     assert.strictEqual(rows[0].reason, 'It needs the price.');
+    // A rule written by the previous process governs this one too.
+    assert.deepStrictEqual(second.listSenders(USER), [{
+        id: rule.id,
+        pattern: 'alice@vendor.example',
+        instructions: 'Be brief.',
+        autoSend: true,
+        signReplies: true,
+        createdAt: rule.createdAt
+    }]);
+    assert.strictEqual(second.findSenderRule(USER, 'alice@vendor.example').id, rule.id);
     second.close();
     fs.rmSync(dir, { recursive: true, force: true });
 });

@@ -108,8 +108,8 @@
     import Icon from './Icon.svelte';
     import Avatar from './Avatar.svelte';
     import { ensureCountry, geoipCache, flagEmoji } from '../lib/geoip.svelte';
-    import { takeover, loadTakeover, setTakeoverEnabled, setTakeoverKnobs } from '../lib/takeover.svelte';
-    import type { TakeoverSettings } from '../lib/api';
+    import { takeover, loadTakeover, setTakeoverEnabled, setTakeoverKnobs, addSenderRule, saveSenderRule, removeSenderRule } from '../lib/takeover.svelte';
+    import type { TakeoverSettings, TakeoverSender } from '../lib/api';
     import type { IconName } from '../lib/icons';
 
     // Outlook's Settings is a three-column overlay: a category rail on the
@@ -1157,8 +1157,10 @@
     // The takeover knobs are server state (the assistant runs on the
     // server), so they are fetched, not read from local settings — same
     // gating as the models fetch above: only when the AI section is open.
+    // The Rules section needs the same store for its per-sender "AI
+    // replies" card, so it loads there too — whichever opens first wins.
     $effect(() => {
-        if (activeSection === 'ai' && !takeover.loaded && !takeover.unavailable) void loadTakeover();
+        if ((activeSection === 'ai' || activeSection === 'mail-rules') && !takeover.loaded && !takeover.unavailable) void loadTakeover();
     });
 
     async function onTakeoverEnabled(on: boolean) {
@@ -1194,31 +1196,94 @@
         }
     }
 
-    // Standing instructions: same save-on-commit as every other text input
-    // here, but typing lands in a draft first so the 2000-char counter is
-    // live. Null = not editing — show the server's value.
-    let instructionsDraft = $state<string | null>(null);
-    const instructionsLen = $derived((instructionsDraft ?? takeover.status?.instructions ?? '').length);
+    // ── Per-sender "AI replies" rules (Settings → Rules) ──
+    // Each rule owns its behaviour: instructions, autoSend, sign-off. The
+    // add form defaults mirror the server (toggles on, no instructions).
+    // A row's "Settings" affordance opens its editor: the instructions box
+    // types into a draft first so the 2000-char counter is live (same
+    // save-on-commit as every other text input here — null = show the
+    // server's value); the toggles save straight away.
+    let showAiRules = $state(true);
+    let aiRulePattern = $state('');
+    let aiRuleInstructions = $state('');
+    let aiRuleAutoSend = $state(true);
+    let aiRuleSignReplies = $state(true);
+    let aiRuleError = $state('');
+    let aiRuleEditId = $state<string | null>(null);
+    let aiRuleEditInstructions = $state<string | null>(null);
 
-    async function onTakeoverInstructions(v: string) {
-        instructionsDraft = null;
+    function aiRuleToggleEdit(s: TakeoverSender): void {
+        aiRuleEditId = aiRuleEditId === s.id ? null : s.id;
+        aiRuleEditInstructions = null;
+    }
+
+    /** One-line behaviour summary for a collapsed rule row. */
+    function aiRuleSummary(s: TakeoverSender): string {
+        return [
+            s.autoSend ? 'sends directly' : 'asks first',
+            s.signReplies ? 'signs replies' : 'no sign-off'
+        ].join(' · ');
+    }
+
+    /** First line of the rule's instructions, for the collapsed row. */
+    function aiRuleSnippet(s: TakeoverSender): string {
+        const t = (s.instructions || '').replace(/\s+/g, ' ').trim();
+        return t.length > 64 ? `${t.slice(0, 64)}…` : t;
+    }
+
+    async function doAddAiRule() {
+        const pattern = aiRulePattern.trim();
+        if (!pattern) {
+            aiRuleError = 'Enter an email address or an @domain.';
+            return;
+        }
+        aiRuleError = '';
         try {
-            await setTakeoverKnobs({ instructions: v });
+            await addSenderRule({
+                pattern,
+                instructions: aiRuleInstructions.trim() || undefined,
+                autoSend: aiRuleAutoSend,
+                signReplies: aiRuleSignReplies
+            });
+            aiRulePattern = '';
+            aiRuleInstructions = '';
+            aiRuleAutoSend = true;
+            aiRuleSignReplies = true;
+        } catch (e) {
+            aiRuleError = (e as Error).message || 'Could not add that sender.';
+        }
+    }
+
+    async function onAiRuleInstructions(s: TakeoverSender, v: string) {
+        aiRuleEditInstructions = null;
+        try {
+            await saveSenderRule(s.id, { instructions: v });
         } catch (e) {
             showToast('error', (e as Error).message || 'Could not save that setting');
             // The save was refused — keep what the user typed in the box
             // instead of silently snapping back to the server's old value.
-            instructionsDraft = v;
+            aiRuleEditInstructions = v;
         }
     }
 
-    async function onTakeoverFlag(key: 'autoSend' | 'signReplies', on: boolean) {
-        const patch: Partial<TakeoverSettings> = {};
-        patch[key] = on;
+    async function onAiRuleFlag(s: TakeoverSender, key: 'autoSend' | 'signReplies', on: boolean) {
+        const patch = key === 'autoSend' ? { autoSend: on } : { signReplies: on };
         try {
-            await setTakeoverKnobs(patch);
+            await saveSenderRule(s.id, patch);
         } catch (e) {
             showToast('error', (e as Error).message || 'Could not save that setting');
+        }
+    }
+
+    async function doRemoveAiRule(s: TakeoverSender) {
+        try {
+            await removeSenderRule(s.id);
+            if (aiRuleEditId === s.id) {
+                aiRuleEditId = null;
+                aiRuleEditInstructions = null;
+            }
+        } catch (e) {
+            showToast('error', (e as Error).message || 'Could not remove that sender');
         }
     }
 
@@ -2752,6 +2817,218 @@
                         </div>
                     {/if}
 
+                    <!-- Per-sender AI reply rules. The assistant answers ONLY
+                         mail from a sender listed here (exact address beats
+                         @domain); each rule carries its own instructions,
+                         auto-send and sign-off. Same store as the AI
+                         section's takeover card — the rate/delay/lookback
+                         governors stay there, the who-and-how lives here. -->
+                    <div class="filter-block" data-testid="ai-rules-block">
+                        <button
+                            type="button"
+                            class="collapse-header"
+                            onclick={() => showAiRules = !showAiRules}
+                            aria-expanded={showAiRules}
+                        >
+                            <span>
+                                <Icon name="sparkles" size={13} /> AI replies
+                                <span class="count">{takeover.senders.length}</span>
+                            </span>
+                            <Icon name={showAiRules ? 'chevronUp' : 'chevronDown'} size={14} />
+                        </button>
+                        {#if showAiRules}
+                            <div class="collapse-body">
+                                {#if takeover.unavailable}
+                                    <p class="muted small" data-testid="ai-rules-unavailable">Not available on this server.</p>
+                                {:else}
+                                    <p class="muted small">
+                                        Let the assistant answer mail from senders you allow — an
+                                        exact address, or <code>@domain</code> for a whole domain
+                                        (an exact address wins over its domain). Each rule carries
+                                        its own instructions and behaviour; the assistant never
+                                        touches mail from anyone else. Replies-per-hour, delay and
+                                        look-back stay under <em>AI</em>.
+                                    </p>
+
+                                    <div class="rule-form" data-testid="ai-rule-form">
+                                        <label class="rule-row">
+                                            <span class="rule-label">Sender</span>
+                                            <input
+                                                type="text"
+                                                placeholder="alice@example.com or @example.com"
+                                                bind:value={aiRulePattern}
+                                                disabled={takeover.sendersBusy}
+                                                onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void doAddAiRule(); }}}
+                                                data-testid="ai-rule-pattern"
+                                            />
+                                        </label>
+                                        <label class="rule-row ai-rule-instr-row">
+                                            <span class="rule-label">Instructions</span>
+                                            <textarea
+                                                rows="2"
+                                                maxlength="2000"
+                                                placeholder="Optional — tone, what to handle, what to leave alone"
+                                                bind:value={aiRuleInstructions}
+                                                disabled={takeover.sendersBusy}
+                                                data-testid="ai-rule-instructions"
+                                            ></textarea>
+                                        </label>
+                                        <div class="rule-row">
+                                            <span class="rule-label">Auto-send</span>
+                                            <label class="toggle compact">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={aiRuleAutoSend}
+                                                    disabled={takeover.sendersBusy}
+                                                    aria-label="Send confident replies automatically"
+                                                    onchange={(e) => { aiRuleAutoSend = (e.currentTarget as HTMLInputElement).checked; }}
+                                                    data-testid="ai-rule-autosend"
+                                                />
+                                                <span>{aiRuleAutoSend ? 'On' : 'Off'}</span>
+                                            </label>
+                                        </div>
+                                        <div class="rule-row">
+                                            <span class="rule-label">Sign-off</span>
+                                            <label class="toggle compact">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={aiRuleSignReplies}
+                                                    disabled={takeover.sendersBusy}
+                                                    aria-label="Append the AI sign-off to replies"
+                                                    onchange={(e) => { aiRuleSignReplies = (e.currentTarget as HTMLInputElement).checked; }}
+                                                    data-testid="ai-rule-signreplies"
+                                                />
+                                                <span>{aiRuleSignReplies ? 'On' : 'Off'}</span>
+                                            </label>
+                                        </div>
+                                        <div class="rule-actions">
+                                            <button
+                                                type="button"
+                                                class="btn btn-primary"
+                                                disabled={takeover.sendersBusy}
+                                                onclick={doAddAiRule}
+                                                data-testid="ai-rule-add"
+                                            >{takeover.sendersBusy ? 'Adding…' : 'Add sender'}</button>
+                                        </div>
+                                        {#if aiRuleError}
+                                            <p class="muted small" data-testid="ai-rule-error">{aiRuleError}</p>
+                                        {/if}
+                                    </div>
+
+                                    {#if takeover.senders.length}
+                                        <ul class="rule-cards" data-testid="ai-rule-list">
+                                            {#each takeover.senders as s (s.id)}
+                                                <li class="rule-card" data-testid={`ai-rule-item-${s.id}`}>
+                                                    <div class="rule-card-head">
+                                                        <span class="rule-name truncate" title={s.pattern}>
+                                                            <Icon name="sparkles" size={11} /> {s.pattern}
+                                                        </span>
+                                                        <button
+                                                            type="button"
+                                                            class="btn btn-ghost"
+                                                            onclick={() => aiRuleToggleEdit(s)}
+                                                            aria-expanded={aiRuleEditId === s.id}
+                                                            data-testid={`ai-rule-details-${s.id}`}
+                                                        >{aiRuleEditId === s.id ? 'Hide settings' : 'Settings'}</button>
+                                                        <button
+                                                            type="button"
+                                                            class="rule-remove"
+                                                            aria-label={`Stop handling ${s.pattern}`}
+                                                            title="Stop handling this sender"
+                                                            onclick={() => doRemoveAiRule(s)}
+                                                            data-testid={`ai-rule-remove-${s.id}`}
+                                                        ><Icon name="trash" size={12} /></button>
+                                                    </div>
+                                                    <div class="rule-card-body">
+                                                        <div class="rule-clause">
+                                                            <span class="rule-when">Does</span>
+                                                            <span class="rule-action-text">{aiRuleSummary(s)}</span>
+                                                        </div>
+                                                        {#if s.instructions}
+                                                            <div class="rule-clause">
+                                                                <span class="rule-when">Says</span>
+                                                                <span class="rule-action-text muted">{aiRuleSnippet(s)}</span>
+                                                            </div>
+                                                        {/if}
+                                                    </div>
+                                                    {#if aiRuleEditId === s.id}
+                                                        <div class="ai-rule-edit" data-testid={`ai-rule-edit-${s.id}`}>
+                                                            <div class="row-text">
+                                                                <strong>Instructions</strong>
+                                                                <span class="muted">
+                                                                    This rule's own context for the assistant — tone,
+                                                                    what to handle, what to leave alone. Saved when
+                                                                    you click away.
+                                                                </span>
+                                                                <textarea
+                                                                    rows="3"
+                                                                    maxlength="2000"
+                                                                    class="prompt-area"
+                                                                    aria-label={`Instructions for ${s.pattern}`}
+                                                                    placeholder="e.g. Friendly and brief. Handle delivery questions myself. Never mention invoices."
+                                                                    value={aiRuleEditInstructions ?? s.instructions}
+                                                                    disabled={takeover.sendersBusy}
+                                                                    oninput={(e) => { aiRuleEditInstructions = (e.currentTarget as HTMLTextAreaElement).value; }}
+                                                                    onchange={(e) => onAiRuleInstructions(s, (e.currentTarget as HTMLTextAreaElement).value)}
+                                                                    data-testid={`ai-rule-instructions-${s.id}`}
+                                                                ></textarea>
+                                                                <span class="muted small" data-testid={`ai-rule-instructions-count-${s.id}`}>
+                                                                    {(aiRuleEditInstructions ?? s.instructions).length}/2000
+                                                                </span>
+                                                            </div>
+                                                            <div class="form-row" style="padding:0;border:none;background:none;">
+                                                                <div class="row-text">
+                                                                    <strong>Send confident replies automatically</strong>
+                                                                    <span class="muted">
+                                                                        When the assistant is sure of its reply it sends
+                                                                        it; when unsure it waits for your approval.
+                                                                    </span>
+                                                                </div>
+                                                                <label class="toggle compact">
+                                                                    <input
+                                                                        type="checkbox"
+                                                                        checked={s.autoSend}
+                                                                        disabled={takeover.sendersBusy}
+                                                                        onchange={(e) => onAiRuleFlag(s, 'autoSend', (e.currentTarget as HTMLInputElement).checked)}
+                                                                        data-testid={`ai-rule-autosend-${s.id}`}
+                                                                    />
+                                                                    <span>{s.autoSend ? 'On' : 'Off'}</span>
+                                                                </label>
+                                                            </div>
+                                                            <div class="form-row" style="padding:0;border:none;background:none;">
+                                                                <div class="row-text">
+                                                                    <strong>Append the AI sign-off to replies</strong>
+                                                                    <span class="muted">
+                                                                        Adds "This reply came from my AI assistant." to
+                                                                        replies the assistant sends.
+                                                                    </span>
+                                                                </div>
+                                                                <label class="toggle compact">
+                                                                    <input
+                                                                        type="checkbox"
+                                                                        checked={s.signReplies}
+                                                                        disabled={takeover.sendersBusy}
+                                                                        onchange={(e) => onAiRuleFlag(s, 'signReplies', (e.currentTarget as HTMLInputElement).checked)}
+                                                                        data-testid={`ai-rule-signreplies-${s.id}`}
+                                                                    />
+                                                                    <span>{s.signReplies ? 'On' : 'Off'}</span>
+                                                                </label>
+                                                            </div>
+                                                        </div>
+                                                    {/if}
+                                                </li>
+                                            {/each}
+                                        </ul>
+                                    {:else}
+                                        <p class="muted small" data-testid="ai-rule-empty">
+                                            No senders yet — the assistant idles until you add one.
+                                        </p>
+                                    {/if}
+                                {/if}
+                            </div>
+                        {/if}
+                    </div>
+
                 </section>
 
             {:else if activeSection === 'appearance'}
@@ -3139,10 +3416,9 @@
                                 <div class="row-text">
                                     <strong>Let the assistant answer mail</strong>
                                     <span class="muted">
-                                        The assistant watches incoming threads, applies your standing
-                                        instructions, sends confident replies itself and only asks when
-                                        unsure. A reply it is unsure about expires if you do not decide
-                                        within an hour.
+                                        Watches unread mail from senders you allow under Rules.
+                                        Confident replies send automatically; unsure ones wait
+                                        for your approval — and expire if you never decide.
                                     </span>
                                 </div>
                                 <label class="toggle compact">
@@ -3156,66 +3432,10 @@
                                     <span>{takeover.status?.enabled ? 'On' : 'Off'}</span>
                                 </label>
                             </div>
-                            <div class="row-text" style="margin-top:10px;">
-                                <strong>Standing instructions</strong>
-                                <span class="muted">
-                                    Always-applied context for the assistant: tone, what to handle,
-                                    what never to touch. Saved when you click away.
-                                </span>
-                                <textarea
-                                    rows="4"
-                                    maxlength="2000"
-                                    class="prompt-area"
-                                    aria-label="Standing instructions"
-                                    placeholder="e.g. Friendly and brief. Handle delivery questions myself. Never reply to anything about invoices, legal, or my manager."
-                                    value={instructionsDraft ?? takeover.status?.instructions ?? ''}
-                                    disabled={takeover.busy}
-                                    oninput={(e) => { instructionsDraft = (e.currentTarget as HTMLTextAreaElement).value; }}
-                                    onchange={(e) => onTakeoverInstructions((e.currentTarget as HTMLTextAreaElement).value)}
-                                    data-testid="settings-takeover-instructions"
-                                ></textarea>
-                                <span class="muted small" data-testid="settings-takeover-instructions-count">
-                                    {instructionsLen}/2000
-                                </span>
-                            </div>
-                            <div class="form-row" style="padding:0;border:none;background:none;">
-                                <div class="row-text">
-                                    <strong>Send confident replies automatically</strong>
-                                    <span class="muted">
-                                        When the assistant is sure of its reply it sends it; when
-                                        unsure it waits for your approval.
-                                    </span>
-                                </div>
-                                <label class="toggle compact">
-                                    <input
-                                        type="checkbox"
-                                        checked={takeover.status?.autoSend ?? true}
-                                        disabled={takeover.busy}
-                                        onchange={(e) => onTakeoverFlag('autoSend', (e.currentTarget as HTMLInputElement).checked)}
-                                        data-testid="settings-takeover-autosend"
-                                    />
-                                    <span>{takeover.status?.autoSend ?? true ? 'On' : 'Off'}</span>
-                                </label>
-                            </div>
-                            <div class="form-row" style="padding:0;border:none;background:none;">
-                                <div class="row-text">
-                                    <strong>Append the AI sign-off to replies</strong>
-                                    <span class="muted">
-                                        Adds "This reply came from my AI assistant." to replies the
-                                        assistant sends.
-                                    </span>
-                                </div>
-                                <label class="toggle compact">
-                                    <input
-                                        type="checkbox"
-                                        checked={takeover.status?.signReplies ?? true}
-                                        disabled={takeover.busy}
-                                        onchange={(e) => onTakeoverFlag('signReplies', (e.currentTarget as HTMLInputElement).checked)}
-                                        data-testid="settings-takeover-signreplies"
-                                    />
-                                    <span>{takeover.status?.signReplies ?? true ? 'On' : 'Off'}</span>
-                                </label>
-                            </div>
+                            <!-- Instructions, auto-send and the sign-off moved
+                                 into the per-sender rules under Settings →
+                                 Rules ("AI replies") — each rule carries its
+                                 own behaviour now. -->
                             <div class="form-row" style="padding:0;border:none;background:none;">
                                 <div class="row-text">
                                     <strong>Replies per hour (max)</strong>
@@ -5854,7 +6074,7 @@
     .ow-headers-edit { margin-top: 6px; }
     .ow-headers-edit-actions { display: flex; gap: 6px; }
     .ow-headers-edit-actions .btn { flex: none; }
-    .rule-row select, .rule-row input {
+    .rule-row select, .rule-row input, .rule-row textarea {
         padding: 5px 8px;
         font-size: 12px;
         background: var(--bg-base);
@@ -5863,6 +6083,20 @@
         color: var(--text-primary);
     }
     .rule-actions { display: flex; justify-content: flex-end; margin-top: 4px; }
+    /* Per-sender AI rules (Settings → Rules): the add form's instructions
+     * box top-aligns with its grid label, the expanded row editor sits
+     * under the rule summary with its own rhythm, and its textarea can
+     * grow like every other multi-line box here. */
+    .rule-row.ai-rule-instr-row { align-items: start; }
+    .rule-row textarea { resize: vertical; }
+    .ai-rule-edit {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        margin-top: 10px;
+        padding-top: 10px;
+        border-top: 1px dashed var(--border-subtle);
+    }
     .rule-cards {
         list-style: none;
         margin: 8px 0 0;

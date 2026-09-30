@@ -14,12 +14,14 @@ const Database = require('better-sqlite3');
 // this subsystem. The state that makes that safe to run unattended lives
 // here:
 //
-//   * settings      — per-user opt-in and the tuning knobs. The rate limit
-//                     and the minimum delay are enforced from this table by
-//                     the worker, never by the prompt. The owner's standing
-//                     instructions, the auto-send switch (confident drafts
-//                     leave directly when it is on) and the sign-off switch
-//                     live here too; the instructions are encrypted at rest.
+//   * settings      — per-user opt-in and the tuning governors. The rate
+//                     limit and the minimum delay are enforced from this
+//                     table by the worker, never by the prompt.
+//   * senders       — the per-sender rules. The assistant only ever looks
+//                     at mail from a sender a rule covers; each rule carries
+//                     its own standing instructions (encrypted at rest), its
+//                     own auto-send switch (confident drafts leave directly
+//                     when it is on) and its own sign-off switch.
 //   * processed     — every message that has reached a terminal outcome, so
 //                     a restart or a second poll never re-drafts it.
 //   * needs_input   — the "couldn't continue" queue: one row per message the
@@ -58,19 +60,11 @@ const SETTINGS = {
     maxRepliesPerHour: { column: 'max_replies_per_hour', type: 'int', def: 1, min: 0, max: 24 },
     minDelayMinutes: { column: 'min_delay_minutes', type: 'int', def: 5, min: 5, max: 1440 },
     lookbackHours: { column: 'lookback_hours', type: 'int', def: 24, min: 1, max: 720 },
-    considerAttachments: { column: 'consider_attachments', type: 'boolean', def: false },
-    // Standing instructions the owner wrote once ("never promise delivery
-    // dates"), carried into every draft prompt. Free text that routinely
-    // names real people and commitments, so it is sealed like the other
-    // free-text columns. `max` is a hard cap enforced in set().
-    instructions: { column: 'instructions', type: 'string', def: '', max: 2000 },
-    // Confident drafts (the model answers REPLY:) leave directly when this
-    // is on; with it off every draft waits at the approval gate. UNSURE and
-    // NEEDS INPUT drafts always wait, whatever this says.
-    autoSend: { column: 'auto_send', type: 'boolean', def: true },
-    // The one-line AI sign-off on outgoing replies.
-    signReplies: { column: 'sign_replies', type: 'boolean', def: true }
+    considerAttachments: { column: 'consider_attachments', type: 'boolean', def: false }
 };
+
+const MAX_PATTERN = 200;
+const MAX_RULE_TEXT = 2000;
 
 const MAX_MISSING = 20;
 const MAX_TEXT = 20_000;
@@ -108,6 +102,29 @@ function toStringArray(value) {
         .slice(0, MAX_MISSING);
 }
 
+// A rule pattern is either a full email address or a whole domain written
+// as `@domain`. Matching is case-insensitive and happens at read time; the
+// pattern itself is stored exactly as the owner wrote it.
+function validPattern(pattern) {
+    return typeof pattern === 'string'
+        && (/.+@.+/.test(pattern) || /^@[^@\s]+$/.test(pattern));
+}
+
+// A senders row as the rest of the system sees it. `instructions` is stored
+// sealed like every other free-text column; a tampered or wrong-key payload
+// decrypts to null and reads as empty — the same honest fallback the
+// needs-input columns use.
+function senderRowToEntry(row, secretBox) {
+    return {
+        id: row.id,
+        pattern: row.pattern,
+        instructions: secretBox.decrypt(row.instructions) || '',
+        autoSend: !!row.auto_send,
+        signReplies: !!row.sign_replies,
+        createdAt: row.created_at
+    };
+}
+
 // The `missing` column holds JSON as far as this module is concerned, but it
 // is TEXT as far as sqlite is: a corrupt or hand-edited row must not take
 // the whole needs-input queue down on one bad byte. An unreadable value
@@ -122,7 +139,7 @@ function parseMissing(value) {
     }
 }
 
-function createTakeoverStore({ filePath, secretBox, maxPerUser = 50, defaults = {} } = {}) {
+function createTakeoverStore({ filePath, secretBox, maxPerUser = 50, maxSendersPerUser = 50, defaults = {} } = {}) {
     if (!secretBox) {
         throw new Error('createTakeoverStore: secretBox is required — quoted message text is encrypted at rest');
     }
@@ -144,11 +161,20 @@ function createTakeoverStore({ filePath, secretBox, maxPerUser = 50, defaults = 
             min_delay_minutes INTEGER NOT NULL DEFAULT 5,
             lookback_hours INTEGER NOT NULL DEFAULT 24,
             consider_attachments INTEGER NOT NULL DEFAULT 0,
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS takeover_senders (
+            id TEXT PRIMARY KEY,
+            user TEXT NOT NULL,
+            pattern TEXT NOT NULL,
             instructions TEXT NOT NULL DEFAULT '',
             auto_send INTEGER NOT NULL DEFAULT 1,
             sign_replies INTEGER NOT NULL DEFAULT 1,
-            updated_at INTEGER NOT NULL DEFAULT 0
+            created_at INTEGER NOT NULL
         );
+        CREATE INDEX IF NOT EXISTS idx_takeover_senders_user
+            ON takeover_senders (user, created_at);
 
         CREATE TABLE IF NOT EXISTS takeover_processed (
             user TEXT NOT NULL,
@@ -200,37 +226,24 @@ function createTakeoverStore({ filePath, secretBox, maxPerUser = 50, defaults = 
             ON takeover_replies (user, at);
     `);
 
-    // CREATE TABLE IF NOT EXISTS does not extend a table an older version
-    // already made, so an upgrade on a live takeover.db lands here: add any
-    // settings column this version expects that the file lacks.
-    const settingsColumns = new Set(
-        db.prepare('PRAGMA table_info(takeover_settings)').all().map((c) => c.name)
-    );
-    if (!settingsColumns.has('instructions')) {
-        db.exec("ALTER TABLE takeover_settings ADD COLUMN instructions TEXT NOT NULL DEFAULT ''");
-    }
-    if (!settingsColumns.has('auto_send')) {
-        db.exec('ALTER TABLE takeover_settings ADD COLUMN auto_send INTEGER NOT NULL DEFAULT 1');
-    }
-    if (!settingsColumns.has('sign_replies')) {
-        db.exec('ALTER TABLE takeover_settings ADD COLUMN sign_replies INTEGER NOT NULL DEFAULT 1');
-    }
+    // CREATE TABLE IF NOT EXISTS extends this version over an older file
+    // for free: an existing takeover.db gains the senders table on open,
+    // and a database written by v0.25.3 that still carries the retired
+    // settings columns (instructions, auto_send, sign_replies) keeps them
+    // as harmless dead weight — reads go through SETTINGS by column name
+    // and never select the retired ones.
 
     const getSettingsStmt = db.prepare('SELECT * FROM takeover_settings WHERE user = ?');
     const upsertSettingsStmt = db.prepare(`
         INSERT INTO takeover_settings
-            (user, enabled, max_replies_per_hour, min_delay_minutes, lookback_hours, consider_attachments,
-             instructions, auto_send, sign_replies, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (user, enabled, max_replies_per_hour, min_delay_minutes, lookback_hours, consider_attachments, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(user) DO UPDATE SET
             enabled = excluded.enabled,
             max_replies_per_hour = excluded.max_replies_per_hour,
             min_delay_minutes = excluded.min_delay_minutes,
             lookback_hours = excluded.lookback_hours,
             consider_attachments = excluded.consider_attachments,
-            instructions = excluded.instructions,
-            auto_send = excluded.auto_send,
-            sign_replies = excluded.sign_replies,
             updated_at = excluded.updated_at
     `);
     const enabledUsersStmt = db.prepare('SELECT user FROM takeover_settings WHERE enabled = 1 ORDER BY user');
@@ -298,6 +311,28 @@ function createTakeoverStore({ filePath, secretBox, maxPerUser = 50, defaults = 
         ON CONFLICT(user, message_id) DO UPDATE SET at = excluded.at
     `);
 
+    // --- senders --------------------------------------------------------
+
+    const listSendersStmt = db.prepare(
+        // created_at first, insertion order (rowid) to break ties: two
+        // rules added in the same millisecond must list in the order the
+        // owner added them, not in the order of their random ids.
+        'SELECT * FROM takeover_senders WHERE user = ? ORDER BY created_at ASC, rowid ASC'
+    );
+    const senderPatternsStmt = db.prepare('SELECT pattern FROM takeover_senders WHERE user = ?');
+    const countSendersStmt = db.prepare('SELECT COUNT(*) AS n FROM takeover_senders WHERE user = ?');
+    const insertSenderStmt = db.prepare(`
+        INSERT INTO takeover_senders (id, user, pattern, instructions, auto_send, sign_replies, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    const getSenderStmt = db.prepare('SELECT * FROM takeover_senders WHERE id = ? AND user = ?');
+    const deleteSenderStmt = db.prepare('DELETE FROM takeover_senders WHERE id = ? AND user = ?');
+    const updateSenderStmt = db.prepare(`
+        UPDATE takeover_senders
+        SET instructions = ?, auto_send = ?, sign_replies = ?
+        WHERE id = ? AND user = ?
+    `);
+
     // Defaults for a user who has never touched the feature, so an
     // operator's TAKEOVER_* values are what actually applies. Every one is
     // clamped to the same hard bounds a user's own settings are.
@@ -321,7 +356,7 @@ function createTakeoverStore({ filePath, secretBox, maxPerUser = 50, defaults = 
 
     // --- settings -------------------------------------------------------
 
-    // Always returns all eight fields, for a user that has never touched the
+    // Always returns all five fields, for a user that has never touched the
     // feature as well. A route or the worker must never have to know whether
     // a row exists.
     function get(user) {
@@ -369,9 +404,6 @@ function createTakeoverStore({ filePath, secretBox, maxPerUser = 50, defaults = 
             next.minDelayMinutes,
             next.lookbackHours,
             next.considerAttachments ? 1 : 0,
-            secretBox.encrypt(next.instructions),
-            next.autoSend ? 1 : 0,
-            next.signReplies ? 1 : 0,
             Date.now()
         );
         return next;
@@ -386,6 +418,121 @@ function createTakeoverStore({ filePath, secretBox, maxPerUser = 50, defaults = 
 
     function hasEnabledUsers() {
         return listEnabledUsers().length > 0;
+    }
+
+    // --- senders --------------------------------------------------------
+
+    // The per-sender rules, oldest first. Empty for a user who has never
+    // added one — which is exactly the state in which the assistant idles.
+    function listSenders(user) {
+        return listSendersStmt.all(String(user)).map((row) => senderRowToEntry(row, secretBox));
+    }
+
+    function addSender(user, { pattern, instructions, autoSend, signReplies } = {}) {
+        const u = String(user);
+        const wanted = String(pattern === undefined || pattern === null ? '' : pattern).trim();
+        if (!validPattern(wanted)) {
+            throw new Error('takeover sender pattern must be a full email address or an @domain');
+        }
+        if (wanted.length > MAX_PATTERN) {
+            throw new Error(`takeover sender pattern must be at most ${MAX_PATTERN} characters`);
+        }
+        if (instructions !== undefined && typeof instructions !== 'string') {
+            throw new Error('takeover sender instructions must be a string');
+        }
+        if (autoSend !== undefined && typeof autoSend !== 'boolean') {
+            throw new Error('takeover sender autoSend must be a boolean');
+        }
+        if (signReplies !== undefined && typeof signReplies !== 'boolean') {
+            throw new Error('takeover sender signReplies must be a boolean');
+        }
+        // One rule per sender, per user, case-insensitively: a second rule
+        // for the same address could only ever disagree with the first.
+        const dup = senderPatternsStmt.all(u)
+            .some((row) => String(row.pattern).toLowerCase() === wanted.toLowerCase());
+        if (dup) throw new Error(`takeover sender rule for ${wanted} already exists`);
+        if (countSendersStmt.get(u).n >= maxSendersPerUser) {
+            throw new Error(`takeover sender limit reached (${maxSendersPerUser})`);
+        }
+
+        const entry = {
+            id: crypto.randomBytes(6).toString('hex'),
+            pattern: wanted,
+            instructions: String(instructions || '').slice(0, MAX_RULE_TEXT),
+            autoSend: autoSend !== false,
+            signReplies: signReplies !== false,
+            createdAt: Date.now()
+        };
+        insertSenderStmt.run(
+            entry.id,
+            u,
+            entry.pattern,
+            secretBox.encrypt(entry.instructions),
+            entry.autoSend ? 1 : 0,
+            entry.signReplies ? 1 : 0,
+            entry.createdAt
+        );
+        return entry;
+    }
+
+    // Merge a partial patch over one rule. The pattern is deliberately not
+    // patchable — changing which sender a rule covers is delete + add, so
+    // the owner sees it as the two distinct actions it is. Unknown keys
+    // throw, for the same reason set() throws on them.
+    function updateSender(user, id, patch = {}) {
+        const u = String(user);
+        if (!patch || typeof patch !== 'object') {
+            throw new Error('takeover sender patch must be an object');
+        }
+        for (const key of Object.keys(patch)) {
+            if (!['instructions', 'autoSend', 'signReplies'].includes(key)) {
+                throw new Error(`Unknown takeover sender field: ${key}`);
+            }
+        }
+        const row = getSenderStmt.get(String(id), u);
+        if (!row) return null;
+        const current = senderRowToEntry(row, secretBox);
+        const next = { ...current };
+        if (patch.instructions !== undefined) {
+            if (typeof patch.instructions !== 'string') throw new Error('takeover sender instructions must be a string');
+            next.instructions = patch.instructions.slice(0, MAX_RULE_TEXT);
+        }
+        if (patch.autoSend !== undefined) {
+            if (typeof patch.autoSend !== 'boolean') throw new Error('takeover sender autoSend must be a boolean');
+            next.autoSend = patch.autoSend;
+        }
+        if (patch.signReplies !== undefined) {
+            if (typeof patch.signReplies !== 'boolean') throw new Error('takeover sender signReplies must be a boolean');
+            next.signReplies = patch.signReplies;
+        }
+        updateSenderStmt.run(
+            secretBox.encrypt(next.instructions),
+            next.autoSend ? 1 : 0,
+            next.signReplies ? 1 : 0,
+            row.id,
+            u
+        );
+        return next;
+    }
+
+    function deleteSender(user, id) {
+        return deleteSenderStmt.run(String(id), String(user)).changes > 0;
+    }
+
+    // The rule a message's sender is governed by, or null when no rule
+    // covers it — the state in which the assistant must not touch the
+    // message at all. An exact address rule beats an @domain rule; both
+    // match case-insensitively.
+    function findSenderRule(user, fromAddress) {
+        const from = String(fromAddress || '').trim().toLowerCase();
+        if (!from) return null;
+        let domainRule = null;
+        for (const row of listSendersStmt.all(String(user))) {
+            const pattern = String(row.pattern).toLowerCase();
+            if (pattern === from) return senderRowToEntry(row, secretBox);
+            if (!domainRule && pattern.startsWith('@') && from.endsWith(pattern)) domainRule = row;
+        }
+        return domainRule ? senderRowToEntry(domainRule, secretBox) : null;
     }
 
     // --- processed ------------------------------------------------------
@@ -582,6 +729,11 @@ function createTakeoverStore({ filePath, secretBox, maxPerUser = 50, defaults = 
         set,
         listEnabledUsers,
         hasEnabledUsers,
+        listSenders,
+        addSender,
+        updateSender,
+        deleteSender,
+        findSenderRule,
         wasProcessed,
         recordProcessed,
         enqueueNeedsInput,
