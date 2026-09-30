@@ -306,11 +306,11 @@ module.exports = Object.freeze({
 
     takeover: {
         // AI assistant takeover. The assistant reads unread INBOX mail, works
-        // out which messages a real person is waiting on, drafts a reply in
-        // the owner's voice, and then stops for approval — every draft leaves
-        // through /v1/messages/send with Basic auth, which is the branch that
-        // creates a pending approval instead of sending. There is no send
-        // path of its own.
+        // out which messages a real person is waiting on, and drafts a reply
+        // in the owner's voice. A confident draft leaves directly when the
+        // user's autoSend setting is on; every other draft leaves through
+        // /v1/messages/send with Basic auth, which is the branch that
+        // creates a pending approval instead of sending.
         //
         // Off by default: it writes mail in the owner's name, and that is
         // something a deployment opts into.

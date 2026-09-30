@@ -993,11 +993,13 @@ export async function getDriveQuota(): Promise<DriveQuota | null> {
 }
 
 // ---------- AI assistant takeover ----------
-// Server-side assistant that looks at unread INBOX, drafts replies to
-// messages that seem to need one, and STOPS for approval — it can never
-// send on its own (the only exit for a draft is the same approval-gated
-// /v1/messages/send every other API client uses). The knobs here are
-// SERVER-enforced limits; this UI only displays and edits them.
+// Server-side assistant that watches unread INBOX threads and drafts
+// replies to messages that seem to need one. With autoSend on (the
+// default) a confident draft is SENT directly; when unsure it stops for
+// approval, and with autoSend off every draft stops. A confident send is
+// the only exit that bypasses the approval-gated /v1/messages/send path.
+// The knobs here are SERVER-enforced limits; this UI only displays and
+// edits them.
 
 export interface TakeoverSettings {
     enabled: boolean;
@@ -1007,6 +1009,15 @@ export interface TakeoverSettings {
     minDelayMinutes: number;
     lookbackHours: number;
     considerAttachments: boolean;
+    /** Standing instructions applied to every draft — tone, what to handle,
+     *  what to leave alone. Stored encrypted server-side, max 2000 chars. */
+    instructions: string;
+    /** True (default): a confident draft is sent directly. False: every
+     *  draft waits for approval. */
+    autoSend: boolean;
+    /** True (default): replies the assistant sends carry the
+     *  "This reply came from my AI assistant." sign-off. */
+    signReplies: boolean;
 }
 
 export interface TakeoverStatus extends TakeoverSettings {
@@ -1037,14 +1048,6 @@ export async function getTakeover(): Promise<TakeoverStatus> {
 
 export async function updateTakeover(patch: Partial<TakeoverSettings>): Promise<TakeoverSettings> {
     return request<TakeoverSettings>('PUT', '/v1/me/takeover', { body: patch });
-}
-
-/** On-demand drafting: ask the takeover assistant to draft a reply to ONE
- *  message now instead of waiting for its next poll. The draft still goes
- *  through the same approval gate as a polled draft — nothing sends
- *  automatically. */
-export async function draftTakeoverReply(mailbox: string, uid: number): Promise<{ ok: boolean }> {
-    return request('POST', '/v1/me/takeover/draft', { body: { mailbox, uid } });
 }
 
 export async function listTakeoverNeedsInput(): Promise<TakeoverNeedsInputItem[]> {

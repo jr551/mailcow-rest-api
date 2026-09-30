@@ -1857,25 +1857,45 @@
         color: var(--danger, #dc2626);
     }
     /* AI history reference. Sits between the subject row and the body
-       editor, kept compact so it never dominates the compose pane. */
+       editor, kept compact so it never dominates the compose pane.
+       FIXED violet identity, deliberately not var(--accent): on themes
+       whose accent matches the surrounding skin (blue-on-blue etc.) an
+       accent wash is invisible, which is exactly what John hit. Literal
+       hexes, theme-scoped: explicit dark uses the same
+       :global([data-theme]) pattern MessageDetail/MessageList use for
+       fixed dark colours, and the media-query block covers 'auto' (the
+       default theme) with a dark OS — that route never matches
+       [data-theme='dark'] because the attribute keeps the user's CHOICE. */
     .history-panel {
+        --history-accent: #7c3aed;   /* violet-600 — the identity bar */
+        --history-bg: #f3e8ff;       /* violet-100 */
+        --history-border: #e9d5ff;   /* violet-200 */
         display: flex;
         align-items: flex-start;
         gap: 8px;
         margin: 6px 14px 10px;
         padding: 8px 12px;
-        /* Deliberately louder than the page surface: a stronger accent
-           wash plus a left accent bar so the strip reads as a distinct
-           "AI insight" callout in both light and dark themes. */
-        background: color-mix(in srgb, var(--accent) 17%, var(--bg-surface));
-        border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border-subtle));
-        border-left: 3px solid var(--accent);
+        background: var(--history-bg);
+        border: 1px solid var(--history-border);
+        border-left: 3px solid var(--history-accent);
         border-radius: 10px;
         font-size: 12.5px;
         line-height: 1.45;
         color: var(--text-primary);
     }
-    .history-panel :global(svg) { flex-shrink: 0; margin-top: 2px; color: var(--accent-text); }
+    .history-panel :global(svg) { flex-shrink: 0; margin-top: 2px; color: var(--history-accent); }
+    :global([data-theme='dark']) .history-panel {
+        --history-accent: #a78bfa;   /* violet-400 */
+        --history-bg: #2e1065;       /* violet-950 */
+        --history-border: #6d28d9;   /* violet-700 */
+    }
+    @media (prefers-color-scheme: dark) {
+        :global([data-theme='auto']) .history-panel {
+            --history-accent: #a78bfa;
+            --history-bg: #2e1065;
+            --history-border: #6d28d9;
+        }
+    }
     .history-text { flex: 1; min-width: 0; word-break: break-word; }
     .history-dismiss {
         flex-shrink: 0;
@@ -2132,21 +2152,77 @@
     }
     /* The "magic dust" flourish: flashDraftSparkle() holds
        draftSparkleTick above zero for ~1.4 s after an AI draft is
-       inserted, and this class plays a one-shot accent sweep across the
-       editor so the insert is felt rather than silently swapping text. */
+       inserted. A faint box-shadow throb read as nothing at all, so this
+       is now TWO one-shot layers on the same class hook:
+       1. A sheen — an ::after overlay on the editor carrying a diagonal
+          accent gradient band that translates clean across the box.
+          .rich-editor already has overflow:hidden (RichEditor.svelte),
+          which is exactly right: it clips the sweep to the editor's
+          rounded frame instead of bleeding over the surrounding chrome.
+          position:relative here makes the editor the overlay's
+          containing block, and z-index:2 puts the sweep above the scroll
+          surface and the ghost banner (the highest thing inside is
+          z-index:1). 1.4 s matches the draftSparkleTimer window, so the
+          effect ends the moment the class is removed — no cosmetic layer
+          outlives its own animation.
+       2. A border + glow pulse on the editor itself, so the frame lights
+          up even before the band reaches the far edge. */
     .body.sparkle :global(.rich-editor) {
-        animation: draft-sparkle 1.2s cubic-bezier(0.2, 0.7, 0.2, 1) 1;
+        position: relative;
+        animation: draft-sparkle 1.4s cubic-bezier(0.2, 0.7, 0.2, 1) 1;
+    }
+    .body.sparkle :global(.rich-editor)::after {
+        content: '';
+        position: absolute;
+        inset: 0;
+        z-index: 2;
+        pointer-events: none;   /* decorative — never eats a click or keystroke */
+        border-radius: inherit;
+        opacity: 0;
+        background: linear-gradient(
+            115deg,
+            transparent 0%,
+            transparent 42%,
+            color-mix(in srgb, var(--accent) 22%, transparent) 47%,
+            color-mix(in srgb, var(--accent) 60%, transparent) 49.6%,
+            color-mix(in srgb, white 75%, var(--accent)) 50%,
+            color-mix(in srgb, var(--accent) 60%, transparent) 50.4%,
+            color-mix(in srgb, var(--accent) 22%, transparent) 53%,
+            transparent 58%,
+            transparent 100%
+        );
+        /* The image is 3× the editor's width, so animating
+           background-position 100% → 0% carries the band from fully off
+           the left edge to fully off the right: one clean pass, no
+           bounce, no repeat. */
+        background-size: 300% 100%;
+        background-repeat: no-repeat;
+        animation: draft-sheen 1.4s ease-out 1;
+    }
+    @keyframes draft-sheen {
+        0%   { opacity: 0; background-position: 100% 0; }
+        10%  { opacity: 1; }
+        85%  { opacity: 1; }
+        100% { opacity: 0; background-position: 0% 0; }
     }
     @keyframes draft-sparkle {
-        0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 0%, transparent); }
-        35%  { box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 55%, transparent),
-                          0 0 20px 3px color-mix(in srgb, var(--accent) 40%, transparent);
+        0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 0%, transparent),
+                           0 0 0 0 color-mix(in srgb, var(--accent) 0%, transparent);
+               border-color: var(--border-subtle); }
+        30%  { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 50%, transparent),
+                           0 0 26px 5px color-mix(in srgb, var(--accent) 42%, transparent);
                border-color: var(--accent); }
-        100% { box-shadow: 0 0 0 0 transparent; }
+        100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 0%, transparent),
+                           0 0 0 0 color-mix(in srgb, var(--accent) 0%, transparent);
+               border-color: var(--border-subtle); }
     }
     @media (prefers-reduced-motion: reduce) {
         .body.reply-mode :global(.rich-editor) { animation: none; }
         .body.sparkle :global(.rich-editor) { animation: none; }
+        /* animation:none alone would leave a static gradient band parked
+           over the text, so remove the overlay outright. flashDraftSparkle()
+           also no-ops under reduced motion — this is defence in depth. */
+        .body.sparkle :global(.rich-editor)::after { content: none; }
     }
     /* Action bar. OWA separates the composer's switches from its primary
      * pair with a rule and a lot of space, so Send keeps the eye. */

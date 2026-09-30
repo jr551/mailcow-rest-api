@@ -59,7 +59,7 @@
     import { startNetworkWatchdog, withTimeout } from '../lib/network-watchdog.svelte';
     import { playNotify, playSent, playClick, playShred, primeAudio, sounds, setMuted } from '../lib/sounds.svelte';
     import { pwa, promptInstall } from '../lib/pwa.svelte';
-    import { takeoverActive, loadTakeover } from '../lib/takeover.svelte';
+    import { loadTakeover } from '../lib/takeover.svelte';
     import { recordEnvelope, loadAddressBook } from '../lib/address-book.svelte';
     import { ensureCountry, geoipCache, flagEmoji } from '../lib/geoip.svelte';
     import { myAvatars } from '../lib/avatars.svelte';
@@ -1808,20 +1808,7 @@
             {#if calendarTickerVisible}
                 <CalendarTicker />
             {/if}
-            <!-- Subtle activity indicator: the server-side AI assistant is
-                 on and drafting replies (each one still waits for approval).
-                 Muted pill, no alarm colour — this is a normal state, not a
-                 warning. -->
-            {#if takeoverActive()}
-                <span
-                    class="takeover-chip"
-                    title="AI assistant takeover is active — replies it drafts wait for your approval."
-                    data-testid="takeover-indicator"
-                >
-                    <Icon name="sparkles" size={13} />
-                    <span>AI replies</span>
-                </span>
-            {/if}
+
             <button
                 type="button"
                 class="btn btn-ghost"

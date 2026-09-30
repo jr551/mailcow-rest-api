@@ -4,7 +4,7 @@ const { sendMessage } = require('../smtp-client');
 const { withClient, withMailbox } = require('../imap');
 const { badRequest, problem } = require('../errors');
 const { createPendingSendStore } = require('../pending-send-store');
-const { hashCreds } = require('../cache');
+const { appendToSent: appendToSentFolder } = require('../sent-folder');
 
 const sendBodySchema = {
     type: 'object',
@@ -23,6 +23,10 @@ const sendBodySchema = {
         html: { type: 'string', maxLength: 400_000 },
         inReplyTo: { type: 'string', maxLength: 998 },
         trackOpens: { type: 'boolean' },
+        // Set only by the takeover assistant's UNSURE drafts (see
+        // takeover-worker.js). It is shown to the owner in the approval
+        // email and never reaches the recipient.
+        unsureReason: { type: 'string', maxLength: 500 },
         attachments: {
             type: 'array',
             maxItems: 20,
@@ -201,11 +205,18 @@ lost when the service restarts. The draft was not delivered to anyone.</p>
 </body></html>`;
 }
 
-function buildApprovalEmail({ from, to, subject, approveUrl, denyUrl, text: bodyText, html: bodyHtml }) {
+function buildApprovalEmail({ from, to, subject, approveUrl, denyUrl, text: bodyText, html: bodyHtml, unsureReason }) {
     const toList = Array.isArray(to) ? to.join(', ') : to;
     const fromSafe = escapeEmailHtml(from);
     const toSafe = escapeEmailHtml(toList, 400);
     const subjectSafe = escapeEmailHtml(subject);
+    // An UNSURE draft tells the owner why the assistant held it before he
+    // reads the draft. Prepend, so it reads as a verdict on the draft rather
+    // than part of it — and never reaches the recipient.
+    const unsureLineHtml = unsureReason
+        ? `<p style="color:#b45309;font-size:13px;margin:0 0 8px;">The assistant is unsure: ${escapeEmailHtml(unsureReason, 400)}</p>`
+        : '';
+    const unsureLineText = unsureReason ? `The assistant is unsure: ${clipText(unsureReason, 400)}\n` : '';
     // Show the draft so the approver can read what they're approving.
     // Plain text is escaped into a <pre>; an HTML-only draft gets a note
     // rather than injecting raw markup into the approval email.
@@ -221,6 +232,7 @@ function buildApprovalEmail({ from, to, subject, approveUrl, denyUrl, text: body
   <p><strong>From:</strong> ${fromSafe}</p>
   <p><strong>To:</strong> ${toSafe}</p>
   <p><strong>Subject:</strong> ${subjectSafe}</p>
+  ${unsureLineHtml}
   <p><strong>Body:</strong></p>
   ${bodyBlock}
   <div style="margin:24px 0;">
@@ -239,7 +251,7 @@ From: ${clipText(from)}
 To: ${clipText(toList, 400)}
 Subject: ${clipText(subject)}
 
-Body:
+${unsureLineText}Body:
 ${bodyPreview}
 
 Approve: ${approveUrl}
@@ -333,6 +345,11 @@ module.exports = async function sendRoutes(app, { db, smtp, pool, trackingStore,
                 attachments: body.attachments,
                 trackOpens: body.trackOpens
             });
+            // Approval-email-only: the owner reads the reason before he
+            // clicks. The approved send itself never includes it.
+            const unsureReason = typeof body.unsureReason === 'string' && body.unsureReason.trim()
+                ? body.unsureReason
+                : undefined;
 
             const baseUrl = getPublicBaseUrl ? getPublicBaseUrl(req) : '';
             const approveUrl = `${baseUrl}/v1/messages/approve/${token}`;
@@ -345,7 +362,8 @@ module.exports = async function sendRoutes(app, { db, smtp, pool, trackingStore,
                 approveUrl,
                 denyUrl,
                 text: body.text,
-                html: body.html
+                html: body.html,
+                unsureReason
             });
 
             try {
@@ -415,43 +433,11 @@ module.exports = async function sendRoutes(app, { db, smtp, pool, trackingStore,
         }
     });
 
+    // The Sent-folder copy is shared with the takeover worker's direct-send
+    // path (src/sent-folder.js); this is the same best-effort behaviour the
+    // route always had, bound to this app's pool, cache and logger.
     async function appendToSent(creds, raw) {
-        if (!pool || !raw) return;
-        const hash = creds.hash || hashCreds(creds.user, creds.pass);
-        const fullCreds = { ...creds, hash };
-
-        const folders = ['Sent', 'INBOX.Sent', 'Sent Items', 'Sent Messages'];
-        for (const folder of folders) {
-            let appended = false;
-            try {
-                await withClient(pool, fullCreds, async (client) => {
-                    await client.append(folder, raw, ['\\Seen']);
-                });
-                appended = true;
-            } catch (err) {
-                const isMailboxNotFound = err?.problem?.status === 404 || /not found|nonexistent|does not exist/i.test(err?.message || '');
-                if (!isMailboxNotFound) {
-                    // Log real errors (quota, auth, connection) but don't fail the SMTP send.
-                    app.log.warn({ err, folder, user: creds.user }, 'Failed to append sent message to Sent folder');
-                }
-            }
-            if (appended) {
-                // Invalidate cache so the next listMessages sees the new
-                // message. Best-effort AND outside the append try: a cache
-                // write failure must not look like a failed APPEND, or the
-                // loop falls through and appends a duplicate copy to the
-                // next candidate folder.
-                try {
-                    imapCache?.invalidateFolderUid(hash, folder);
-                    imapCache?.invalidateFolderStatus(hash, folder);
-                } catch (err) {
-                    app.log.warn({ err, folder, user: creds.user }, 'Could not invalidate sent-folder cache');
-                }
-                return;
-            }
-        }
-        // All folders failed — still don't fail the request; the message is sent.
-        app.log.warn({ user: creds.user }, 'Could not append sent message to any Sent folder');
+        return appendToSentFolder({ pool, imapCache, log: app.log, creds, raw });
     }
 
     async function resolvePendingAndSend(token, req) {

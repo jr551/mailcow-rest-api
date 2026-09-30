@@ -1194,6 +1194,34 @@
         }
     }
 
+    // Standing instructions: same save-on-commit as every other text input
+    // here, but typing lands in a draft first so the 2000-char counter is
+    // live. Null = not editing — show the server's value.
+    let instructionsDraft = $state<string | null>(null);
+    const instructionsLen = $derived((instructionsDraft ?? takeover.status?.instructions ?? '').length);
+
+    async function onTakeoverInstructions(v: string) {
+        instructionsDraft = null;
+        try {
+            await setTakeoverKnobs({ instructions: v });
+        } catch (e) {
+            showToast('error', (e as Error).message || 'Could not save that setting');
+            // The save was refused — keep what the user typed in the box
+            // instead of silently snapping back to the server's old value.
+            instructionsDraft = v;
+        }
+    }
+
+    async function onTakeoverFlag(key: 'autoSend' | 'signReplies', on: boolean) {
+        const patch: Partial<TakeoverSettings> = {};
+        patch[key] = on;
+        try {
+            await setTakeoverKnobs(patch);
+        } catch (e) {
+            showToast('error', (e as Error).message || 'Could not save that setting');
+        }
+    }
+
     async function handleEnableNotifications() {
         const token = getSession()?.token;
         if (!token) {
@@ -3109,13 +3137,12 @@
                             {/if}
                             <div class="form-row" style="padding:0;border:none;background:none;">
                                 <div class="row-text">
-                                    <strong>Let the assistant draft replies</strong>
+                                    <strong>Let the assistant answer mail</strong>
                                     <span class="muted">
-                                        The assistant looks at unread mail that seems to need a reply,
-                                        drafts in your voice, and stops for your approval — it never
-                                        sends on its own. Each draft waits for your approval and
-                                        expires if you do not decide within an hour. Replies it sends
-                                        are signed "This reply came from my AI assistant."
+                                        The assistant watches incoming threads, applies your standing
+                                        instructions, sends confident replies itself and only asks when
+                                        unsure. A reply it is unsure about expires if you do not decide
+                                        within an hour.
                                     </span>
                                 </div>
                                 <label class="toggle compact">
@@ -3127,6 +3154,66 @@
                                         data-testid="settings-takeover-enabled"
                                     />
                                     <span>{takeover.status?.enabled ? 'On' : 'Off'}</span>
+                                </label>
+                            </div>
+                            <div class="row-text" style="margin-top:10px;">
+                                <strong>Standing instructions</strong>
+                                <span class="muted">
+                                    Always-applied context for the assistant: tone, what to handle,
+                                    what never to touch. Saved when you click away.
+                                </span>
+                                <textarea
+                                    rows="4"
+                                    maxlength="2000"
+                                    class="prompt-area"
+                                    aria-label="Standing instructions"
+                                    placeholder="e.g. Friendly and brief. Handle delivery questions myself. Never reply to anything about invoices, legal, or my manager."
+                                    value={instructionsDraft ?? takeover.status?.instructions ?? ''}
+                                    disabled={takeover.busy}
+                                    oninput={(e) => { instructionsDraft = (e.currentTarget as HTMLTextAreaElement).value; }}
+                                    onchange={(e) => onTakeoverInstructions((e.currentTarget as HTMLTextAreaElement).value)}
+                                    data-testid="settings-takeover-instructions"
+                                ></textarea>
+                                <span class="muted small" data-testid="settings-takeover-instructions-count">
+                                    {instructionsLen}/2000
+                                </span>
+                            </div>
+                            <div class="form-row" style="padding:0;border:none;background:none;">
+                                <div class="row-text">
+                                    <strong>Send confident replies automatically</strong>
+                                    <span class="muted">
+                                        When the assistant is sure of its reply it sends it; when
+                                        unsure it waits for your approval.
+                                    </span>
+                                </div>
+                                <label class="toggle compact">
+                                    <input
+                                        type="checkbox"
+                                        checked={takeover.status?.autoSend ?? true}
+                                        disabled={takeover.busy}
+                                        onchange={(e) => onTakeoverFlag('autoSend', (e.currentTarget as HTMLInputElement).checked)}
+                                        data-testid="settings-takeover-autosend"
+                                    />
+                                    <span>{takeover.status?.autoSend ?? true ? 'On' : 'Off'}</span>
+                                </label>
+                            </div>
+                            <div class="form-row" style="padding:0;border:none;background:none;">
+                                <div class="row-text">
+                                    <strong>Append the AI sign-off to replies</strong>
+                                    <span class="muted">
+                                        Adds "This reply came from my AI assistant." to replies the
+                                        assistant sends.
+                                    </span>
+                                </div>
+                                <label class="toggle compact">
+                                    <input
+                                        type="checkbox"
+                                        checked={takeover.status?.signReplies ?? true}
+                                        disabled={takeover.busy}
+                                        onchange={(e) => onTakeoverFlag('signReplies', (e.currentTarget as HTMLInputElement).checked)}
+                                        data-testid="settings-takeover-signreplies"
+                                    />
+                                    <span>{takeover.status?.signReplies ?? true ? 'On' : 'Off'}</span>
                                 </label>
                             </div>
                             <div class="form-row" style="padding:0;border:none;background:none;">
