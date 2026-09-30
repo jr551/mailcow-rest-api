@@ -2,9 +2,10 @@
     import { onMount } from 'svelte';
     import { mobileState, goBack, showToast } from '../lib/store.svelte';
     import { authState } from '../../lib/auth.svelte';
-    import { sendStub, getSendFromAddresses, draftReply, ApiError, type SendAttachment } from '../../lib/api';
+    import { sendStub, getSendFromAddresses, type SendAttachment } from '../../lib/api';
     import { trackSent } from '../../lib/sent-status.svelte';
     import { settings, pickFromName, setDisplayName, deriveNameFromAddress, aiAvailable } from '../../lib/settings.svelte';
+    import { ReplySuggest, DraftSparkle, htmlToPlainText } from '../../lib/reply-suggest.svelte';
     import { addressBook } from '../../lib/address-book.svelte';
     import Icon from '../../components/Icon.svelte';
 
@@ -53,18 +54,8 @@
     const replyTo = $derived(mobileState.composeReplyTo);
     const mode = $derived(mobileState.composeMode);
 
-    /** HTML→plain-text fallback for quoting HTML-only emails. Uses
-     *  DOMParser so attacker-controlled quoted HTML can't fire event
-     *  handlers or load remote resources during parsing. */
-    function htmlToPlainText(html: string): string {
-        const prepped = html
-            .replace(/<style[\s\S]*?<\/style>/gi, '')
-            .replace(/<script[\s\S]*?<\/script>/gi, '')
-            .replace(/<\s*br\s*\/?>/gi, '\n')
-            .replace(/<\s*\/?\s*(p|div|li|h[1-6]|blockquote)\b[^>]*>/gi, '\n');
-        const doc = new DOMParser().parseFromString(prepped, 'text/html');
-        return (doc.body?.textContent || '').replace(/\n{3,}/g, '\n\n').trim();
-    }
+    // htmlToPlainText now lives in lib/reply-suggest.svelte, shared with
+    // the desktop compose window.
 
     function pickReplyFrom(): string {
         const fallback = settings.defaultFromAddress || authState.activeUser || '';
@@ -200,123 +191,16 @@
     });
 
     // --- AI reply suggestion strip -----------------------------------------
-    // Ported inline from desktop Compose.svelte (lines ~360-580). Desktop
-    // still keeps its own copy — a shared lib extraction was deliberately
-    // skipped to keep this change small; if a third consumer appears, hoist
-    // the request machinery rather than growing a second divergence.
-    // Same contract:
-    // 1. NEVER BLOCKS. Fired from a setTimeout(0) in onMount, after the
-    //    view is already interactive. The user can type, edit and send the
-    //    whole time it runs.
-    // 2. ABORTS ON UNMOUNT. Navigating away cancels the HTTP request rather
-    //    than letting it finish into a component that no longer exists.
-    // 3. SUBORDINATE TO THE MASTER SWITCH. replySuggestEligible() re-checks
-    //    settings.aiFeatures on every call, and the $effect below aborts +
-    //    hides in-flight work if the user flips AI off while the view is
-    //    open. aiSuggestReply only ever narrows the feature.
-    let replySuggest = $state<string | null>(null);
-    let replySuggestLoading = $state(false);
-    let replySuggestError = $state<string | null>(null);
-    // Epoch of the last request we actually let out; a response from a
-    // superseded request is dropped rather than shown.
-    let replySuggestSeq = 0;
-    let replySuggestAbort: AbortController | null = null;
-    // Regenerate is one thumb tap and spends real tokens per click, so one
-    // request in flight plus a short cooldown between them.
-    const REGEN_COOLDOWN_MS = 4000;
-    let lastReplySuggestAt = 0;
-
-    /** Every gate, in one place, re-evaluated on each call. */
-    function replySuggestEligible(): boolean {
-        return (mode === 'reply' || mode === 'replyAll')
-            && !!replyTo
-            && settings.aiFeatures
-            && settings.aiSuggestReply
-            && aiAvailable();
-    }
-
-    /** Kill whatever is running. Safe to call when nothing is. */
-    function abortReplySuggest() {
-        if (replySuggestAbort) {
-            replySuggestAbort.abort();
-            replySuggestAbort = null;
-        }
-        replySuggestLoading = false;
-    }
-
-    /** The original message as the model should see it: headers plus the
-     *  plain-text body. Same shape desktop's AI panel Draft button sends. */
-    function threadForAi(): string {
-        if (!replyTo) return '';
-        const env = replyTo.envelope;
-        const headers = [
-            `From: ${env.from?.[0]?.name || ''} <${env.from?.[0]?.address || ''}>`,
-            env.subject ? `Subject: ${env.subject}` : '',
-            env.date ? `Date: ${env.date}` : ''
-        ].filter(Boolean).join('\n');
-        const text = replyTo.text || htmlToPlainText(replyTo.html || '');
-        return `${headers}\n\n${text}`;
-    }
-
-    async function requestReplySuggest(opts: { regen: boolean }) {
-        if (!replySuggestEligible()) return;
-        if (replySuggestLoading) return;
-        if (opts.regen) {
-            const since = Date.now() - lastReplySuggestAt;
-            if (since < REGEN_COOLDOWN_MS) return;
-        }
-        abortReplySuggest();
-        lastReplySuggestAt = Date.now();
-        const seq = ++replySuggestSeq;
-        const controller = new AbortController();
-        replySuggestAbort = controller;
-        replySuggestLoading = true;
-        replySuggestError = null;
-        if (opts.regen) replySuggest = null;   // don't leave stale text under a spinner
-        try {
-            const r = await draftReply(threadForAi(), undefined, { signal: controller.signal });
-            // Dropped if the user navigated away or turned AI off while
-            // this was in the air.
-            if (seq !== replySuggestSeq || controller.signal.aborted) return;
-            const text = (r.content || '').trim();
-            if (!text) {
-                replySuggestError = 'No suggestion came back — carry on.';
-            } else {
-                replySuggest = text;
-            }
-        } catch (err) {
-            if (controller.signal.aborted || seq !== replySuggestSeq) return;
-            // Quiet one-liner, never an interruption: the user never asked
-            // for this strip.
-            replySuggestError = err instanceof ApiError
-                ? (err.detail || err.title)
-                : 'Couldn\'t draft a reply — carry on.';
-        } finally {
-            if (seq === replySuggestSeq) {
-                replySuggestLoading = false;
-                if (replySuggestAbort === controller) replySuggestAbort = null;
-            }
-        }
-    }
-
-    /** A brief glow on the body field so accepting a suggestion FEELS like
-     *  something happened rather than text silently appearing. Purely
-     *  decorative: no-op under prefers-reduced-motion, cleared by its own
-     *  timer so the class never outlives the animation. */
-    let draftSparkleTimer: ReturnType<typeof setTimeout> | null = null;
-    let draftSparkleTick = $state(0);
-    function flashDraftSparkle() {
-        try {
-            if (typeof window !== 'undefined'
-                && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
-        } catch { /* matchMedia unavailable — animate anyway */ }
-        if (draftSparkleTimer) clearTimeout(draftSparkleTimer);
-        draftSparkleTick++;
-        const mine = draftSparkleTick;
-        draftSparkleTimer = setTimeout(() => {
-            if (draftSparkleTick === mine) draftSparkleTick = 0;
-        }, 1400);
-    }
+    // The request machinery — gates, one-in-flight + regen cooldown,
+    // abort on unmount/supersede, seq-dropped responses — is
+    // single-sourced in lib/reply-suggest.svelte, shared with desktop
+    // Compose.svelte. This view keeps the mobile seams: the textarea
+    // prepend insert, the accent-ring sparkle, and the strip markup.
+    const replySuggest = new ReplySuggest({
+        mode: () => mode,
+        replyTo: () => replyTo
+    });
+    const draftSparkle = new DraftSparkle();
 
     /** Accept by PREPENDING above whatever is already in the body — the
      *  reply prefill leaves the quoted original below a blank line, and the
@@ -324,38 +208,27 @@
      *  going. Replacing the body would delete words the user typed while
      *  the model was thinking. */
     function acceptReplySuggest() {
-        const text = replySuggest;
+        const text = replySuggest.accept();
         if (!text) return;
-        abortReplySuggest();
         body = text + '\n\n' + body.replace(/^\n+/, '');
-        replySuggest = null;
-        replySuggestError = null;
-        flashDraftSparkle();
-    }
-
-    function dismissReplySuggest() {
-        abortReplySuggest();
-        replySuggest = null;
-        replySuggestError = null;
+        draftSparkle.flash();
     }
 
     // The hard-off can be flipped while this view is open. Abort, hide,
     // and never re-fire: the master switch is the privacy control.
     $effect(() => {
         if (settings.aiFeatures) return;
-        abortReplySuggest();
-        replySuggest = null;
-        replySuggestError = null;
+        replySuggest.dismiss();
     });
 
     onMount(() => {
         // Fire only after the view is up, on its own macrotask, so the
         // suggestion request never queues behind the alias lookup in the
         // main onMount and never delays first paint or the first keystroke.
-        const t = setTimeout(() => { void requestReplySuggest({ regen: false }); }, 0);
+        const t = setTimeout(() => { void replySuggest.request({ regen: false }); }, 0);
         return () => {
             clearTimeout(t);
-            abortReplySuggest();
+            replySuggest.abort();
         };
     });
 </script>
@@ -432,24 +305,24 @@
         </div>
 
         <!-- AI reply suggestion strip. Render-gated on settings.aiFeatures
-             in addition to the request guard in requestReplySuggest(): the
+             in addition to the request guard in replySuggest.request(): the
              request guard alone is enough for privacy, but a strip left on
              screen after the master switch flips would lie about state. -->
-        {#if settings.aiFeatures && (replySuggestLoading || replySuggest || replySuggestError)}
+        {#if settings.aiFeatures && (replySuggest.loading || replySuggest.suggestion || replySuggest.error)}
             <div class="draft-sugg" role="status" aria-live="polite" data-testid="compose-reply-suggest">
                 <Icon name="sparkles" size={15} />
-                {#if replySuggestLoading}
+                {#if replySuggest.loading}
                     <span class="draft-sugg-text muted">Drafting a reply you can keep or throw away…</span>
                     <span class="spinner" style="width:14px;height:14px"></span>
                     <button
                         type="button"
                         class="draft-sugg-btn"
-                        onclick={dismissReplySuggest}
+                        onclick={replySuggest.dismiss}
                         aria-label="Dismiss"
                         data-testid="compose-reply-suggest-cancel"
                     ><Icon name="close" size={14} /></button>
-                {:else if replySuggest}
-                    <span class="draft-sugg-text" data-testid="compose-reply-suggest-text">{replySuggest}</span>
+                {:else if replySuggest.suggestion}
+                    <span class="draft-sugg-text" data-testid="compose-reply-suggest-text">{replySuggest.suggestion}</span>
                     <div class="draft-sugg-actions">
                         <button
                             type="button"
@@ -460,24 +333,24 @@
                         <button
                             type="button"
                             class="draft-sugg-btn"
-                            onclick={() => void requestReplySuggest({ regen: true })}
+                            onclick={() => void replySuggest.request({ regen: true })}
                             aria-label="Suggest another reply"
                             data-testid="compose-reply-suggest-regen"
                         ><Icon name="refresh" size={14} /></button>
                         <button
                             type="button"
                             class="draft-sugg-btn"
-                            onclick={dismissReplySuggest}
+                            onclick={replySuggest.dismiss}
                             aria-label="Discard reply suggestion"
                             data-testid="compose-reply-suggest-dismiss"
                         ><Icon name="close" size={14} /></button>
                     </div>
                 {:else}
-                    <span class="draft-sugg-text muted">{replySuggestError}</span>
+                    <span class="draft-sugg-text muted">{replySuggest.error}</span>
                     <button
                         type="button"
                         class="draft-sugg-btn"
-                        onclick={dismissReplySuggest}
+                        onclick={replySuggest.dismiss}
                         aria-label="Dismiss"
                         data-testid="compose-reply-suggest-cancel"
                     ><Icon name="close" size={14} /></button>
@@ -487,7 +360,7 @@
 
         <textarea
             class="body-input"
-            class:sparkle={draftSparkleTick > 0}
+            class:sparkle={draftSparkle.tick > 0}
             placeholder="Write your message…"
             bind:value={body}
         ></textarea>
@@ -882,7 +755,7 @@
         100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 0%, transparent); }
     }
     @media (prefers-reduced-motion: reduce) {
-        /* Defence in depth: flashDraftSparkle() already no-ops, but if the
+        /* Defence in depth: DraftSparkle.flash() already no-ops, but if the
            class is ever present under reduced motion the static band must
            not sit parked over the text. */
         .body-input.sparkle { animation: none; background-image: none; }
