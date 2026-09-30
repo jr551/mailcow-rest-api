@@ -121,7 +121,7 @@
         | 'account' | 'security'
         | 'notifications' | 'ai' | 'sounds' | 'appearance' | 'calendar' | 'people'
         | 'message-list' | 'reading-pane' | 'privacy' | 'compose' | 'smart-suggestions'
-        | 'mail-rules' | 'sweep' | 'junk'
+        | 'mail-rules' | 'ai-cloud-replies' | 'sweep' | 'junk'
         | 'filters' | 'forwarding' | 'outbound-hooks';
     type CategoryId = 'account' | 'general' | 'email' | 'calendar' | 'people';
 
@@ -165,7 +165,8 @@
                 { id: 'privacy', label: 'Images & privacy', icon: 'shield', keywords: 'remote image proxy ip tracking' },
                 { id: 'compose', label: 'Compose', icon: 'pencil', keywords: 'write send tracker display name from address' },
                 { id: 'smart-suggestions', label: 'Smart suggestions', icon: 'sparkles', keywords: 'subject proofread history summary pre-send' },
-                { id: 'mail-rules', label: 'Rules', icon: 'filter', keywords: 'sieve block redirect forward copy fileinto move folder stop ai assistant takeover ai replies answer sender auto-send sign-off' },
+                { id: 'mail-rules', label: 'Rules', icon: 'filter', keywords: 'sieve block redirect forward copy fileinto move folder stop' },
+                { id: 'ai-cloud-replies', label: 'AI Cloud Replies', icon: 'sparkles', keywords: 'ai assistant takeover reply answer sender auto-send sign-off instructions approve' },
                 { id: 'sweep', label: 'Sweep', icon: 'filter', keywords: 'spam trash batch bulk classify' },
                 { id: 'junk', label: 'Junk email', icon: 'shieldAlert', keywords: 'scam phishing ocr trusted spam quarantine' },
                 { id: 'filters', label: 'Message handling', icon: 'filter', keywords: 'block allow sender recipient catchall' },
@@ -1160,7 +1161,7 @@
     // The Rules section needs the same store for its per-sender "AI
     // replies" card, so it loads there too — whichever opens first wins.
     $effect(() => {
-        if ((activeSection === 'ai' || activeSection === 'mail-rules') && !takeover.loaded && !takeover.unavailable) void loadTakeover();
+        if ((activeSection === 'ai' || activeSection === 'mail-rules' || activeSection === 'ai-cloud-replies') && !takeover.loaded && !takeover.unavailable) void loadTakeover();
     });
 
     async function onTakeoverEnabled(on: boolean) {
@@ -2823,6 +2824,16 @@
                          auto-send and sign-off. Same store as the AI
                          section's takeover card — the rate/delay/lookback
                          governors stay there, the who-and-how lives here. -->
+
+                </section>
+
+            {:else if activeSection === 'ai-cloud-replies'}
+                <section class="tab-section" data-testid="settings-ai-cloud-replies">
+                    <h3>AI Cloud Replies</h3>
+                    <p class="muted">Choose whose mail the assistant may answer — an exact address, or
+                        <code>@domain</code> for a whole domain. Each rule carries its own instructions,
+                        auto-send and sign-off. Replies-per-hour, delay and look-back stay under
+                        <em>General → AI</em>. Right-click a message in the list for the same rules.</p>
                     <div class="filter-block" data-testid="ai-rules-block">
                         <button
                             type="button"
@@ -3434,7 +3445,7 @@
                             </div>
                             <!-- Instructions, auto-send and the sign-off moved
                                  into the per-sender rules under Settings →
-                                 Rules ("AI Cloud Replies") — each rule carries its
+                                 Cloud Replies — each rule carries its
                                  own behaviour now. -->
                             <div class="form-row" style="padding:0;border:none;background:none;">
                                 <div class="row-text">

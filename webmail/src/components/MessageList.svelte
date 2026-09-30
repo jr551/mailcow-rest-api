@@ -16,6 +16,7 @@
     import { listMailboxes, modifyFlags } from '../lib/api';
     import { showToast } from '../lib/store.svelte';
     import AIRulesModal from './AIRulesModal.svelte';
+    import { takeover, loadTakeover } from '../lib/takeover.svelte';
     import EventsScanPanel from './EventsScanPanel.svelte';
     import MenuSubmenu, { type SubmenuItem } from './MenuSubmenu.svelte';
     import RuleFromMessageDialog from './RuleFromMessageDialog.svelte';
@@ -530,6 +531,30 @@
     // item stays visible on every server.
     let aiRulesOpen = $state(false);
     let aiRulesSender = $state<string | null>(null);
+    // "Under AI control": a thread qualifies when its head sender is covered
+    // by an AI Cloud Reply rule AND the master switch is on. Exact-address
+    // rules win over @domain rules; with the switch off nothing is managed,
+    // so no pill (the assistant is idle and lying would be worse).
+    function aiControlled(fromAddr: string): boolean {
+        if (!takeover.sendersLoaded || !takeover.status?.enabled) return false;
+        const addr = (fromAddr || '').toLowerCase();
+        if (!addr) return false;
+        const domain = `@${addr.split('@')[1] || ''}`;
+        let matched = false;
+        for (const r of takeover.senders) {
+            const pat = (r.pattern || '').toLowerCase();
+            if (pat === addr) return true;               // exact beats domain
+            if (pat === domain) matched = true;
+        }
+        return matched;
+    }
+
+    $effect(() => {
+        // Load once so the pill can appear on the first list paint. 404 →
+        // unavailable, the pill simply never renders.
+        if (!takeover.loaded && !takeover.unavailable) void loadTakeover();
+    });
+
     function openAiRules(m: MessageListItem) {
         aiRulesSender = m.envelope.from?.[0]?.address?.trim() || null;
         aiRulesOpen = true;
@@ -1571,6 +1596,16 @@
                                 {/if}
                                 {#if headDanger >= 3}
                                     <span class="danger-badge" data-level={headDanger}>{headDanger === 4 ? 'CRITICAL' : 'HIGH'}</span>
+                                {/if}
+                                {#if aiControlled(headEmail)}
+                                    <span
+                                        class="cat-pill cat-ai-managed"
+                                        title="AI Cloud Reply — the assistant may answer mail from this sender"
+                                        data-testid={`ai-managed-${headMsg.uid}`}
+                                    >
+                                        <Icon name="sparkles" size={10} />
+                                        <span class="cat-label">AI</span>
+                                    </span>
                                 {/if}
                                 {#if headCatPill}
                                     <span
@@ -2941,6 +2976,19 @@
         white-space: nowrap;
     }
     .cat-pill .cat-emoji { font-size: 11px; }
+    /* "Under AI control" — a thread whose sender an AI Cloud Reply rule
+     * covers while the master switch is on. Accent-bordered sparkles pill;
+     * sits before the category pill so the two never fight for a slot. */
+    .cat-pill.cat-ai-managed {
+        background: color-mix(in srgb, var(--accent) 14%, var(--bg-surface));
+        color: var(--accent-text);
+        border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+    }
+    :global(html.dark) .cat-pill.cat-ai-managed,
+    :global([data-theme="dark"]) .cat-pill.cat-ai-managed {
+        background: color-mix(in srgb, var(--accent) 22%, transparent);
+        color: var(--accent-text);
+    }
     /* Family — pink/rose. Sits at the top of the visual stack so a
      * parent / sibling email is impossible to miss. */
     .cat-pill.cat-family {

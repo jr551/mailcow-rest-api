@@ -29,7 +29,9 @@ import {
     type TakeoverNeedsInputItem,
     type TakeoverSender,
     type TakeoverSenderInput,
-    type TakeoverSenderPatch
+    type TakeoverSenderPatch,
+    type TakeoverActivityItem,
+    listTakeoverActivity as apiListActivity
 } from './api';
 
 const DISMISS_KEY = 'webmail.takeover-dismissed.v1';
@@ -62,6 +64,10 @@ const state = $state({
     loaded: false,
     /** The per-sender rules have been fetched at least once. */
     sendersLoaded: false,
+    /** Recent decision-ledger rows, newest first — the modal's history list. */
+    activity: [] as TakeoverActivityItem[],
+    /** Activity fetch completed at least once (so the list doesn't flash empty). */
+    activityLoaded: false,
     /** A rule add/save/remove is in flight (does not block the global knobs). */
     sendersBusy: false,
     /** The server has no takeover feature at all (404): hide every affordance. */
@@ -216,5 +222,21 @@ export function dismissTakeoverNotice(id: string): void {
         }
     } catch {
         // Storage blocked or full — the session dismissal still holds.
+    }
+}
+
+/** Load the decision ledger for the modal's history list. Kept out of
+ *  `refresh()` on purpose: the senders list drives the indicator and the
+ *  rule form, while history is display-only — a hiccup here must not gate
+ *  either. Older servers (404) leave the list empty and the section hidden. */
+export async function loadTakeoverActivity(): Promise<void> {
+    if (state.unavailable) return;
+    try {
+        state.activity = await apiListActivity();
+    } catch (e) {
+        if (e instanceof ApiError && e.status === 404) return;
+        // Activity is best-effort: log nothing loud, just stay empty.
+    } finally {
+        state.activityLoaded = true;
     }
 }

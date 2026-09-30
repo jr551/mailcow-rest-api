@@ -83,6 +83,21 @@ const needsInputSchema = {
     }
 };
 
+// One decision-ledger row: what the assistant did with a message it looked
+// at — sent, drafted (waiting on approval), declined, delayed, rate-limited,
+// or stopped for input. `reason` is the owner-facing sentence the worker
+// wrote; `detail` (raw model notes) stays server-side.
+const decisionSchema = {
+    type: 'object',
+    properties: {
+        messageId: { type: 'string' },
+        decision: { type: 'string' },
+        reason: { type: 'string' },
+        at: { type: 'integer' },
+        count: { type: 'integer' }
+    }
+};
+
 // The global auth hook (src/auth.js) already rejects unauthenticated
 // requests before any route runs. This second check keeps the route safe on
 // its own as well, so a wiring slip can never expose one mailbox's blocked
@@ -371,6 +386,26 @@ module.exports = async function takeoverRoutes(app, { store, worker = null } = {
             }
         }
     }, async (req) => ({ items: store.listNeedsInput(requireUser(req)) }));
+
+    app.get('/v1/me/takeover/activity', {
+        schema: {
+            tags: ['takeover'],
+            summary: 'Recent assistant decisions — the history list for the AI Cloud Reply surface',
+            description:
+                'Newest first, capped at 50 rows. Includes decisions whose message is also in the ' +
+                'needs-input queue, so the modal can show "what happened" beside "what is waiting". ' +
+                'Read-only; nothing here can send or retry anything.',
+            response: {
+                200: {
+                    type: 'object',
+                    properties: {
+                        items: { type: 'array', items: decisionSchema }
+                    }
+                },
+                401: problemSchema
+            }
+        }
+    }, async (req) => ({ items: store.recentDecisions(requireUser(req), 50) }));
 
     app.post('/v1/me/takeover/needs-input/:id', {
         schema: {

@@ -4,6 +4,7 @@
     import {
         takeover,
         loadTakeover,
+        loadTakeoverActivity,
         addSenderRule,
         saveSenderRule,
         removeSenderRule
@@ -12,7 +13,7 @@
     import { showToast } from '../lib/store.svelte';
     import Icon from './Icon.svelte';
 
-    // "AI replies…" — right-click a message → manage the per-sender rules
+    // "AI Cloud Reply…" — right-click a message → manage the per-sender rules
     // that decide whose mail the assistant may answer. This is the same
     // store, and therefore the same rules, as Settings → Rules → "AI
     // replies"; the modal just starts from the sender you were looking at
@@ -134,6 +135,7 @@
         // a 404 flips takeover.unavailable and the body renders the muted
         // "Not available" line instead of the form.
         void loadTakeover();
+        void loadTakeoverActivity();
 
         // Focus the PANEL (not the first control): reading the title and the
         // quick-add strip before tabbing into fields is the point of a dialog
@@ -144,6 +146,33 @@
             releaseTrap = trapFocus(panelEl);
         });
     });
+
+    function activityLabel(decision: string): string {
+        const labels: Record<string, string> = {
+            sent: 'Sent',
+            drafted: 'Waiting for you',
+            'needs-input': 'Needs input',
+            blocked: 'Blocked',
+            declined: 'Left alone',
+            delayed: 'Delayed',
+            'rate-limited': 'Rate-limited',
+            considered: 'Considered'
+        };
+        return labels[decision] ?? decision;
+    }
+
+    function activityWhen(at: number): string {
+        if (!at) return '';
+        const diff = Date.now() - at;
+        const mins = Math.round(diff / 60000);
+        if (mins < 1) return 'just now';
+        if (mins < 60) return `${mins}m ago`;
+        const hours = Math.round(mins / 60);
+        if (hours < 24) return `${hours}h ago`;
+        const days = Math.round(hours / 24);
+        if (days < 30) return `${days}d ago`;
+        return new Date(at).toLocaleDateString();
+    }
 
     onDestroy(() => {
         releaseTrap?.();
@@ -502,6 +531,23 @@
                             No senders yet — the assistant idles until you add one.
                         </p>
                     {/if}
+
+                    {#if takeover.activityLoaded && takeover.activity.length}
+                        <div class="activity" data-testid="ai-rule-activity">
+                            <h3 class="activity-title muted">Recent activity</h3>
+                            <ul class="activity-list">
+                                {#each takeover.activity.slice(0, 15) as a (a.messageId + a.decision)}
+                                    <li class="activity-item" data-testid={`ai-activity-${a.decision}`}>
+                                        <span class={`activity-badge act-${a.decision}`}>{activityLabel(a.decision)}</span>
+                                        <span class="activity-reason" title={a.reason}>
+                                            {a.reason}{a.count > 1 ? ` ×${a.count}` : ''}
+                                        </span>
+                                        <time class="activity-when muted">{activityWhen(a.at)}</time>
+                                    </li>
+                                {/each}
+                            </ul>
+                        </div>
+                    {/if}
                 {/if}
             </div>
 
@@ -803,6 +849,21 @@
         background: var(--bg-surface-alt);
     }
     .foot p { margin: 0; display: inline-flex; align-items: center; gap: 6px; }
+
+    .activity { margin-top: 14px; border-top: 1px solid var(--border-subtle); padding-top: 10px; }
+    .activity-title { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
+    .activity-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+    .activity-item { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; min-width: 0; }
+    .activity-badge {
+        flex-shrink: 0; font-size: 10.5px; font-weight: 600; padding: 1px 7px;
+        border-radius: 999px; background: var(--bg-surface-alt); color: var(--text-secondary);
+        text-transform: uppercase; letter-spacing: 0.03em;
+    }
+    .activity-badge.act-sent { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent-text); }
+    .activity-badge.act-drafted { background: color-mix(in srgb, #f59e0b 18%, transparent); color: #b45309; }
+    .activity-badge.act-needs-input, .activity-badge.act-blocked { background: var(--danger-soft); color: var(--danger); }
+    .activity-reason { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .activity-when { flex-shrink: 0; font-size: 11px; }
     .foot :global(svg) { flex: none; color: var(--ai-accent); }
 
     @media (prefers-reduced-motion: reduce) {

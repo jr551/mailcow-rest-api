@@ -1114,6 +1114,23 @@ export async function listTakeoverNeedsInput(): Promise<TakeoverNeedsInputItem[]
     return r.items || [];
 }
 
+/** One decision-ledger row: sent / drafted / declined / delayed /
+ *  rate-limited / blocked, with the owner-facing reason the worker wrote. */
+export interface TakeoverActivityItem {
+    messageId: string;
+    decision: string;
+    reason: string;
+    /** unix ms */
+    at: number;
+    /** Times this same decision was reached for the same message. */
+    count: number;
+}
+
+export async function listTakeoverActivity(): Promise<TakeoverActivityItem[]> {
+    const r = await request<{ items: TakeoverActivityItem[] }>('GET', '/v1/me/takeover/activity');
+    return r.items || [];
+}
+
 /** "Resume with advice": the answer becomes context for the next draft,
  *  which still waits for approval. Never sends. */
 export async function answerTakeoverNeedsInput(id: string, advice: string): Promise<{ ok: boolean; entry: TakeoverNeedsInputItem }> {
