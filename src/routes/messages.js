@@ -283,8 +283,17 @@ module.exports = async function messageRoutes(app, { pool, ocrCache, imapCache }
                                 known.set(msg.uid, has);
                                 learned.push([msg.uid, has]);
                             }
+                            // Same call, same reason for the try/catch as the
+                            // one further down this file: the attachment-flag
+                            // cache is an OPTIMISATION, so a write that fails
+                            // (full disk, read-only volume) must not fail the
+                            // message list the user is trying to read. It was
+                            // wrapped on one path and not the other, so a full
+                            // disk broke list reads on exactly the path that
+                            // was learning attachment flags.
                             if (learned.length && imapCache) {
-                                imapCache.setAttachmentFlags(userHash, mboxPath, uidValidity, learned);
+                                try { imapCache.setAttachmentFlags(userHash, mboxPath, uidValidity, learned); }
+                                catch { /* cache is best-effort */ }
                             }
                         }
                         uids = uids.filter((u) => known.get(u) === true).sort((a, b) => b - a);

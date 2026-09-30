@@ -139,7 +139,11 @@ function createAuthHook({ cache, imap, appPasswords = null, verifier = verifyWit
             if (appPasswords && looksLikeAppPassword(bearerToken)) {
                 return acceptAppPassword(req, reply, bearerToken, null);
             }
-            const session = cache.getSession(bearerToken, now());
+            // `cache` can be null: server.js now survives an unusable
+            // session store rather than refusing to start. Without one,
+            // every session token is simply unknown, which reads as
+            // 'sign in again' rather than a 500 on the request.
+            const session = cache?.getSession(bearerToken, now()) || null;
             if (!session) {
                 reply.header('WWW-Authenticate', 'Bearer realm="imap-rest"');
                 throw unauthorized('Invalid or expired session token');
@@ -164,7 +168,7 @@ function createAuthHook({ cache, imap, appPasswords = null, verifier = verifyWit
         }
 
         const hash = hashCreds(creds.user, creds.pass);
-        const cached = cache.get(hash, now());
+        const cached = cache?.get(hash, now()) || null;
         if (cached) {
             if (!cached.valid) {
                 reply.header('WWW-Authenticate', 'Bearer realm="imap-rest"');
@@ -185,7 +189,13 @@ function createAuthHook({ cache, imap, appPasswords = null, verifier = verifyWit
             throw e;
         }
 
-        cache.set(hash, result.valid, now());
+        try {
+            cache?.set(hash, result.valid, now());
+        } catch (err) {
+            // Best-effort: a cache that cannot be written must not turn a
+            // successful sign-in into a failed request.
+            req.log.warn({ err: err.message }, 'could not write auth cache entry');
+        }
         if (!result.valid) {
             reply.header('WWW-Authenticate', 'Bearer realm="imap-rest"');
             throw unauthorized('Invalid credentials');

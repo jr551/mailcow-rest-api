@@ -299,14 +299,33 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         logger: app.log
     });
 
-    cache = cache ?? createCache({
-        filePath: config.cache.path,
-        ttlValidMs: config.cache.ttlValidMs,
-        ttlInvalidMs: config.cache.ttlInvalidMs,
-        pruneIntervalMs: config.cache.pruneIntervalMs,
-        maxLifetimeMs: config.session.maxLifetimeMs,
-        secretBox
-    });
+    // A corrupt or unreadable cache.db used to REJECT start(), which took the
+    // whole service down: reads, writes, sending, everything. A cache exists to
+    // save work, so it must never be able to end the process — the worst
+    // outcome of a broken session cache is that people are asked to sign in
+    // again, which is recoverable and diagnosable.
+    //
+    // Deliberately NOT deleting or recreating the file: if it is corrupt it
+    // may hold the only copy of session state, and blind deletion destroys
+    // the evidence. An operator can remove it themselves once they have read
+    // the warning below.
+    if (!cache) {
+        try {
+            cache = createCache({
+                filePath: config.cache.path,
+                ttlValidMs: config.cache.ttlValidMs,
+                ttlInvalidMs: config.cache.ttlInvalidMs,
+                pruneIntervalMs: config.cache.pruneIntervalMs,
+                maxLifetimeMs: config.session.maxLifetimeMs,
+                secretBox
+            });
+        } catch (err) {
+            app.log.error(
+                { err: err.message, code: err.code, path: config.cache.path },
+                'session cache unusable; continuing without it — sessions will not persist across restarts until the file is removed'
+            );
+        }
+    }
 
     if (ocrCache === undefined && config.ocr.cacheEnabled) {
         ocrCache = createOcrCache({
