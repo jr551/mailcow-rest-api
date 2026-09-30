@@ -205,7 +205,10 @@
             <p>This folder is empty</p>
         </div>
     {:else}
+        <!-- Touch handlers drive pull-to-refresh / swipe gestures — pointer
+             enhancements over a plain content list, not a widget. -->
         <div class="list"
+            role="presentation"
             ontouchstart={onTouchStart}
             ontouchmove={onTouchMove}
             ontouchend={onTouchEnd}
@@ -592,7 +595,13 @@
         border-bottom: 1px solid var(--border-subtle);
         transition: transform 0.1s ease-out;
     }
-    .pull-indicator .ready {
+    /* The `ready` class is applied dynamically through <Icon>'s class prop
+       when the pull passes the threshold. A plain scoped selector can't see
+       through the component boundary and was being dropped by the compiler
+       entirely (verified: absent from the built CSS), so the highlight never
+       rendered — :global() keeps the rule alive; the .pull-indicator prefix
+       keeps it contained to this widget. */
+    .pull-indicator :global(.ready) {
         color: var(--accent);
     }
     .spinner {

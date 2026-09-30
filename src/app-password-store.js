@@ -197,7 +197,16 @@ function createAppPasswordStore({ filePath, secretBox, maxPerUser = 25 } = {}) {
         const password = secretBox ? secretBox.decrypt(row.secret) : null;
         if (!password) return { ok: false, reason: 'undecryptable' };
 
-        touchStmt.run(now, ip || null, row.id);
+        // The last_used touch is maintenance, not part of the credential
+        // check: a full or read-only database (SQLITE_FULL / SQLITE_READONLY)
+        // must not fail a request whose credential just verified. Losing the
+        // audit trail is strictly better than 500ing every call from a valid
+        // client.
+        try {
+            touchStmt.run(now, ip || null, row.id);
+        } catch {
+            /* last_used tracking is best-effort */
+        }
         return { ok: true, user: row.user, password, id: row.id, label: row.label };
     }
 

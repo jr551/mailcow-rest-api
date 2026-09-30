@@ -375,6 +375,7 @@
                                 type="button"
                                 class={`swatch ${subColor === c ? 'sel' : ''}`}
                                 style={`background: ${c};`}
+                                aria-label={`Colour ${c}`}
                                 onclick={() => (subColor = c)}
                             ></button>
                         {/each}

@@ -90,6 +90,20 @@ function toStringArray(value) {
         .slice(0, MAX_MISSING);
 }
 
+// The `missing` column holds JSON as far as this module is concerned, but it
+// is TEXT as far as sqlite is: a corrupt or hand-edited row must not take
+// the whole needs-input queue down on one bad byte. An unreadable value
+// degrades to an empty list — the same honest fallback the decrypted columns
+// use — so the row still shows with its reason and thread instead of the
+// route (or the worker's user pass) failing on it.
+function parseMissing(value) {
+    try {
+        return toStringArray(JSON.parse(value || '[]'));
+    } catch {
+        return [];
+    }
+}
+
 function createTakeoverStore({ filePath, secretBox, maxPerUser = 50, defaults = {} } = {}) {
     if (!secretBox) {
         throw new Error('createTakeoverStore: secretBox is required — quoted message text is encrypted at rest');
@@ -347,7 +361,7 @@ function createTakeoverStore({ filePath, secretBox, maxPerUser = 50, defaults = 
             messageId: row.message_id,
             from: row.from_addr,
             subject: row.subject,
-            missing: JSON.parse(row.missing || '[]'),
+            missing: parseMissing(row.missing),
             // decrypt() returns null for a tampered or wrong-key payload;
             // an empty string is the honest fallback rather than leaking
             // ciphertext into the UI.
@@ -424,16 +438,23 @@ function createTakeoverStore({ filePath, secretBox, maxPerUser = 50, defaults = 
     }
 
     // "Stop on this one": close the item and mark the message processed in
-    // the same step, so it can never come back. (Marking it first and
-    // resolving second would leave a window where a concurrent poll re-drafts
-    // it; the store does both under one synchronous call.)
+    // the same step, so it can never come back. The two writes run inside
+    // one sqlite transaction: a message marked processed while its row is
+    // still open is stranded — the owner could still "resume with advice" it
+    // and the worker would never re-draft it — so an interrupted dismiss
+    // must leave nothing half-done. The message is marked first so a
+    // concurrent poll cannot re-draft it in between; the transaction is what
+    // makes the pair all-or-nothing.
+    const dismissTxn = db.transaction((u, messageId, at, note, id) => {
+        recordProcessedStmt.run(u, messageId, 'dismissed', at);
+        dismissNeedsStmt.run(at, secretBox.encrypt(String(note || '')), id, u);
+    });
+
     function dismissNeedsInput(user, id, note) {
         const u = String(user);
         const row = getNeedsStmt.get(String(id), u);
         if (!row || row.status !== 'open') return null;
-        const at = Date.now();
-        recordProcessedStmt.run(u, row.message_id, 'dismissed', at);
-        dismissNeedsStmt.run(at, secretBox.encrypt(String(note || '')), String(id), u);
+        dismissTxn(u, row.message_id, Date.now(), String(note || ''), String(id));
         return getNeedsInput(u, id);
     }
 

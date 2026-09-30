@@ -1376,8 +1376,10 @@
                                     class="ai-menu-pop"
                                     role="menu"
                                     aria-label="AI actions"
+                                    tabindex="-1"
                                     data-testid="ai-menu-pop"
                                     onclick={(e) => e.stopPropagation()}
+                                    onkeydown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); aiMenuOpen = false; } }}
                                 >
                                     <button
                                         type="button"
@@ -1436,8 +1438,10 @@
                                 <div
                                     class="cal-options-pop"
                                     role="menu"
+                                    tabindex="-1"
                                     data-testid="cal-options-pop"
                                     onclick={(e) => e.stopPropagation()}
+                                    onkeydown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); closeCalOptions(); } }}
                                 >
                                     <div class="ai-tools-head">
                                         <div class="ai-tools-title">
@@ -1500,8 +1504,10 @@
                                 <div
                                     class="ai-tools-pop"
                                     role="menu"
+                                    tabindex="-1"
                                     data-testid="ai-tools-pop"
                                     onclick={(e) => e.stopPropagation()}
+                                    onkeydown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); closeAiTools(); } }}
                                 >
                                     <div class="ai-tools-head">
                                         <div class="ai-tools-title">
@@ -1623,9 +1629,11 @@
                                     <button
                                         type="button"
                                         role="menuitem"
+                                        disabled={!d.envelope.from?.[0]?.address}
                                         onclick={() => doBlockSender(d.envelope.from?.[0]?.address)}
                                         data-testid="block-sender-btn"
                                     ><Icon name="spam" size={13} /> Block {d.envelope.from?.[0]?.address || 'sender'}</button>
+                                </li>
                                 {#if settings.aiFeatures}
                                 <li>
                                     <button
@@ -1641,6 +1649,7 @@
                                     <button
                                         type="button"
                                         role="menuitem"
+                                        disabled={!d.envelope.from?.[0]?.address}
                                         onclick={() => doAllowSender(d.envelope.from?.[0]?.address)}
                                         data-testid="allow-sender-btn"
                                     ><Icon name="star" size={13} /> Allow {d.envelope.from?.[0]?.address || 'sender'}</button>

@@ -107,7 +107,7 @@ function setup({ httpStatus = 200, keep = false, prepend = '', headers, client: 
 }
 
 test('delivery: a 2xx with keep=false deletes the message and writes a Sent record', async () => {
-    const { calls, http, forwarder, queue } = setup({ httpStatus: 200, keep: false });
+    const { calls, http, forwarder, queue, created } = setup({ httpStatus: 200, keep: false });
     await forwarder.tick();
     assert.strictEqual(http.seen.length, 1);
     assert.deepStrictEqual(calls.deleted, ['1'], 'message deleted after delivery');
@@ -118,7 +118,7 @@ test('delivery: a 2xx with keep=false deletes the message and writes a Sent reco
     assert.match(record, /Sent to webhook Invoices/);
     assert.match(record, /reply was HTTP 200 in \d+\.\d seconds/);
     // Delivered and acted on, so no retry state is left behind.
-    assert.strictEqual(queue.get('me@example.com', 42, 1), null);
+    assert.strictEqual(queue.get(created.mailbox, 42, 1), null);
 });
 
 test('delivery: a 2xx with keep=true files the message back to INBOX instead of deleting', async () => {
@@ -131,12 +131,12 @@ test('delivery: a 2xx with keep=true files the message back to INBOX instead of 
 });
 
 test('delivery: a non-2xx schedules a retry and does NOT act on the message', async () => {
-    const { calls, http, forwarder, queue } = setup({ httpStatus: 500 });
+    const { calls, http, forwarder, queue, created } = setup({ httpStatus: 500 });
     await forwarder.tick();
     assert.strictEqual(http.seen.length, 1);
     assert.deepStrictEqual(calls.deleted, [], 'must not delete an undelivered message');
     assert.deepStrictEqual(calls.moved, [], 'must not file an undelivered message');
-    const state = queue.get('me@example.com', 42, 1);
+    const state = queue.get(created.mailbox, 42, 1);
     assert.ok(state, 'failure recorded');
     assert.strictEqual(state.attempts, 1);
     assert.ok(state.next_attempt_at > Date.now(), 'retry scheduled in the future');
@@ -147,24 +147,24 @@ test('delivery: a non-2xx schedules a retry and does NOT act on the message', as
 });
 
 test('delivery: a retry is not attempted before its backoff elapses', async () => {
-    const { http, forwarder, queue } = setup({ httpStatus: 500 });
+    const { http, forwarder, queue, created } = setup({ httpStatus: 500 });
     await forwarder.tick();
-    const first = queue.get('me@example.com', 42, 1).attempts;
+    const first = queue.get(created.mailbox, 42, 1).attempts;
     // Immediately again: still inside the backoff window.
     await forwarder.tick();
-    assert.strictEqual(queue.get('me@example.com', 42, 1).attempts, first, 'no second attempt yet');
+    assert.strictEqual(queue.get(created.mailbox, 42, 1).attempts, first, 'no second attempt yet');
     assert.strictEqual(http.seen.length, 1, 'no second POST');
 });
 
 test('delivery: repeated failures eventually give up and leave the message alone', async () => {
-    const { calls, forwarder, queue } = setup({ httpStatus: 503 });
+    const { calls, forwarder, queue, created } = setup({ httpStatus: 503 });
     // maxAttempts is 3; clear the backoff each round so the loop can drive
     // past it without waiting.
     for (let i = 0; i < 4; i++) {
         await forwarder.tick();
-        const st = queue.get('me@example.com', 42, 1);
+        const st = queue.get(created.mailbox, 42, 1);
         if (st) {
-            queue.recordFailure('me@example.com', 42, 1, {
+            queue.recordFailure(created.mailbox, 42, 1, {
                 attempts: st.attempts,
                 nextAttemptAt: 0,
                 error: st.last_error,
@@ -172,19 +172,19 @@ test('delivery: repeated failures eventually give up and leave the message alone
             });
         }
     }
-    const state = queue.get('me@example.com', 42, 1);
+    const state = queue.get(created.mailbox, 42, 1);
     assert.strictEqual(state.giving_up, 1, 'gave up after maxAttempts');
     assert.deepStrictEqual(calls.deleted, [], 'message left in the mailbox for a human');
 });
 
 test('delivery: a delivered-but-unfiled message retries the mailbox action only, never the POST', async () => {
-    const { calls, http, forwarder, queue } = setup({ httpStatus: 200, keep: false });
+    const { calls, http, forwarder, queue, created } = setup({ httpStatus: 200, keep: false });
     // Simulate: POST confirmed, then the delete failed.
-    queue.recordDelivered('me@example.com', 42, 1);
+    queue.recordDelivered(created.mailbox, 42, 1);
     await forwarder.tick();
     assert.strictEqual(http.seen.length, 0, 'must not re-POST an already-delivered message');
     assert.deepStrictEqual(calls.deleted, ['1'], 'retries the delete');
-    assert.strictEqual(queue.get('me@example.com', 42, 1), null, 'cleared once the delete succeeds');
+    assert.strictEqual(queue.get(created.mailbox, 42, 1), null, 'cleared once the delete succeeds');
 });
 
 test('payload: the composed message carries the prepend and quotes the original', async () => {

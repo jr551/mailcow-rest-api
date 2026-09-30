@@ -563,8 +563,11 @@
         {/each}
     </div>
 
+    <!-- The touch handlers drive pull-to-refresh / swipe gestures — pointer
+         enhancements over a plain content list, not a widget. -->
     <div
         class="list scroll-y"
+        role="presentation"
         bind:this={listEl}
         onscroll={onScroll}
         ontouchstart={onTouchStart}

@@ -400,6 +400,15 @@
                         data-testid={testid + '-item-' + it.key}
                     >{it.label}</button>
                 </li>
+            {:else}
+                <!-- The panel measures its height from `items.length`, so an
+                     empty list used to render a blank box: no webhooks yet and
+                     a still-loading fetch both looked identical to a hung
+                     menu. `emptyText` (MessageList's webhook submenu) says
+                     which it is. -->
+                {#if emptyText}
+                    <li class="submenu-empty" role="none">{emptyText}</li>
+                {/if}
             {/each}
         </ul>
     {/if}

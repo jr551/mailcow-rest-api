@@ -3,7 +3,7 @@
 const webpush = require('web-push');
 const config = require('../config');
 const { problem, badRequest, notFound } = require('../errors');
-const { assertPublicDestination } = require('../utils/ssrf-guard');
+const { assertPublicDestination, createPinnedHttpsAgent } = require('../utils/ssrf-guard');
 
 // web-push POSTs to whatever endpoint the client registered, from the
 // server. Accepting any URL made this an outbound request-forgery and
@@ -173,10 +173,25 @@ module.exports = async function pushRoutes(app, { pushStore, lookup } = {}) {
         let sent = 0;
         let failed = 0;
         for (const sub of subs) {
+            // Pin the connection to the address we check HERE, at send time.
+            // The endpoint was validated at subscribe time, but a hostname
+            // the caller controls can be re-pointed at an internal address
+            // afterwards (DNS rebinding) — sending unpinned defeats the
+            // SSRF check entirely. Same discipline as push-sender.js; the
+            // two paths must stay in step.
+            let agent;
+            try {
+                agent = await createPinnedHttpsAgent(sub.endpoint, { lookup });
+            } catch (err) {
+                failed++;
+                endpoints.push({ endpoint: sub.endpoint, ok: false, error: `endpoint blocked: ${err.message}`, status: 0 });
+                continue;
+            }
             try {
                 await webpush.sendNotification(
                     { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth_key } },
-                    payload
+                    payload,
+                    agent ? { agent } : undefined
                 );
                 sent++;
                 endpoints.push({ endpoint: sub.endpoint, ok: true, error: '', status: 200 });
@@ -192,6 +207,8 @@ module.exports = async function pushRoutes(app, { pushStore, lookup } = {}) {
                     error: (err && err.message) || 'send failed',
                     status
                 });
+            } finally {
+                if (agent && typeof agent.destroy === 'function') agent.destroy();
             }
         }
         reply.code(200);

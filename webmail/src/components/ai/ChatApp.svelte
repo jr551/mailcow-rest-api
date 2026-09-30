@@ -657,6 +657,15 @@
             data-testid="ai-thread-ctx-menu"
             style={`position:fixed;left:${chatCtxMenu.x}px;top:${chatCtxMenu.y}px;z-index:200;`}
             onclick={(e) => e.stopPropagation()}
+            onkeydown={(e) => {
+                // Escape dismisses — the menu previously only closed on the
+                // next outside click, so a keyboard user who tabbed into it
+                // had no way out short of running an action.
+                if (e.key === 'Escape') {
+                    e.stopPropagation();
+                    closeChatCtx();
+                }
+            }}
         >
             <li role="menuitem">
                 <button type="button" class="chat-ctx-item" onclick={() => { pickThread(chatCtxMenu!.id); closeChatCtx(); }}>
@@ -1480,15 +1489,6 @@
         color: var(--text-primary);
     }
     .confirm-tool { margin-left: auto; }
-    .confirm-tool code {
-        font-family: var(--font-mono);
-        font-size: 11px;
-        padding: 2px 7px;
-        background: var(--bg-base);
-        border: 1px solid var(--border-subtle);
-        border-radius: var(--radius-xs);
-        color: var(--text-secondary);
-    }
     .confirm-body { line-height: 1.5; }
     .confirm-args {
         padding: 8px 10px;

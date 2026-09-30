@@ -1757,6 +1757,12 @@
              gets no top/left at all, so it renders at the viewport origin
              for a single frame — .msg-ctx-unplaced hides that frame rather
              than flashing the whole menu into the top-left corner. -->
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <!-- The ul's onclick only shields inside-clicks from the
+             <svelte:window> close handler above; all interactivity lives in
+             the menuitem buttons and all keyboard handling (Escape, arrows,
+             Home/End) is the window capture handler above, so there is no
+             key event for this container to take. -->
         <ul
             class={ctxPos ? 'msg-ctx' : 'msg-ctx msg-ctx-unplaced'}
             role="menu"
@@ -2843,9 +2849,8 @@
             var(--bg-surface) 50%
         );
     }
-    .row.ai-cat-info {
-        /* leave alone */
-    }
+    /* .row.ai-cat-info is deliberately unstyled — an info-category row gets
+       no tint or marker; this was an intentionally empty ruleset. */
     .row.starred {
         position: relative;
         animation: star-orbit-glow 3s linear infinite;

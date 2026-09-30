@@ -375,6 +375,7 @@
                 <button
                     type="button"
                     class="toggle-switch"
+                    aria-label="Compact density"
                     class:on={settings.density === 'compact'}
                     class:off={settings.density !== 'compact'}
                     onclick={() => setDensity(settings.density === 'compact' ? 'comfortable' : 'compact')}
@@ -390,6 +391,7 @@
                 <button
                     type="button"
                     class="toggle-switch"
+                    aria-label="Group threads"
                     class:on={settings.groupThreads}
                     class:off={!settings.groupThreads}
                     onclick={() => setGroupThreads(!settings.groupThreads)}
@@ -405,6 +407,7 @@
                 <button
                     type="button"
                     class="toggle-switch"
+                    aria-label="Sounds"
                     class:on={!sounds.muted}
                     class:off={sounds.muted}
                     onclick={() => setMuted(!sounds.muted)}
@@ -420,6 +423,7 @@
                 <button
                     type="button"
                     class="toggle-switch"
+                    aria-label="Gravatar avatars"
                     class:on={gravatarPref.on}
                     class:off={!gravatarPref.on}
                     onclick={() => setGravatarEnabled(!gravatarPref.on)}
@@ -439,6 +443,7 @@
                 <button
                     type="button"
                     class="toggle-switch"
+                    aria-label="Load images via the privacy proxy"
                     class:on={settings.proxyImages}
                     class:off={!settings.proxyImages}
                     onclick={() => setProxyImages(!settings.proxyImages)}
@@ -459,6 +464,7 @@
                 <button
                     type="button"
                     class="toggle-switch"
+                    aria-label="Phishing detection"
                     class:on={settings.phishingScan}
                     class:off={!settings.phishingScan}
                     onclick={() => setPhishingScan(!settings.phishingScan)}
@@ -512,6 +518,7 @@
                     <button
                         type="button"
                         class="toggle-switch"
+                        aria-label="OCR inline images"
                         class:on={settings.phishingScanOcrInline}
                         class:off={!settings.phishingScanOcrInline}
                         disabled={!settings.tesseractOcrInstalled}
@@ -529,6 +536,7 @@
                 <button
                     type="button"
                     class="toggle-switch"
+                    aria-label="Local OCR engine (tesseract.js)"
                     class:on={settings.tesseractOcrInstalled}
                     class:off={!settings.tesseractOcrInstalled}
                     onclick={async () => {
@@ -620,6 +628,7 @@
                 <button
                     type="button"
                     class="toggle-switch"
+                    aria-label="Default to tracked"
                     class:on={settings.trackOpensDefault}
                     class:off={!settings.trackOpensDefault}
                     onclick={() => setTrackOpensDefault(!settings.trackOpensDefault)}
@@ -635,6 +644,7 @@
                 <button
                     type="button"
                     class="toggle-switch"
+                    aria-label="AI subject on blur"
                     class:on={settings.aiSuggestSubjectOnBlur}
                     class:off={!settings.aiSuggestSubjectOnBlur}
                     onclick={() => setAiSuggestSubjectOnBlur(!settings.aiSuggestSubjectOnBlur)}
@@ -731,6 +741,7 @@
                     <button
                         type="button"
                         class="toggle-switch"
+                        aria-label="Turn off all AI features"
                         class:on={settings.aiFeatures}
                         class:off={!settings.aiFeatures}
                         onclick={() => setAiFeatures(!settings.aiFeatures)}
@@ -757,6 +768,7 @@
                     <button
                         type="button"
                         class="toggle-switch"
+                        aria-label="Use my own provider"
                         class:on={settings.useCustomLlm}
                         class:off={!settings.useCustomLlm}
                         onclick={() => setUseCustomLlm(!settings.useCustomLlm)}
@@ -827,6 +839,7 @@
                     <button
                         type="button"
                         class="toggle-switch"
+                        aria-label="New-mail push"
                         class:on={pushStatus === 'subscribed'}
                         class:off={pushStatus !== 'subscribed'}
                         disabled={pushLoading || pushStatus === 'denied'}

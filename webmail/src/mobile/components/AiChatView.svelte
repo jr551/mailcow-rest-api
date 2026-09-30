@@ -680,7 +680,7 @@
 </div>
 
 {#if showThreads}
-    <div class="sheet-backdrop" onclick={() => showThreads = false}></div>
+    <div class="sheet-backdrop" role="presentation" onclick={() => showThreads = false}></div>
     <div class="threads-sheet slide-up">
         <div class="sheet-header">
             <h2>Chats</h2>
@@ -712,7 +712,7 @@
 {/if}
 
 {#if showSettings}
-    <div class="sheet-backdrop" onclick={() => showSettings = false}></div>
+    <div class="sheet-backdrop" role="presentation" onclick={() => showSettings = false}></div>
     <div class="threads-sheet slide-up">
         <div class="sheet-header">
             <h2>Chat settings</h2>
@@ -729,6 +729,7 @@
                     <button
                         type="button"
                         class="toggle-switch"
+                        aria-label={CAP_META[cap as GrantableCapability].title}
                         class:on={aiState.tools[cap as GrantableCapability]}
                         class:off={!aiState.tools[cap as GrantableCapability]}
                         onclick={() => setTools({ [cap]: !aiState.tools[cap as GrantableCapability] })}

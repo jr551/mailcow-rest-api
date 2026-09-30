@@ -2055,6 +2055,12 @@
                 }}
             />
         </div>
+        <!-- Focusable `role="separator"` is the WAI-ARIA window-splitter
+             pattern: tabindex + keyboard resize (splitterKeys below) are the
+             prescribed way to make a pane divider operable. Svelte's role
+             taxonomy has no "focusable separator" variant, hence the
+             ignore. -->
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex,a11y_no_noninteractive_element_interactions -->
         <div
             class="pane-resizer sidebar-resizer"
             class:dragging
@@ -2098,6 +2104,9 @@
                 onMove={moveTo}
                 onBlockSender={blockSenderForUid}
             />
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex,a11y_no_noninteractive_element_interactions -->
+            <!-- Focusable `role="separator"` — the WAI-ARIA window-splitter
+                 pattern, same as the sidebar resizer above. -->
             <div
                 class="pane-resizer"
                 class:dragging

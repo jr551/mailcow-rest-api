@@ -99,13 +99,13 @@
 
 <svelte:window onkeydown={onKey} />
 
-<div class="scrim" role="presentation" onclick={onClose}>
+<div class="scrim" role="presentation" onclick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
     <div
         class="dialog"
         role="dialog"
         aria-modal="true"
         aria-label="Fill PDF form"
-        onclick={(e) => e.stopPropagation()}
+        tabindex="-1"
         data-testid="pdf-form-filler"
     >
         <header class="head">

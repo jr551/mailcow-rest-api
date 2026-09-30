@@ -97,6 +97,7 @@
     let menuMaxHeight = $state<string | null>(null);
     let editingLocation = $state(false);
     let locInput = $state('');
+    let locInputEl = $state<HTMLInputElement | null>(null);
 
     function unitMark() { return units === 'fahrenheit' ? '°F' : '°C'; }
     function speedUnit() { return units === 'fahrenheit' ? 'mph' : 'km/h'; }
@@ -337,6 +338,11 @@
     // the Save/Cancel row off-centre. Re-measure whenever the pane changes.
     $effect(() => {
         editingLocation;
+        // Focus the location input when its pane opens so typing can start
+        // immediately — programmatic instead of the `autofocus` attribute,
+        // which is unreliable on dynamically-inserted elements (and is
+        // flagged because it steals focus at page load in the general case).
+        if (editingLocation) locInputEl?.focus();
         if (menuOpen) void clampMenu();
     });
 </script>
@@ -463,10 +469,10 @@
             <input
                 type="text"
                 placeholder="City name or lat,lon"
+                bind:this={locInputEl}
                 value={locInput}
                 oninput={(e) => (locInput = (e.currentTarget as HTMLInputElement).value)}
                 onkeydown={(e) => { if (e.key === 'Enter') commitLocation(); }}
-                autofocus
             />
             <div class="row">
                 <button class="menu-item small" onclick={commitLocation}>Save</button>

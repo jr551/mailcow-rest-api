@@ -160,7 +160,9 @@ module.exports = async function mailboxInfoRoutes(app, { db }) {
     }, async (req, reply) => {
         const user = req.creds.user;
         if (!db) throw notFound('Temp alias not found');
-        const address = decodeURIComponent(req.params.address);
+        // find-my-way already decoded the param; decoding again mangled
+        // addresses containing `%` (and threw a 500 on a bare one).
+        const address = req.params.address;
         const ok = await db.deleteTempAlias(user, address);
         if (!ok) throw notFound('Temp alias not found');
         reply.code(204).send();

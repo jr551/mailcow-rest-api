@@ -192,7 +192,7 @@ module.exports = async function webhookInboxRoutes(app, { store, pool, getPublic
             },
             response: { 202: { type: 'object', properties: { ok: { type: 'boolean' } } } }
         }
-    }, async (req) => {
+    }, async (req, reply) => {
         const result = store.verify({ token: req.params.token });
         if (!result.ok) {
             req.log.warn({ reason: result.reason, ip: req.ip }, 'webhook inbox token rejected');
@@ -215,6 +215,8 @@ module.exports = async function webhookInboxRoutes(app, { store, pool, getPublic
         const creds = { user: result.user, pass: result.password, hash: hashCreds(result.user, result.password) };
         await withClient(pool, creds, (client) => client.append('INBOX', message));
         req.log.info({ id: result.id, user: result.user }, 'webhook delivered to inbox');
+        // Match the declared response schema (202 Accepted).
+        reply.code(202);
         return { ok: true };
     });
 };

@@ -97,6 +97,10 @@ function createImapCache(opts) {
     const statusDeleteStmt = db.prepare('DELETE FROM folder_status WHERE user_hash = ? AND path = ?');
     const statusPruneStmt = db.prepare('DELETE FROM folder_status WHERE expires_at < ?');
 
+    // Per-user bulk deletes for invalidateUser.
+    const userUidsDeleteStmt = db.prepare('DELETE FROM folder_uids WHERE user_hash = ?');
+    const userStatusDeleteStmt = db.prepare('DELETE FROM folder_status WHERE user_hash = ?');
+
     // In-memory read-through caches
     const treeMem = new Map();
     const uidsMem = new Map();
@@ -122,6 +126,31 @@ function createImapCache(opts) {
         return Date.now();
     }
 
+    // Everything this module stores is cache-only: mailbox trees, folder UID
+    // manifests, folder status and attachment flags are all optimisations
+    // over live IMAP data. A full, read-only or corrupt database must not
+    // fail the request the cache is meant to speed up, so reads that fail are
+    // cache misses and fills, invalidations and pruning are best-effort —
+    // invalidation included, because the operation that triggered it (a
+    // MOVE, a delete) has already happened and failing the request over a
+    // stale cache entry would be the one wrong answer. The in-memory tier is
+    // cleared even when the SQLite half of an invalidation fails.
+    function missOrNull(fn) {
+        try {
+            return fn();
+        } catch {
+            return null; // unreadable cache is a miss, never an error
+        }
+    }
+
+    function bestEffort(fn) {
+        try {
+            fn();
+        } catch {
+            /* cache maintenance is best-effort */
+        }
+    }
+
     // ---------- Mailbox tree ----------
 
     function getTree(userHash) {
@@ -130,7 +159,7 @@ function createImapCache(opts) {
         if (mem && mem.expiresAt > n) {
             return mem.tree;
         }
-        const row = treeGetStmt.get(userHash, n);
+        const row = missOrNull(() => treeGetStmt.get(userHash, n));
         if (!row) return null;
         try {
             const tree = JSON.parse(row.tree);
@@ -144,13 +173,14 @@ function createImapCache(opts) {
     function setTree(userHash, tree) {
         const n = now();
         const expiresAt = n + ttlMs;
-        treeSetStmt.run(userHash, JSON.stringify(tree), expiresAt);
+        bestEffort(() => treeSetStmt.run(userHash, JSON.stringify(tree), expiresAt));
         memSet(treeMem, userHash, { tree, expiresAt }, maxMemTree);
     }
 
     function invalidateTree(userHash) {
-        treeDeleteStmt.run(userHash);
+        // Memory first: it must be cleared even when the SQLite delete fails.
         memDelete(treeMem, userHash);
+        bestEffort(() => treeDeleteStmt.run(userHash));
     }
 
     // ---------- Folder UIDs ----------
@@ -166,7 +196,7 @@ function createImapCache(opts) {
         if (mem && mem.expiresAt > n) {
             return mem.uids;
         }
-        const row = uidsGetStmt.get(userHash, path, uidvalidity, n);
+        const row = missOrNull(() => uidsGetStmt.get(userHash, path, uidvalidity, n));
         if (!row) return null;
         try {
             const uids = JSON.parse(row.uids);
@@ -181,18 +211,19 @@ function createImapCache(opts) {
     function setUids(userHash, path, uidvalidity, uids) {
         const n = now();
         const expiresAt = n + ttlMs;
-        uidsSetStmt.run(userHash, path, uidvalidity, JSON.stringify(uids), expiresAt);
+        bestEffort(() => uidsSetStmt.run(userHash, path, uidvalidity, JSON.stringify(uids), expiresAt));
         memSet(uidsMem, _uidsKey(userHash, path, uidvalidity), { uids, expiresAt }, maxMemUids);
     }
 
     function invalidateFolderUids(userHash, path) {
         // We don't know uidvalidity here, so prune SQLite by path and
-        // clear any in-memory entries that match the prefix.
-        uidsDeleteStmt.run(userHash, path);
+        // clear any in-memory entries that match the prefix. Memory first:
+        // it must be cleared even when the SQLite delete fails.
         const prefix = `${userHash}\x00${path}\x00`;
         for (const key of uidsMem.keys()) {
             if (key.startsWith(prefix)) uidsMem.delete(key);
         }
+        bestEffort(() => uidsDeleteStmt.run(userHash, path));
     }
 
     // ---------- Folder status ----------
@@ -203,7 +234,7 @@ function createImapCache(opts) {
         if (mem && mem.expiresAt > n) {
             return mem.status;
         }
-        const row = statusGetStmt.get(userHash, path, n);
+        const row = missOrNull(() => statusGetStmt.get(userHash, path, n));
         if (!row) return null;
         try {
             const status = JSON.parse(row.status);
@@ -217,13 +248,14 @@ function createImapCache(opts) {
     function setStatus(userHash, path, status) {
         const n = now();
         const expiresAt = n + ttlMs;
-        statusSetStmt.run(userHash, path, JSON.stringify(status), expiresAt);
+        bestEffort(() => statusSetStmt.run(userHash, path, JSON.stringify(status), expiresAt));
         memSet(statusMem, `${userHash}\x00${path}`, { status, expiresAt }, maxMemStatus);
     }
 
     function invalidateFolderStatus(userHash, path) {
-        statusDeleteStmt.run(userHash, path);
+        // Memory first: it must be cleared even when the SQLite delete fails.
         memDelete(statusMem, `${userHash}\x00${path}`);
+        bestEffort(() => statusDeleteStmt.run(userHash, path));
     }
 
     // ---------- Combined invalidation ----------
@@ -240,11 +272,15 @@ function createImapCache(opts) {
     const attDeleteFolderStmt = db.prepare(
         'DELETE FROM msg_attachments WHERE user_hash = ? AND path = ?'
     );
+    const attDeleteUserStmt = db.prepare(
+        'DELETE FROM msg_attachments WHERE user_hash = ?'
+    );
 
     // Returns a Map<uid, boolean> of what we already know for this folder.
     function getAttachmentFlags(userHash, path, uidvalidity) {
+        const rows = missOrNull(() => attGetStmt.all(userHash, path, uidvalidity)) || [];
         const out = new Map();
-        for (const row of attGetStmt.all(userHash, path, uidvalidity)) {
+        for (const row of rows) {
             out.set(row.uid, row.has_attachment === 1);
         }
         return out;
@@ -258,35 +294,42 @@ function createImapCache(opts) {
                 attSetStmt.run(userHash, path, uidvalidity, uid, has ? 1 : 0);
             }
         });
-        run([...entries]);
+        bestEffort(() => run([...entries]));
     }
 
     function invalidateFolder(userHash, path) {
         invalidateFolderUids(userHash, path);
         invalidateFolderStatus(userHash, path);
-        attDeleteFolderStmt.run(userHash, path);
+        bestEffort(() => attDeleteFolderStmt.run(userHash, path));
     }
 
+    // Bulk-delete every cache row for this user: mailbox tree, folder UID
+    // manifests, folder status AND the msg_attachments flags — omitting the
+    // last one left the biggest table of the four growing and serving stale
+    // has:attachment answers after a user-level invalidation.
     function invalidateUser(userHash) {
         invalidateTree(userHash);
-        // Bulk-delete folder caches for this user
-        db.prepare('DELETE FROM folder_uids WHERE user_hash = ?').run(userHash);
-        db.prepare('DELETE FROM folder_status WHERE user_hash = ?').run(userHash);
+        // Memory first: it must be cleared even when the SQLite deletes fail.
         for (const key of uidsMem.keys()) {
             if (key.startsWith(`${userHash}\x00`)) uidsMem.delete(key);
         }
         for (const key of statusMem.keys()) {
             if (key.startsWith(`${userHash}\x00`)) statusMem.delete(key);
         }
+        bestEffort(() => userUidsDeleteStmt.run(userHash));
+        bestEffort(() => userStatusDeleteStmt.run(userHash));
+        bestEffort(() => attDeleteUserStmt.run(userHash));
     }
 
     // ---------- Prune ----------
 
     function prune() {
         const n = now();
-        treePruneStmt.run(n);
-        uidsPruneStmt.run(n);
-        statusPruneStmt.run(n);
+        // Runs from a timer: a throw here would crash the process, so every
+        // statement is independently best-effort.
+        bestEffort(() => treePruneStmt.run(n));
+        bestEffort(() => uidsPruneStmt.run(n));
+        bestEffort(() => statusPruneStmt.run(n));
         treeMem.clear();
         uidsMem.clear();
         statusMem.clear();

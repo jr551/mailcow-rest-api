@@ -19,11 +19,19 @@ function createPushSender({ config, pushStore, pool, cache, logger }) {
     // Track last-seen unread counts per user so we only push on genuine changes.
     const db = new Database(config.push.dbPath);
     db.pragma('journal_mode = WAL');
+    db.pragma('synchronous = NORMAL');
+    db.pragma('busy_timeout = 2000');
     db.exec(`
         CREATE TABLE IF NOT EXISTS push_last_seen (
             user TEXT PRIMARY KEY,
             unseen INTEGER NOT NULL DEFAULT 0,
             last_check INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS push_delivered (
+            user TEXT NOT NULL,
+            endpoint TEXT NOT NULL,
+            unseen INTEGER NOT NULL,
+            PRIMARY KEY (user, endpoint)
         );
     `);
     const getLast = db.prepare('SELECT unseen FROM push_last_seen WHERE user = ?');
@@ -31,6 +39,18 @@ function createPushSender({ config, pushStore, pool, cache, logger }) {
         'INSERT INTO push_last_seen (user, unseen, last_check) VALUES (?, ?, ?) ' +
         'ON CONFLICT(user) DO UPDATE SET unseen = excluded.unseen, last_check = excluded.last_check'
     );
+    // Per-endpoint watermark: the unseen count through which that endpoint
+    // has been notified. A notification whose send failed keeps the old
+    // watermark so it is retried, while endpoints that already got it are
+    // skipped instead of being re-sent. A missing row falls back to the
+    // user-level watermark, which is also how a fresh subscription joins.
+    const getDelivered = db.prepare('SELECT unseen FROM push_delivered WHERE user = ? AND endpoint = ?');
+    const markDelivered = db.prepare(
+        'INSERT INTO push_delivered (user, endpoint, unseen) VALUES (?, ?, ?) ' +
+        'ON CONFLICT(user, endpoint) DO UPDATE SET unseen = excluded.unseen'
+    );
+    const dropDelivered = db.prepare('DELETE FROM push_delivered WHERE user = ? AND endpoint = ?');
+    const clearDelivered = db.prepare('DELETE FROM push_delivered WHERE user = ?');
 
     let timer = null;
     let running = false;
@@ -65,43 +85,93 @@ function createPushSender({ config, pushStore, pool, cache, logger }) {
                 unreadCount: unseen
             });
 
+            let settled = true;
             for (const sub of subs) {
+                // Skip endpoints already notified at this count: a retry of
+                // the event must not re-send to devices that got it.
+                const deliveredRow = getDelivered.get(user, sub.endpoint);
+                const watermark = deliveredRow ? deliveredRow.unseen : lastUnseen;
+                if (unseen <= watermark) continue;
+
+                let agent;
                 try {
                     // Pin the connection to the address we checked. The
                     // endpoint was validated at subscribe time, but the name
                     // can be re-pointed at an internal address afterwards.
-                    let agent;
-                    try {
-                        agent = await createPinnedHttpsAgent(sub.endpoint);
-                    } catch (err) {
-                        if (logger) logger.warn({ err: err.message, user }, 'push endpoint blocked');
-                        continue;
-                    }
+                    agent = await createPinnedHttpsAgent(sub.endpoint);
+                } catch (err) {
+                    if (logger) logger.warn({ err: err.message, user }, 'push endpoint blocked');
+                    continue;
+                }
+                try {
                     await webpush.sendNotification(
                         { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth_key } },
                         payload,
                         agent ? { agent } : undefined
                     );
+                    markDelivered.run(user, sub.endpoint, unseen);
                 } catch (err) {
                     if (err.statusCode === 410 || err.statusCode === 404) {
                         pushStore.delete({ endpoint: sub.endpoint, user });
+                        dropDelivered.run(user, sub.endpoint);
                         if (logger) logger.info({ user, endpoint: sub.endpoint }, 'removed expired push subscription');
                     } else {
+                        // Retryable failure: keep this endpoint's watermark
+                        // where it is so the next tick retries it, and hold
+                        // back the user-level watermark so the notification
+                        // cannot be dropped for good.
+                        settled = false;
                         if (logger) logger.warn({ err: err.message, user }, 'push send failed');
                     }
+                } finally {
+                    // Each send builds its own pinned Agent, which owns a
+                    // connection pool and keep-alive timers. Without this,
+                    // repeated sends accumulate one pool each.
+                    if (agent && typeof agent.destroy === 'function') agent.destroy();
                 }
             }
-        }
 
-        setLast.run(user, unseen, Date.now());
+            if (settled) {
+                setLast.run(user, unseen, Date.now());
+                // Every endpoint is now level with the user watermark, so the
+                // per-endpoint rows only matter while a retry is outstanding.
+                clearDelivered.run(user);
+            } else {
+                // Refresh last_check without moving the watermark: the count
+                // is still owed to the endpoints that failed.
+                setLast.run(user, lastUnseen, Date.now());
+            }
+        } else {
+            // Nothing new to announce (the count fell or stayed level). Any
+            // per-endpoint watermark above the current count would suppress
+            // future notifications, so reset everything to the fresh count.
+            clearDelivered.run(user);
+            setLast.run(user, unseen, Date.now());
+        }
     }
 
-    async function tick() {
+    // The poll currently in flight, so stop() can wait for it before closing
+    // push.db: a confirmed send must be able to write its watermark first,
+    // or the notification is lost or re-sent after the restart.
+    let inFlight = null;
+
+    function tick() {
+        const p = runTick();
+        inFlight = p;
+        void p.finally(() => { if (inFlight === p) inFlight = null; });
+        return p;
+    }
+
+    async function runTick() {
         if (!enabled || running) return;
         running = true;
         try {
-            // We need credentials to check IMAP. Use active sessions.
-            const sessions = cache.listActiveSessions ? cache.listActiveSessions() : [];
+            // We need credentials to check IMAP. Use active sessions. A null
+            // cache (the documented fail-open mode) simply means no sessions
+            // to poll — not a poll failure.
+            const sessions = (cache && typeof cache.listActiveSessions === 'function')
+                ? cache.listActiveSessions()
+                : [];
             if (!sessions.length) return;
 
             // Deduplicate by user — a user may have multiple active sessions.
@@ -139,10 +209,14 @@ function createPushSender({ config, pushStore, pool, cache, logger }) {
             clearInterval(timer);
             timer = null;
         }
-        // This module opens its own handle to push.db (a second writer
-        // alongside pushStore). Leaving it open leaked an fd per build()
-        // and left the WAL un-checkpointed across restarts.
-        try { db.close(); } catch { /* already closed */ }
+        // Close push.db only after the in-flight poll has finished its
+        // writes (see the inFlight comment above), then release the handle:
+        // this module is a second writer alongside pushStore, and leaving it
+        // open leaked an fd per build() and left the WAL un-checkpointed
+        // across restarts.
+        return (inFlight || Promise.resolve()).then(() => {
+            try { db.close(); } catch { /* already closed */ }
+        });
     }
 
     return { start, stop, tick, enabled };

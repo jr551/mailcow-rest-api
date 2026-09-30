@@ -324,12 +324,10 @@
 {#if open}
     <div
         class="events-scan-overlay"
-        role="dialog"
-        aria-modal="true"
-        aria-label="AI calendar scan"
+        role="presentation"
         onclick={handleBackdrop}
     >
-        <div class="panel" role="document">
+        <div class="panel" role="dialog" aria-modal="true" aria-label="AI calendar scan" tabindex="-1">
             <header class="panel-header">
                 <div class="panel-title">
                     <Icon name="calendar" size={16} />

@@ -30,6 +30,15 @@
         drive: DriveView,
     };
 
+    // Svelte 5: dynamic components are just capitalized tags — no
+    // `<svelte:component>` wrapper. The AI tab is gone from the bottom
+    // nav when AI is hard-off, so `view === 'ai'` can still be reached
+    // from a stale history entry or a notification tap. Redirect to the
+    // inbox rather than rendering an AI surface the user switched off.
+    const CurrentView = $derived(
+        mobileState.view === 'ai' && !settings.aiFeatures ? InboxView : views[mobileState.view]
+    );
+
     $effect(() => {
         if (authState.activeUser) {
             probeCapabilities();
@@ -150,12 +159,7 @@
     <div class="mobile-shell">
         {#key mobileState.view}
             <div class="view-wrap fade-in">
-                <!-- The AI tab is gone from the bottom nav when AI is hard-off,
-                     so `view === 'ai'` can still be reached from a stale
-                     history entry or a notification tap. Redirect to the
-                     inbox rather than rendering an AI surface the user
-                     switched off. -->
-                <svelte:component this={mobileState.view === 'ai' && !settings.aiFeatures ? InboxView : views[mobileState.view]} />
+                <CurrentView />
             </div>
         {/key}
         {#if mobileState.view !== 'message' && mobileState.view !== 'compose'}

@@ -264,13 +264,13 @@
 
 <svelte:window on:keydown={onKey} />
 
-<div class="scrim" role="presentation" onclick={close}>
+<div class="scrim" role="presentation" onclick={(e) => { if (e.target === e.currentTarget) close(); }}>
     <div
         class="card glossy"
         role="dialog"
         aria-modal="true"
         aria-label="Inbox briefing"
-        onclick={(e) => e.stopPropagation()}
+        tabindex="-1"
         data-testid="inbox-summary-modal"
     >
         <header class="head">
@@ -360,6 +360,14 @@
                                     </span>
                                 {/if}
                                 <span class="sev-pill" aria-hidden="true">{severityLabel(a.severity)}</span>
+                                <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+                                <!-- role/tabindex are dynamic: this row is
+                                     only a button when the action has a
+                                     refUid to jump to — role="button" +
+                                     tabindex=0 + Enter/Space in that case,
+                                     inert (tabindex=-1) otherwise. The
+                                     static analysis sees the `undefined`
+                                     branch and can't tell. -->
                                 <div
                                     class="action-main"
                                     role={a.refUid && onJumpToUid ? 'button' : undefined}
@@ -451,6 +459,9 @@
                                         </span>
                                     {/if}
                                     <span class="info-dot" aria-hidden="true"></span>
+                                    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+                                    <!-- Dynamic role/tabindex like the
+                                         action-main rows above. -->
                                     <div
                                         class="info-main"
                                         role={a.refUid && onJumpToUid ? 'button' : undefined}
