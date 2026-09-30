@@ -9,6 +9,8 @@ const Database = require('better-sqlite3');
 function createPushStore({ filePath }) {
     const db = new Database(filePath);
     db.pragma('journal_mode = WAL');
+    db.pragma('synchronous = NORMAL');
+    db.pragma('busy_timeout = 2000');
     db.exec(`
         CREATE TABLE IF NOT EXISTS push_subs (
             endpoint TEXT PRIMARY KEY,

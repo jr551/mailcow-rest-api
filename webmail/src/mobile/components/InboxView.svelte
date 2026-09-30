@@ -141,7 +141,9 @@
             const fresh = r.messages.filter((m) => !seen.has(m.uid));
             mobileState.messages = [...mobileState.messages, ...fresh];
             mobileState.messagesTotal = r.total;
-        } catch { /* silent */ }
+        } catch {
+            showToast('error', "Couldn't load more messages");
+        }
         finally { appending = false; }
     }
 
@@ -182,7 +184,9 @@
             const r = await modifyFlags(mobileState.selectedPath, uid, isFlagged ? { remove: ['\\Flagged'] } : { add: ['\\Flagged'] });
             li.flags = r.flags;
             if (mobileState.detail && mobileState.detail.uid === uid) mobileState.detail.flags = r.flags;
-        } catch { /* silent */ }
+        } catch {
+            showToast('error', "Couldn't update star");
+        }
     }
 
     async function trashMessage(uid: number) {
@@ -451,7 +455,10 @@
             const fresh = await getMessage(mobileState.selectedPath, msg.uid);
             actionSheetDetail = fresh;
         } catch {
-            /* detail not required for most actions */
+            // Sheet stays open for the non-detail actions; Summarize is
+            // already guarded by `if (!detail)` inside MessageActionSheet,
+            // so a failed fetch cannot trigger a paid call on an empty body.
+            showToast('error', "Couldn't load message details");
         } finally {
             actionSheetDetailLoading = false;
         }

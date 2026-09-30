@@ -1317,6 +1317,7 @@
         <div
             class="body"
             class:reply-mode={replyMode === 'reply' || replyMode === 'replyAll'}
+            class:sparkle={draftSparkleTick > 0}
             onfocusout={(e) => {
                 // When the user clicks outside the body editor and the
                 // setting is on, ask the AI for a subject. The focusout
@@ -1804,8 +1805,12 @@
         gap: 8px;
         margin: 6px 14px 10px;
         padding: 8px 12px;
-        background: color-mix(in srgb, var(--accent) 7%, var(--bg-surface));
-        border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border-subtle));
+        /* Deliberately louder than the page surface: a stronger accent
+           wash plus a left accent bar so the strip reads as a distinct
+           "AI insight" callout in both light and dark themes. */
+        background: color-mix(in srgb, var(--accent) 17%, var(--bg-surface));
+        border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border-subtle));
+        border-left: 3px solid var(--accent);
         border-radius: 10px;
         font-size: 12.5px;
         line-height: 1.45;
@@ -2066,8 +2071,23 @@
         80%  { box-shadow: 0 0 0 8px color-mix(in srgb, var(--accent) 0%, transparent); }
         100% { box-shadow: 0 0 0 0 transparent; }
     }
+    /* The "magic dust" flourish: flashDraftSparkle() holds
+       draftSparkleTick above zero for ~1.4 s after an AI draft is
+       inserted, and this class plays a one-shot accent sweep across the
+       editor so the insert is felt rather than silently swapping text. */
+    .body.sparkle :global(.rich-editor) {
+        animation: draft-sparkle 1.2s cubic-bezier(0.2, 0.7, 0.2, 1) 1;
+    }
+    @keyframes draft-sparkle {
+        0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 0%, transparent); }
+        35%  { box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 55%, transparent),
+                          0 0 20px 3px color-mix(in srgb, var(--accent) 40%, transparent);
+               border-color: var(--accent); }
+        100% { box-shadow: 0 0 0 0 transparent; }
+    }
     @media (prefers-reduced-motion: reduce) {
         .body.reply-mode :global(.rich-editor) { animation: none; }
+        .body.sparkle :global(.rich-editor) { animation: none; }
     }
     /* Action bar. OWA separates the composer's switches from its primary
      * pair with a rule and a lot of space, so Send keeps the eye. */
