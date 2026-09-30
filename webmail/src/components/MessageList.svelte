@@ -6,7 +6,6 @@
     import Avatar from './Avatar.svelte';
     import VipBadge from './VipBadge.svelte';
     import { settings, setListFilter, isVipAddress, type ListFilter } from '../lib/settings.svelte';
-    import { aiAvailable } from '../lib/settings.svelte';
     import { getCachedScan } from '../lib/phishing-scan';
     import Icon from './Icon.svelte';
     import { buildThreads, type Thread } from '../lib/threads';
@@ -14,7 +13,7 @@
     import type { MessageListItem } from '../lib/api';
     import { playSortDone, playClick } from '../lib/sounds.svelte';
     import { runSpamSweep, bulkMove, findArchiveFolder, findTrashFolder, type SweepCandidate } from '../lib/spam-sweep';
-    import { listMailboxes, modifyFlags, draftTakeoverReply } from '../lib/api';
+    import { listMailboxes, modifyFlags } from '../lib/api';
     import { showToast } from '../lib/store.svelte';
     import EventsScanPanel from './EventsScanPanel.svelte';
     import MenuSubmenu, { type SubmenuItem } from './MenuSubmenu.svelte';
@@ -520,27 +519,6 @@
     let ruleFromMessage = $state<MessageListItem | null>(null);
     function openRuleFromMessage(m: MessageListItem) {
         ruleFromMessage = m;
-    }
-
-    // "Draft a reply with AI" — hands the right-clicked message to the
-    // takeover assistant's on-demand endpoint. The draft still lands in the
-    // normal approval gate (approve email / pending send); this call only
-    // STARTS drafting, which is why the success toast says so. uid is read
-    // BEFORE closeCtx() for the same reason every other item does it:
-    // closeCtx nulls `ctx` synchronously, so anything still reading ctx
-    // afterwards throws.
-    async function draftReplyWithAi() {
-        const target = ctx?.uid;
-        if (target == null) return;
-        const mailbox = ui.selectedPath;
-        closeCtx();
-        try {
-            await draftTakeoverReply(mailbox, target);
-            showToast('success', 'Assistant is drafting a reply — you\'ll approve it before it sends');
-        } catch (err) {
-            const msg = err instanceof Error ? err.message : 'Could not start the draft';
-            showToast('error', msg);
-        }
     }
 
     /**
@@ -1815,15 +1793,6 @@
             <li><button type="button" role="menuitem" onclick={() => { openRuleFromMessage(m); closeCtx(); }}>
                 <Icon name="filter" size={12} /> Create rule from message
             </button></li>
-            <!-- Gated on aiAvailable() rather than the takeover toggle:
-                 this is the on-demand path — the assistant is asked to draft
-                 one reply NOW, and the result still waits for approval like
-                 every other send. -->
-            {#if aiAvailable()}
-                <li><button type="button" role="menuitem" onclick={draftReplyWithAi}>
-                    <Icon name="sparkles" size={12} /> Draft a reply with AI
-                </button></li>
-            {/if}
             {#if onMove && ui.mailboxes.length}
                 {@const bulkN = ui.selected.has(ctx.uid) ? ui.selected.size : 0}
                 <!-- The folder list lives in a submenu, NOT inline. Dumping

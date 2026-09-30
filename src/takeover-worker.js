@@ -2,7 +2,6 @@
 
 const crypto = require('node:crypto');
 const { withClient: pooledWithClient, withMailbox, walkStructure, downloadPartText } = require('./imap');
-const { hashCreds } = require('./cache');
 const { htmlToText } = require('./webhook-payload');
 const { chat: defaultChat, resolveProvider: defaultResolveProvider } = require('./llm');
 
@@ -10,17 +9,28 @@ const { chat: defaultChat, resolveProvider: defaultResolveProvider } = require('
 //
 // Every poll it looks at unread INBOX mail for each user who has switched the
 // feature on, decides which messages a real person is actually waiting on,
-// drafts a reply in the owner's voice, and then STOPS.
+// and drafts a reply in the owner's voice.
 //
-// THE ONLY EXIT TO A MESSAGE IS THE INJECTED `deliver` FUNCTION. In
-// production that function self-POSTs to http://127.0.0.1:<port>/v1/messages/send
-// with `Authorization: Basic base64(user:pass)`, and that route's Basic-auth
-// branch (src/routes/send.js:278, `if (isBasicAuth(req))`) creates a pending
-// approval record and mails the owner an approve/deny link instead of
-// sending. This module therefore has no SMTP access, no send path and no
-// ability to reach a recipient on its own. The rate limit and the delay below
-// are enforced here, in code, before any model is asked to write anything —
-// never as a request in a prompt.
+// THERE ARE EXACTLY TWO EXITS TO A MESSAGE, both injected as dependencies:
+//
+//   * `deliver` — the approval gate. In production it self-POSTs to
+//     http://127.0.0.1:<port>/v1/messages/send with
+//     `Authorization: Basic base64(user:pass)`, and that route's Basic-auth
+//     branch (src/routes/send.js, `if (isBasicAuth(req))`) creates a pending
+//     approval record and mails the owner an approve/deny link instead of
+//     sending. The owner's click is what sends the mail.
+//   * `send` — the direct path (src/server.js createTakeoverSendNow): the
+//     same in-process sendMessage the send route uses, plus the Sent-folder
+//     copy. It runs ONLY for a draft the model marked REPLY: (confident)
+//     while the owner has autoSend switched on, and ONLY when the wiring
+//     injected it. A draft the model marked UNSURE: never takes this exit,
+//     and neither does anything at all when `send` is absent — that is what
+//     keeps old deployments and tests on the approval gate.
+//
+// The rate limit and the delay below are enforced here, in code, before any
+// model is asked to write anything — never as a request in a prompt. The
+// hourly limit counts both exits: markReplySent runs on a direct send and on
+// a draft handed to the approval gate alike.
 //
 // Order of work per candidate, and why:
 //
@@ -33,18 +43,15 @@ const { chat: defaultChat, resolveProvider: defaultResolveProvider } = require('
 //      free and the message is picked up by a later poll)
 //   5. hourly rate limit → defer
 //   6. model classification: does a human await a reply? → skip if not
-//   7. model draft → either a reply, or an explicit NEEDS INPUT listing what
-//      the assistant refuses to guess at
-//   8. deliver → the approval gate
+//   7. model draft → REPLY: (confident), UNSURE: (right-shaped but would not
+//      bet on it), or an explicit NEEDS INPUT listing what the assistant
+//      refuses to guess at — NEEDS INPUT always wins
+//   8. confident + autoSend + send wired → send directly; anything else →
+//      deliver → the approval gate
 //
 // Steps 4 and 5 deliberately run before the model is called: a message
 // waiting out its delay or the hourly slot costs zero model calls, and a
 // message that gets skipped as automated never costs one at all.
-
-// A second entry point sits alongside the poll: draftNow() runs this same
-// pipeline on ONE message chosen by uid when the owner asks for it. It is a
-// second ENTRY, not a second exit — the draft still ends at the approval
-// gate, never at a recipient.
 
 const HOUR_MS = 60 * 60 * 1000;
 const MINUTE_MS = 60 * 1000;
@@ -66,7 +73,7 @@ const TAKEOVER_CLASSIFY_SYSTEM = [
 ].join('\n');
 
 const TAKEOVER_REPLY_SYSTEM = [
-    'You draft an email reply on behalf of the mailbox owner. He reads it and approves it before it is sent; you never send anything.',
+    'You draft an email reply on behalf of the mailbox owner. A REPLY answer is sent to the recipient immediately, with no human reading it first — so a mistake goes out the door, not into a queue.',
     '',
     'The recipient is a real person. An over-polite, generic or padded reply is a failure. So is a fabricated fact. Write like a competent human being writing a short, direct email — not like an assistant performing helpfulness.',
     '',
@@ -76,18 +83,23 @@ const TAKEOVER_REPLY_SYSTEM = [
     'NEEDS INPUT:',
     '- <the specific fact or decision you need>',
     'One line per missing fact, naming it precisely enough that the owner can answer in a single line. Do not draft a reply around a hole.',
-    '3. If you have everything you need, answer with exactly:',
+    '3. Otherwise answer with EXACTLY ONE of:',
     'REPLY:',
     '<the reply body>',
-    '4. The reply body must end with exactly this signature and nothing else:',
-    '--',
-    'This reply came from my AI assistant.',
-    'No other mention of AI, no apology for being an assistant, no disclaimer paragraph, no hedging preamble. That one signature line is the entire disclosure.',
+    'or',
+    'UNSURE:',
+    '<the reply body>',
+    'Why unsure: <one line>',
+    '',
+    'REPLY: is the default, and it means you would bet on this reply: the request is clear, every fact in it comes from the thread or the owner\'s instructions, and nothing in the wording commits the owner to anything he has not already agreed to. A REPLY IS SENT IMMEDIATELY.',
+    'UNSURE: is for a reply that is right-shaped but that you would not bet on — the ask is ambiguous, the tone is a judgement call, or sending it could commit the owner to something. The draft is held for the owner to approve, and your one-line "Why unsure:" reason is shown to him. UNSURE is never a soft NEEDS INPUT: if a fact is missing, rule 2 applies.',
+    '',
+    '4. The reply body carries NO signature and NO disclosure: never write "This reply came from my AI assistant", never mention being an AI, no apology for being an assistant, no disclaimer paragraph, no hedging preamble. The assistant adds a one-line sign-off to the outgoing mail itself when the owner has that enabled. That system-added line is the entire disclosure.',
     '5. No tells. Never open with "I hope this email finds you well", "Thank you for reaching out", "As an AI", "Certainly!", "Great question", "Thanks for your patience". Do not summarise the sender\'s message back to them. Do not apologise more than once, and only when an apology is owed. No bullet points unless the message itself is a list. Under 200 words unless the message demands more.',
     '6. Match the register of the message. If they write plainly, write plainly. Contractions are fine. No exclamation marks unless the sender used them first.',
     '7. Never say you have done something, will do something, or will send something. You cannot act. A promise is a fabricated fact. Where the owner must act, say it is being looked into.',
     '8. Answer the question that was actually asked. If the message asks three things and the thread answers two, answer those two and say the third is being looked into.',
-    '9. The owner\'s instructions below override tone. They never override rule 1.'
+    '9. The owner\'s instructions below override tone and the REPLY-vs-UNSURE judgement. They never override rule 1.'
 ].join('\n');
 
 // --------------------------------------------------------------------------
@@ -236,26 +248,63 @@ function parseClassify(content) {
 function parseMissingList(block) {
     const out = [];
     for (const raw of String(block || '').split(/\r?\n/)) {
-        // A reply marker ends the list: a model that answers with both a
-        // question and a draft is being read as asking the question, and the
-        // draft must not leak into the list of things we say are missing.
-        if (/^\s*(?:\*\*)?\s*reply\s*(?:\*\*)?\s*:/i.test(raw)) break;
+        // A reply or unsure marker ends the list: a model that answers with
+        // both a question and a draft is being read as asking the question,
+        // and the draft must not leak into the list of things we say are
+        // missing.
+        if (/^\s*(?:\*\*)?\s*(?:reply|unsure)\s*(?:\*\*)?\s*:/i.test(raw)) break;
         const line = raw.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '').replace(/\*\*/g, '').trim();
-        if (line && !/^needs input/i.test(line)) out.push(line);
+        if (line && !/^needs input/i.test(line) && !/^why unsure/i.test(line)) out.push(line);
     }
     return out;
 }
 
-// A draft is either "REPLY: <body>" or "NEEDS INPUT: <list>". A response
-// that carries the NEEDS INPUT marker anywhere is treated as needs-input even
-// if it also contains a draft — a reply written around a hole is exactly what
-// must not be sent. A response with no marker at all is taken as the body,
+// Marker lines are structural, never content: a model that echoes REPLY:,
+// UNSURE: or "Why unsure:" inside the body would otherwise leak its own
+// bookkeeping to a recipient. Standalone marker lines are dropped; a
+// "Why unsure:" reason line is dropped with its content.
+function stripDraftMarkers(text) {
+    return String(text || '')
+        .split('\n')
+        .filter((line) => !/^\s*(?:\*\*)?\s*(?:reply|unsure)\s*(?:\*\*)?\s*:\s*/i.test(line))
+        .filter((line) => !/^\s*(?:\*\*)?\s*why unsure\s*(?:\*\*)?\s*:/i.test(line))
+        .join('\n');
+}
+
+// An UNSURE answer is "<body>" followed by "Why unsure: <one line>". A
+// missing reason is not fatal — the approval email then just says less.
+function parseUnsure(chunk) {
+    const whyIdx = chunk.search(/(?:^|\n)\s*(?:\*\*)?\s*why unsure\s*(?:\*\*)?\s*:/i);
+    let reason = '';
+    let body = chunk;
+    if (whyIdx !== -1) {
+        body = chunk.slice(0, whyIdx);
+        const afterColon = chunk.indexOf(':', whyIdx) + 1;
+        reason = chunk.slice(afterColon).split('\n').map((l) => l.trim()).filter(Boolean)[0] || '';
+    }
+    return { body: stripDraftMarkers(body).trim(), reason: reason.slice(0, 500) };
+}
+
+// A draft is one of three shapes:
+//   REPLY: <body>                          — confident; sent when autoSend is on
+//   UNSURE:\n<body>\nWhy unsure: <reason>  — right-shaped; held for approval
+//   NEEDS INPUT: <list>                    — a fact is missing
+// A response that carries the NEEDS INPUT marker anywhere is treated as
+// needs-input even if it also contains a draft — a reply written around a
+// hole is exactly what must not be sent, so NEEDS INPUT always wins. An
+// UNSURE marker routes the draft to the approval gate with the model's
+// reason. A response with no marker at all is taken as a confident body,
 // because some models answer with the bare body despite the prompt.
 function parseDraft(content) {
     const text = String(content || '').replace(/\r\n/g, '\n');
     const needsIdx = text.search(/(?:^|\n)\s*(?:\*\*)?\s*needs input\s*(?:\*\*)?\s*:/i);
     if (needsIdx !== -1) {
         return { needsInput: true, missing: parseMissingList(text.slice(needsIdx)) };
+    }
+    const unsureIdx = text.search(/(?:^|\n)\s*(?:\*\*)?\s*unsure\s*(?:\*\*)?\s*:/i);
+    if (unsureIdx !== -1) {
+        const { body, reason } = parseUnsure(text.slice(unsureIdx));
+        return { needsInput: false, needsApproval: true, body, reason };
     }
     const replyIdx = text.search(/(?:^|\n)\s*(?:\*\*)?\s*reply\s*(?:\*\*)?\s*:/i);
     if (replyIdx !== -1) return { needsInput: false, body: text.slice(text.indexOf(':', replyIdx) + 1).trim() };
@@ -303,16 +352,20 @@ function unbackedFigures(body, sources) {
     return out;
 }
 
-// Append the disclosure exactly once. The model is told to include it and
-// sometimes does; if so its copy is dropped first so the sign-off is always
-// in one form and one place. Nothing else is added or removed.
-function finalizeReply(body) {
-    let text = String(body || '').replace(/\r\n/g, '\n').trimEnd();
+// Build the outgoing body. The model-authored markers are structural and
+// never travel, and the disclosure is appended exactly once — but only when
+// the owner has the sign-off switched on. The model is told not to write one
+// (rule 4 of the prompt); if it does anyway, its copy is dropped, so a
+// disabled sign-off stays disabled and an enabled one is never doubled.
+// Nothing else is added or removed.
+function finalizeReply(body, signReplies = true) {
+    let text = stripDraftMarkers(String(body || '')).replace(/\r\n/g, '\n').trimEnd();
     const sigIdx = text.lastIndexOf('\n-- \n');
     if (sigIdx !== -1 && /ai assistant/i.test(text.slice(sigIdx))) {
         text = text.slice(0, sigIdx).trimEnd();
     }
     text = text.replace(/\s*This reply came from my AI assistant\.?\s*$/i, '').trimEnd();
+    if (signReplies === false) return text;
     return `${text}\n\n${DISCLOSURE}`;
 }
 
@@ -355,6 +408,7 @@ function createTakeoverWorker(options = {}) {
         pool,
         logger,
         deliver,
+        send = null,
         llm = defaultChat,
         resolveProvider = defaultResolveProvider,
         withClient = pooledWithClient,
@@ -384,7 +438,7 @@ function createTakeoverWorker(options = {}) {
     // sessions to poll, so the worker stays inert. Throwing here instead
     // would reject build() outright and take every feature down with it.
     if (enabled && typeof deliver !== 'function') {
-        throw new Error('createTakeoverWorker: deliver is required when takeover is enabled — it is the only path to the approval gate');
+        throw new Error('createTakeoverWorker: deliver is required when takeover is enabled — it is the approval-gate path every unsure draft depends on');
     }
 
     let timer = null;
@@ -398,9 +452,10 @@ function createTakeoverWorker(options = {}) {
     const scanOffsets = new Map();
 
     // Messages mid-consideration, tagged by user + ledger key. wasProcessed
-    // only settles AFTER a draft is with the approval gate, so without this
-    // an on-demand draftNow() and a poll tick could both draft the same
-    // message and put two identical approvals in the owner's inbox.
+    // only settles AFTER a draft has reached an exit (direct send or the
+    // approval gate), so without this a poll tick overlapping a slow
+    // consider() could draft the same message twice and put two identical
+    // replies in front of the owner — or two copies in a recipient's inbox.
     const considering = new Set();
 
     function note(user, entry) {
@@ -562,11 +617,17 @@ function createTakeoverWorker(options = {}) {
 
     // --- model -----------------------------------------------------------
 
-    async function classify(provider, thread) {
+    async function classify(provider, thread, standingInstructions) {
+        // Standing instructions may scope what counts as needing a reply at
+        // all ("only client mail is important"), so the classifier sees them
+        // as context, not as commands that outrank its own rules.
+        const context = standingInstructions && standingInstructions.trim()
+            ? `\n\nThe owner's standing instructions for this assistant (context for what counts as needing a reply):\n${standingInstructions.trim()}\n`
+            : '';
         const result = await llm({
             provider,
             system: TAKEOVER_CLASSIFY_SYSTEM,
-            userPrompt: `Does the mailbox owner need to reply to this email?\n\n--- BEGIN MESSAGE ---\n${thread}\n--- END MESSAGE ---`,
+            userPrompt: `Does the mailbox owner need to reply to this email?\n\n--- BEGIN MESSAGE ---\n${thread}\n--- END MESSAGE ---${context}`,
             extra: { max_tokens: 300, response_format: { type: 'json_object' } }
         });
         if (!result || result.ok === false) {
@@ -577,14 +638,17 @@ function createTakeoverWorker(options = {}) {
         return parsed;
     }
 
-    async function draft(provider, thread, advice) {
-        const instructions = advice && advice.trim()
-            ? `\nOwner's instructions (verbatim, from the owner himself):\n${advice.trim()}\n`
+    async function draft(provider, thread, advice, standingInstructions) {
+        const standing = standingInstructions && standingInstructions.trim()
+            ? `\nOwner's standing instructions (verbatim, from the owner himself — these apply to every reply):\n${standingInstructions.trim()}\n`
+            : '';
+        const adviceBlock = advice && advice.trim()
+            ? `\nOwner's instructions for this thread (verbatim, from the owner himself):\n${advice.trim()}\n`
             : '';
         const result = await llm({
             provider,
             system: TAKEOVER_REPLY_SYSTEM,
-            userPrompt: `Draft the reply to this email.\n\n--- BEGIN MESSAGE ---\n${thread}\n--- END MESSAGE ---${instructions}`,
+            userPrompt: `Draft the reply to this email.\n\n--- BEGIN MESSAGE ---\n${thread}\n--- END MESSAGE ---${standing}${adviceBlock}`,
             extra: { max_tokens: 1200, temperature: 0.3 }
         });
         if (!result || result.ok === false) {
@@ -600,10 +664,9 @@ function createTakeoverWorker(options = {}) {
 
     // --- per message -----------------------------------------------------
 
-    // The guard shared by the poll and the on-demand path: one message may
-    // only be in consideration once. An "in-flight" outcome means another
-    // consider() for the same ledger key is already running — nothing new
-    // was decided, so nothing is recorded.
+    // The one-at-a-time guard for a message under consideration. An
+    // "in-flight" outcome means another consider() for the same ledger key
+    // is already running — nothing new was decided, so nothing is recorded.
     async function consider(user, message, ctx) {
         const tag = `${user}${message.key}`;
         if (considering.has(tag)) {
@@ -619,12 +682,6 @@ function createTakeoverWorker(options = {}) {
 
     async function considerMessage(user, message, ctx) {
         const { session, settings, open, now } = ctx;
-        // Forced means the owner asked for THIS message (draftNow): the
-        // autonomous governors — the lookback window, the delay and the
-        // hourly rate — do not apply to an explicit request. Dedup, the
-        // automated-sender check, the model judgement and the approval gate
-        // still run exactly as on a poll.
-        const forced = ctx.forced === true;
         const key = message.key;
 
         if (store.wasProcessed(user, key)) {
@@ -651,7 +708,7 @@ function createTakeoverWorker(options = {}) {
         }
 
         const lookbackMs = (settings.lookbackHours || defaultLookbackHours) * 60 * MINUTE_MS;
-        if (!forced && message.date && message.age > lookbackMs) {
+        if (message.date && message.age > lookbackMs) {
             store.recordProcessed(user, key, 'out-of-window', now);
             note(user, {
                 messageId: key,
@@ -667,11 +724,10 @@ function createTakeoverWorker(options = {}) {
 
         // The hard delay. Nothing has been drafted, nothing has been sent;
         // the message simply waits for a later poll. 5 minutes is the floor
-        // the owner asked for and the store will not accept less. A forced
-        // draft skips it: the owner is asking for this one right now.
+        // the owner asked for and the store will not accept less.
         const delayMs = (settings.minDelayMinutes || defaultMinDelayMinutes) * MINUTE_MS;
         const ageMs = Number.isFinite(message.date) ? message.age : delayMs;
-        if (!forced && ageMs < delayMs) {
+        if (ageMs < delayMs) {
             const waitMinutes = Math.ceil((delayMs - ageMs) / MINUTE_MS);
             note(user, {
                 messageId: key,
@@ -685,14 +741,14 @@ function createTakeoverWorker(options = {}) {
             };
         }
 
-        // The hard rate limit. It counts drafts handed to the approval gate,
-        // so a draft that stopped for a missing fact does not use a slot.
-        // Forced drafts pass: the throttle exists to slow an autonomous
-        // assistant, not to tell the owner "no" to a direct request — and
-        // the approval gate still holds every draft.
+        // The hard rate limit. It counts every reply that reached an exit —
+        // a direct auto-send and a draft handed to the approval gate alike
+        // (both call markReplySent), so auto-send does not double the
+        // outbound volume. A draft that stopped for a missing fact does not
+        // use a slot: nothing left the server for it.
         const maxPerHour = settings.maxRepliesPerHour ?? defaultMaxRepliesPerHour;
         const sent = store.repliesSince(user, now - HOUR_MS);
-        if (!forced && sent >= maxPerHour) {
+        if (sent >= maxPerHour) {
             note(user, {
                 messageId: key,
                 decision: 'rate-limited',
@@ -716,7 +772,7 @@ function createTakeoverWorker(options = {}) {
         );
         message.snippet = clip(body, 2000);
 
-        const classification = await classify(provider, thread);
+        const classification = await classify(provider, thread, settings.instructions);
         if (classification.error) {
             return stopAndAsk(user, message, {
                 missing: [],
@@ -740,7 +796,7 @@ function createTakeoverWorker(options = {}) {
 
         const advice = store.adviceFor(user, key);
         const instruction = advice ? advice.advice : '';
-        const drafted = await draft(provider, thread, instruction);
+        const drafted = await draft(provider, thread, instruction, settings.instructions);
         if (drafted.error) {
             return stopAndAsk(user, message, {
                 missing: [],
@@ -778,7 +834,9 @@ function createTakeoverWorker(options = {}) {
             });
         }
 
-        const text = finalizeReply(drafted.body);
+        // The sign-off knob: the owner decides whether outgoing replies
+        // carry the one-line AI disclosure.
+        const text = finalizeReply(drafted.body, settings.signReplies !== false);
         const outgoing = {
             to: [message.replyTo].filter(Boolean),
             cc: [],
@@ -796,10 +854,58 @@ function createTakeoverWorker(options = {}) {
             });
         }
 
-        // THE ONLY EXIT. deliver() must reject if the approval request was
-        // not created; in production it self-POSTs to /v1/messages/send with
-        // Basic auth, which is what puts the draft in front of the owner
-        // instead of in front of the recipient.
+        // Confident draft + auto-send on + a wired send path → the reply
+        // leaves directly. Everything else — an UNSURE draft, autoSend off,
+        // or a deployment that injected no send function — goes to the
+        // approval gate below. A send failure blocks rather than falls back
+        // to deliver: the owner must choose between "sent" and "not sent",
+        // never get both.
+        if (drafted.needsApproval !== true && settings.autoSend !== false && typeof send === 'function') {
+            let sent;
+            try {
+                sent = await send({
+                    user,
+                    pass: session.pass,
+                    hash: session.hash,
+                    messageId: key,
+                    message: outgoing
+                });
+            } catch (err) {
+                return stopAndAsk(user, message, {
+                    missing: [],
+                    decision: 'blocked',
+                    reason: `Couldn't continue: the reply could not be sent (${String(err && err.message || err).slice(0, 200)}). Nothing was sent.`
+                });
+            }
+            const sendRefusal = deliverRefusal(sent);
+            if (sendRefusal) {
+                return stopAndAsk(user, message, {
+                    missing: [],
+                    decision: 'blocked',
+                    reason: `Couldn't continue: the direct send was refused (${sendRefusal}). Nothing was sent.`
+                });
+            }
+            store.markReplySent(user, key, now);
+            store.recordProcessed(user, key, 'sent', now);
+            const sentReason = 'The assistant was confident in this reply and auto-send is on, so it sent it directly.';
+            note(user, {
+                messageId: key,
+                decision: 'sent',
+                reason: sentReason,
+                at: now
+            });
+            return { decision: 'sent', reason: sentReason };
+        }
+
+        // THE APPROVAL EXIT. deliver() must reject if the approval request
+        // was not created; in production it self-POSTs to /v1/messages/send
+        // with Basic auth, which is what puts the draft in front of the owner
+        // instead of in front of the recipient. An UNSURE draft rides with
+        // the model's own reason so the approval email says why it was held;
+        // the reason is approval-metadata and never reaches the recipient.
+        const approvalMessage = drafted.needsApproval && drafted.reason
+            ? { ...outgoing, unsureReason: drafted.reason }
+            : outgoing;
         let result;
         try {
             result = await deliver({
@@ -807,7 +913,7 @@ function createTakeoverWorker(options = {}) {
                 pass: session.pass,
                 hash: session.hash,
                 messageId: key,
-                message: outgoing
+                message: approvalMessage
             });
         } catch (err) {
             return stopAndAsk(user, message, {
@@ -827,7 +933,9 @@ function createTakeoverWorker(options = {}) {
 
         store.markReplySent(user, key, now);
         store.recordProcessed(user, key, 'drafted', now);
-        const draftedReason = 'A reply was drafted and is waiting for you to approve it. It has not been sent.';
+        const draftedReason = drafted.needsApproval
+            ? 'The assistant drafted a reply but is unsure of it, so it is waiting for you to approve it. It has not been sent — the approval email says why the assistant held back.'
+            : 'A reply was drafted and is waiting for you to approve it. It has not been sent.';
         note(user, {
             messageId: key,
             decision: 'drafted',
@@ -896,81 +1004,6 @@ function createTakeoverWorker(options = {}) {
             // still there and the next poll will read it.
             logger?.warn({ err: err.message, user }, 'takeover: could not read INBOX');
         }
-    }
-
-    // Draft a reply to ONE named message on demand — the route's
-    // POST /v1/me/takeover/draft lands here. The pipeline is the same one a
-    // poll runs (consider(), then deliver() into the approval gate), except
-    // `forced` lifts the autonomous governors: lookback, the minimum delay
-    // and the hourly rate exist to slow an unattended assistant, and the
-    // owner is asking for this message right now. Dedup (wasProcessed), the
-    // needs-input overlap, the automated-sender check, the model judgement
-    // and the approval gate all still apply — nothing here can send.
-    //
-    // Returns a resolved outcome: { ok: true, decision, reason } from the
-    // draft path itself, or { ok: false, status, message } when the draft
-    // could not even start so the route can map it to an HTTP status.
-    // `creds` is the caller's { user, pass, hash } (req.creds); it is what
-    // the self-POST to the approval gate authenticates with, exactly like
-    // the session credential a poll would use.
-    async function draftNow(user, { mailbox = 'INBOX', uid, creds } = {}) {
-        if (!enabled || stopped) {
-            return { ok: false, status: 404, message: 'The assistant is not running' };
-        }
-        const n = Number(uid);
-        if (!Number.isInteger(n) || n <= 0) {
-            return { ok: false, status: 400, message: 'uid must be a positive integer' };
-        }
-        const session = creds && creds.pass
-            ? {
-                user: creds.user || user,
-                pass: creds.pass,
-                hash: creds.hash || hashCreds(creds.user || user, creds.pass)
-            }
-            : null;
-        if (!session) {
-            return { ok: false, status: 400, message: 'No credentials available to draft with' };
-        }
-
-        const settings = store.get(user);
-        if (!settings.enabled) {
-            return { ok: false, status: 404, message: 'The assistant is switched off for this account' };
-        }
-
-        const now = clock();
-        const open = new Map(store.listNeedsInput(user).map((item) => [item.messageId, item]));
-
-        // Same pool and same read-only mailbox lock as a poll. The body of
-        // withClient below mirrors processUser's inner block; a connection
-        // or mailbox failure escapes to the route as a 502 (fromImapError),
-        // never as a fabricated "not found".
-        return withClient(pool, session, async (client) =>
-            withMailbox(client, String(mailbox), true, async () => {
-                const message = await fetchCandidate(client, n, now);
-                if (!message) {
-                    return { ok: false, status: 404, message: `No message with uid ${n} in ${mailbox}` };
-                }
-                try {
-                    const outcome = await consider(user, message, {
-                        session, settings, open, now, client, forced: true
-                    });
-                    return { ok: true, queued: outcome.decision === 'drafted', ...outcome };
-                } catch (err) {
-                    // Same failure policy as the poll path: a mid-draft
-                    // crash becomes a needs-input item, never a send and
-                    // never an unhandled rejection.
-                    logger?.warn({ err: err.message, user, uid: n }, 'takeover: on-demand draft failed mid-consideration');
-                    return {
-                        ok: true,
-                        ...(await Promise.resolve(stopAndAsk(user, message, {
-                            missing: [],
-                            decision: 'blocked',
-                            reason: `Couldn't continue: ${String((err && err.message) || err).slice(0, 200)}. Nothing was sent.`
-                        })))
-                    };
-                }
-            })
-        );
     }
 
     // The pass currently in flight, so stop() can wait for its bookkeeping
@@ -1047,7 +1080,7 @@ function createTakeoverWorker(options = {}) {
         tick();
     }
 
-    return { start, stop, tick, wake, draftNow, enabled };
+    return { start, stop, tick, wake, enabled };
 }
 
 // A message with no Message-ID header still has to be tracked, or it would

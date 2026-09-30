@@ -16,7 +16,10 @@ const Database = require('better-sqlite3');
 //
 //   * settings      — per-user opt-in and the tuning knobs. The rate limit
 //                     and the minimum delay are enforced from this table by
-//                     the worker, never by the prompt.
+//                     the worker, never by the prompt. The owner's standing
+//                     instructions, the auto-send switch (confident drafts
+//                     leave directly when it is on) and the sign-off switch
+//                     live here too; the instructions are encrypted at rest.
 //   * processed     — every message that has reached a terminal outcome, so
 //                     a restart or a second poll never re-drafts it.
 //   * needs_input   — the "couldn't continue" queue: one row per message the
@@ -40,7 +43,8 @@ const Database = require('better-sqlite3');
 // secretBox before it touches disk. Quoted message text is not a credential,
 // but it routinely carries them — password resets, order numbers, one-time
 // codes — and a leaked sqlite file is the realistic threat, so the free-text
-// columns (reason, thread snippet, advice, decision detail) are encrypted
+// columns (reason, thread snippet, advice, decision detail, standing
+// instructions) are encrypted
 // and only the short structured fields (ids, outcome codes, missing-fact
 // labels) are stored in the clear.
 
@@ -54,7 +58,18 @@ const SETTINGS = {
     maxRepliesPerHour: { column: 'max_replies_per_hour', type: 'int', def: 1, min: 0, max: 24 },
     minDelayMinutes: { column: 'min_delay_minutes', type: 'int', def: 5, min: 5, max: 1440 },
     lookbackHours: { column: 'lookback_hours', type: 'int', def: 24, min: 1, max: 720 },
-    considerAttachments: { column: 'consider_attachments', type: 'boolean', def: false }
+    considerAttachments: { column: 'consider_attachments', type: 'boolean', def: false },
+    // Standing instructions the owner wrote once ("never promise delivery
+    // dates"), carried into every draft prompt. Free text that routinely
+    // names real people and commitments, so it is sealed like the other
+    // free-text columns. `max` is a hard cap enforced in set().
+    instructions: { column: 'instructions', type: 'string', def: '', max: 2000 },
+    // Confident drafts (the model answers REPLY:) leave directly when this
+    // is on; with it off every draft waits at the approval gate. UNSURE and
+    // NEEDS INPUT drafts always wait, whatever this says.
+    autoSend: { column: 'auto_send', type: 'boolean', def: true },
+    // The one-line AI sign-off on outgoing replies.
+    signReplies: { column: 'sign_replies', type: 'boolean', def: true }
 };
 
 const MAX_MISSING = 20;
@@ -70,12 +85,15 @@ function clampInt(value, spec, fallback) {
 }
 
 // Build the state for a row, falling back to the configured default when the
-// row is missing or a column is unreadable.
-function toState(row, base) {
+// row is missing or a column is unreadable. String settings are stored
+// sealed; a tampered or wrong-key payload decrypts to null and reads as the
+// default — the same honest fallback the needs-input columns use.
+function toState(row, base, secretBox) {
     const out = { ...base };
     if (!row) return out;
     for (const [key, spec] of Object.entries(SETTINGS)) {
         if (spec.type === 'boolean') out[key] = !!row[spec.column];
+        else if (spec.type === 'string') out[key] = secretBox.decrypt(row[spec.column] || '') || '';
         else out[key] = clampInt(row[spec.column], spec, out[key]);
     }
     return out;
@@ -126,6 +144,9 @@ function createTakeoverStore({ filePath, secretBox, maxPerUser = 50, defaults = 
             min_delay_minutes INTEGER NOT NULL DEFAULT 5,
             lookback_hours INTEGER NOT NULL DEFAULT 24,
             consider_attachments INTEGER NOT NULL DEFAULT 0,
+            instructions TEXT NOT NULL DEFAULT '',
+            auto_send INTEGER NOT NULL DEFAULT 1,
+            sign_replies INTEGER NOT NULL DEFAULT 1,
             updated_at INTEGER NOT NULL DEFAULT 0
         );
 
@@ -179,17 +200,37 @@ function createTakeoverStore({ filePath, secretBox, maxPerUser = 50, defaults = 
             ON takeover_replies (user, at);
     `);
 
+    // CREATE TABLE IF NOT EXISTS does not extend a table an older version
+    // already made, so an upgrade on a live takeover.db lands here: add any
+    // settings column this version expects that the file lacks.
+    const settingsColumns = new Set(
+        db.prepare('PRAGMA table_info(takeover_settings)').all().map((c) => c.name)
+    );
+    if (!settingsColumns.has('instructions')) {
+        db.exec("ALTER TABLE takeover_settings ADD COLUMN instructions TEXT NOT NULL DEFAULT ''");
+    }
+    if (!settingsColumns.has('auto_send')) {
+        db.exec('ALTER TABLE takeover_settings ADD COLUMN auto_send INTEGER NOT NULL DEFAULT 1');
+    }
+    if (!settingsColumns.has('sign_replies')) {
+        db.exec('ALTER TABLE takeover_settings ADD COLUMN sign_replies INTEGER NOT NULL DEFAULT 1');
+    }
+
     const getSettingsStmt = db.prepare('SELECT * FROM takeover_settings WHERE user = ?');
     const upsertSettingsStmt = db.prepare(`
         INSERT INTO takeover_settings
-            (user, enabled, max_replies_per_hour, min_delay_minutes, lookback_hours, consider_attachments, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+            (user, enabled, max_replies_per_hour, min_delay_minutes, lookback_hours, consider_attachments,
+             instructions, auto_send, sign_replies, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(user) DO UPDATE SET
             enabled = excluded.enabled,
             max_replies_per_hour = excluded.max_replies_per_hour,
             min_delay_minutes = excluded.min_delay_minutes,
             lookback_hours = excluded.lookback_hours,
             consider_attachments = excluded.consider_attachments,
+            instructions = excluded.instructions,
+            auto_send = excluded.auto_send,
+            sign_replies = excluded.sign_replies,
             updated_at = excluded.updated_at
     `);
     const enabledUsersStmt = db.prepare('SELECT user FROM takeover_settings WHERE enabled = 1 ORDER BY user');
@@ -263,9 +304,13 @@ function createTakeoverStore({ filePath, secretBox, maxPerUser = 50, defaults = 
     const baseState = {};
     for (const [key, spec] of Object.entries(SETTINGS)) {
         const raw = defaults[key];
-        baseState[key] = spec.type === 'boolean'
-            ? (typeof raw === 'boolean' ? raw : spec.def)
-            : clampInt(raw, spec, spec.def);
+        if (spec.type === 'boolean') {
+            baseState[key] = typeof raw === 'boolean' ? raw : spec.def;
+        } else if (spec.type === 'string') {
+            baseState[key] = typeof raw === 'string' ? raw.slice(0, spec.max) : spec.def;
+        } else {
+            baseState[key] = clampInt(raw, spec, spec.def);
+        }
     }
     // `enabled` is the user's own opt-in and never inherits from the
     // deployment config. The global switch decides whether the feature runs
@@ -276,11 +321,12 @@ function createTakeoverStore({ filePath, secretBox, maxPerUser = 50, defaults = 
 
     // --- settings -------------------------------------------------------
 
-    // Always returns all five fields, for a user that has never touched the
+    // Always returns all eight fields, for a user that has never touched the
     // feature as well. A route or the worker must never have to know whether
     // a row exists.
     function get(user) {
-        return toState(getSettingsStmt.get(String(user)), baseState);
+        const row = getSettingsStmt.get(String(user));
+        return toState(row, baseState, secretBox);
     }
 
     // Merge a partial patch over the current state. Unknown keys throw —
@@ -305,6 +351,9 @@ function createTakeoverStore({ filePath, secretBox, maxPerUser = 50, defaults = 
             if (spec.type === 'boolean') {
                 if (typeof value !== 'boolean') throw new Error(`takeover setting ${key} must be a boolean`);
                 next[key] = value;
+            } else if (spec.type === 'string') {
+                if (typeof value !== 'string') throw new Error(`takeover setting ${key} must be a string`);
+                next[key] = value.slice(0, spec.max);
             } else {
                 if (typeof value !== 'number' || !Number.isFinite(value)) {
                     throw new Error(`takeover setting ${key} must be a number`);
@@ -320,6 +369,9 @@ function createTakeoverStore({ filePath, secretBox, maxPerUser = 50, defaults = 
             next.minDelayMinutes,
             next.lookbackHours,
             next.considerAttachments ? 1 : 0,
+            secretBox.encrypt(next.instructions),
+            next.autoSend ? 1 : 0,
+            next.signReplies ? 1 : 0,
             Date.now()
         );
         return next;

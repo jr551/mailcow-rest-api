@@ -31,6 +31,8 @@ const { createAdminSettings } = require('./admin-settings');
 const { createAppPasswordStore } = require('./app-password-store');
 const { createTakeoverStore } = require('./takeover-store');
 const { createTakeoverWorker } = require('./takeover-worker');
+const { sendMessage } = require('./smtp-client');
+const { appendToSent } = require('./sent-folder');
 const mailboxRoutes = require('./routes/mailboxes');
 const messageRoutes = require('./routes/messages');
 const sessionRoutes = require('./routes/session');
@@ -243,10 +245,12 @@ function isCorsOriginAllowed(origin) {
     return wildcardApex.some(apex => origin.startsWith('https://') && origin.endsWith(`.${apex}`));
 }
 
-// The takeover worker's ONLY exit to a message: a self-POST to
+// The takeover worker's APPROVAL exit: a self-POST to
 // /v1/messages/send with the owner's Basic credentials, so the request lands
 // in the EXISTING approval gate (routes/send.js `isBasicAuth`) instead of
-// sending. Nothing in the takeover path can send mail directly.
+// sending. An UNSURE draft rides with its `unsureReason` field in the same
+// body — the send route's schema accepts it and shows it to the owner in the
+// approval email. Nothing in this path can send mail directly.
 //
 // The URL targets the listener build() actually starts: https when
 // TLS_CERT/TLS_KEY are configured. Hardcoding http:// meant every draft died
@@ -277,6 +281,40 @@ function createTakeoverDeliver({ config: cfg, fetchImpl = fetch }) {
             throw new Error(`approval-gated send refused (${res.status}): ${detail.slice(0, 300)}`);
         }
         return res.json().catch(() => null);
+    };
+}
+
+// The takeover worker's DIRECT exit, used only when the model answered
+// REPLY: (confident) and the owner's autoSend setting is on. It is the same
+// in-process send the send route performs — sendMessage plus the shared
+// best-effort Sent-folder copy — and it exists solely as this injected
+// dependency: no route, and no other code path, can reach it. A deployment
+// that leaves it out keeps every draft on the approval gate.
+function createTakeoverSendNow({ config: cfg, pool, imapCache, logger }) {
+    return async function takeoverSendNow({ user, pass, hash, message }) {
+        const result = await sendMessage({
+            smtpConfig: cfg.smtp,
+            user,
+            pass,
+            from: message.from,
+            to: message.to,
+            cc: message.cc,
+            bcc: message.bcc,
+            subject: message.subject,
+            text: message.text,
+            html: message.html,
+            inReplyTo: message.inReplyTo,
+            attachments: message.attachments
+        });
+        // Best-effort, and OUTSIDE the semantics of the send: the recipient
+        // has the mail whether or not the Sent copy lands, so a failure here
+        // must not turn an outgoing reply into a blocked record.
+        try {
+            await appendToSent({ pool, imapCache, log: logger, creds: { user, pass, hash }, raw: result.raw });
+        } catch (err) {
+            logger?.warn({ err: err.message, user }, 'takeover: could not copy the sent reply to the Sent folder');
+        }
+        return { sent: true, messageId: result.messageId };
     };
 }
 
@@ -538,11 +576,12 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         : null;
 
     // AI assistant takeover: a per-user assistant that looks at unread INBOX,
-    // drafts replies to messages that seem to need one, and stops for
-    // approval. The store holds the per-user settings and the blocked
-    // ("needs input") queue; the worker does the drafting. Same gate as the
-    // other credential-holding stores above — inert without the feature
-    // switch and the secret box.
+    // drafts replies to messages that seem to need one, then either sends a
+    // confident reply directly (autoSend on) or stops for approval. The store
+    // holds the per-user settings (including standing instructions, encrypted)
+    // and the blocked ("needs input") queue; the worker does the drafting.
+    // Same gate as the other credential-holding stores above — inert without
+    // the feature switch and the secret box.
     const takeoverStore = config.takeover.enabled && secretBox.enabled
         ? createTakeoverStore({
             filePath: config.takeover.dbPath,
@@ -561,7 +600,7 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         app.log.warn('takeover disabled — no credential encryption key available');
     }
 
-    // The ONLY exit for a drafted message — see createTakeoverDeliver above
+    // The approval exit for an unsure draft — see createTakeoverDeliver above
     // for why it is a self-POST into the existing approval gate.
     const takeoverDeliver = createTakeoverDeliver({ config });
 
@@ -572,7 +611,10 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
             cache,
             pool,
             logger: app.log,
-            deliver: takeoverDeliver
+            deliver: takeoverDeliver,
+            // The direct exit for a confident draft while the owner has
+            // autoSend on — see createTakeoverSendNow above.
+            send: createTakeoverSendNow({ config, pool, imapCache, logger: app.log })
         })
         : null;
     // Poll only while at least one user has the assistant on. The routes

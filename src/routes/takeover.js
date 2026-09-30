@@ -1,19 +1,20 @@
 'use strict';
 
 // "AI assistant takeover": a per-user assistant that looks at unread INBOX,
-// decides which messages really need a reply, drafts in the user's voice,
-// and STOPS for approval. Nothing is ever sent without the user clicking
-// approve — the worker's only exit for a draft is a self-POST to
-// /v1/messages/send over Basic auth (see takeoverDeliver in server.js),
-// which lands in the EXISTING approval gate at src/routes/send.js
-// (`if (isBasicAuth(req))`) and creates a pending approve/deny record.
+// decides which messages really need a reply, and drafts in the user's voice.
+// Confident replies go out directly when the user's autoSend setting says so
+// (the worker's injected `send` path); everything else stops for approval —
+// the worker's exit for those is a self-POST to /v1/messages/send over Basic
+// auth (see takeoverDeliver in server.js), which lands in the EXISTING
+// approval gate at src/routes/send.js (`if (isBasicAuth(req))`) and creates
+// a pending approve/deny record.
 //
 // These routes are the user-facing surface only: the tuning knobs, the
 // blocked ("needs input") queue, and the stop switch. The drafting lives in
 // takeover-worker.js; the state lives in takeover-store.js. There is
 // deliberately no send capability anywhere in this file.
 
-const { badRequest, notFound, unauthorized, problem, fromImapError } = require('../errors');
+const { badRequest, notFound, unauthorized, problem } = require('../errors');
 const { problemSchema } = require('../schemas');
 
 // Only used for the status `counts.processed` readout: the store keeps a
@@ -26,7 +27,10 @@ const stateProps = {
     maxRepliesPerHour: { type: 'integer' },
     minDelayMinutes: { type: 'integer' },
     lookbackHours: { type: 'integer' },
-    considerAttachments: { type: 'boolean' }
+    considerAttachments: { type: 'boolean' },
+    instructions: { type: 'string', maxLength: 2000 },
+    autoSend: { type: 'boolean' },
+    signReplies: { type: 'boolean' }
 };
 
 const statusSchema = {
@@ -98,8 +102,9 @@ module.exports = async function takeoverRoutes(app, { store, worker = null } = {
 
     // Fire an immediate poll — used after John posts advice (resume) and
     // after enabling, so the assistant acts now instead of at the next tick.
-    // wake() only runs the worker's normal, approval-gated cycle; it is not
-    // a send.
+    // wake() runs the worker's normal cycle: what happens to a draft is
+    // decided by the owner's own autoSend and signReplies settings, never by
+    // this route.
     function wakeWorker() {
         if (!worker) return;
         try { worker.wake(); } catch (err) {
@@ -135,7 +140,10 @@ module.exports = async function takeoverRoutes(app, { store, worker = null } = {
                 'The knobs are enforced SERVER-SIDE by the worker. maxRepliesPerHour is 0-24 ' +
                 '(0 = never draft). minDelayMinutes has a hard floor of 5 — a smaller value is ' +
                 'REJECTED with 400 rather than silently clamped, because the delay is a safety ' +
-                'limit that rides on top of the per-message approval, never instead of it.',
+                'limit that rides on top of the per-message approval, never instead of it. ' +
+                'instructions are standing orders carried into every draft (capped at 2000 ' +
+                'characters); autoSend lets a confident draft leave directly; signReplies adds ' +
+                'the one-line AI sign-off to outgoing replies.',
             body: {
                 type: 'object',
                 // NOT `additionalProperties: false`: Fastify's default AJV
@@ -151,7 +159,10 @@ module.exports = async function takeoverRoutes(app, { store, worker = null } = {
                     // The floor. 1..4 minutes is rejected with 400.
                     minDelayMinutes: { type: 'integer', minimum: 5, maximum: 1440 },
                     lookbackHours: { type: 'integer', minimum: 1, maximum: 720 },
-                    considerAttachments: { type: 'boolean' }
+                    considerAttachments: { type: 'boolean' },
+                    instructions: { type: 'string', maxLength: 2000 },
+                    autoSend: { type: 'boolean' },
+                    signReplies: { type: 'boolean' }
                 }
             },
             response: {
@@ -162,19 +173,19 @@ module.exports = async function takeoverRoutes(app, { store, worker = null } = {
         }
     }, async (req) => {
         const user = requireUser(req);
-        // Named refusal for anything outside the five settings — see the
+        // Named refusal for anything outside the eight settings — see the
         // body schema for why this cannot lean on additionalProperties.
         // The store throws on the same thing; both land on a 400 with the
         // offending key in the message.
         const keys = Object.keys(req.body);
         if (!keys.length) throw badRequest('No settings given');
         for (const key of keys) {
-            if (!['enabled', 'maxRepliesPerHour', 'minDelayMinutes', 'lookbackHours', 'considerAttachments'].includes(key)) {
+            if (!['enabled', 'maxRepliesPerHour', 'minDelayMinutes', 'lookbackHours', 'considerAttachments', 'instructions', 'autoSend', 'signReplies'].includes(key)) {
                 throw badRequest(`Unknown takeover setting: ${key}`);
             }
         }
         // The store clamps to the same ranges and throws on a key outside
-        // the five settings; the schema above rejects both first, so this
+        // the eight settings; the schema above rejects both first, so this
         // only maps a store-side refusal to a 400 instead of a 500.
         let state;
         try {
@@ -211,8 +222,8 @@ module.exports = async function takeoverRoutes(app, { store, worker = null } = {
             description:
                 "John's answer is stored as context for the NEXT draft the assistant makes for " +
                 'this thread. This endpoint never sends anything and never submits a draft — ' +
-                'the next draft is made on the worker\'s own schedule and still goes through ' +
-                'the approval gate like every other send.',
+                'the next draft is made on the worker\'s own schedule and then follows the ' +
+                'owner\'s autoSend setting like every other send.',
             params: {
                 type: 'object',
                 required: ['id'],
@@ -242,8 +253,8 @@ module.exports = async function takeoverRoutes(app, { store, worker = null } = {
     }, async (req) => {
         const user = requireUser(req);
         // No send path exists in this handler. The advice is context, not a
-        // message: it feeds the next draft, and that draft still stops at
-        // the approval gate.
+        // message: it feeds the next draft, and that draft follows the
+        // owner's autoSend setting exactly as a poll-drafted one would.
         const entry = store.resolveNeedsInput(user, req.params.id, req.body.advice);
         if (!entry) throw notFound('No such blocked item');
         req.log.info({ user, id: req.params.id }, 'takeover: advice recorded');
@@ -309,74 +320,4 @@ module.exports = async function takeoverRoutes(app, { store, worker = null } = {
         return { enabled: state.enabled, cleared: items.length };
     });
 
-    // Draft a reply to ONE message on demand — the webmail's right-click
-    // "Draft a reply with AI" lands here. Unlike the poll, this runs only
-    // because the owner asked for this specific message, so it skips the
-    // minimum-delay wait but still goes through the normal approval gate
-    // (the worker's draft exits via /v1/messages/send over Basic auth —
-    // nothing sends without approval).
-    app.post('/v1/me/takeover/draft', {
-        schema: {
-            tags: ['takeover'],
-            summary: 'Draft a reply to one message with the AI assistant',
-            body: {
-                type: 'object',
-                required: ['uid'],
-                properties: {
-                    mailbox: { type: 'string', maxLength: 200 },
-                    uid: { type: 'integer', minimum: 1 }
-                },
-                additionalProperties: false
-            },
-            response: {
-                200: {
-                    type: 'object',
-                    properties: {
-                        ok: { type: 'boolean' },
-                        queued: { type: 'boolean' },
-                        decision: { type: 'string' },
-                        reason: { type: 'string' }
-                    }
-                },
-                202: {
-                    type: 'object',
-                    properties: {
-                        ok: { type: 'boolean' },
-                        queued: { type: 'boolean' },
-                        decision: { type: 'string' },
-                        reason: { type: 'string' }
-                    }
-                },
-                400: problemSchema,
-                401: problemSchema,
-                404: problemSchema,
-                502: problemSchema
-            }
-        }
-    }, async (req, reply) => {
-        const user = requireUser(req);
-        if (!worker || typeof worker.draftNow !== 'function') {
-            throw notFound('The assistant is not running');
-        }
-        const uid = Number(req.body && req.body.uid);
-        if (!Number.isInteger(uid) || uid < 1) throw badRequest('uid must be a positive integer');
-        const mailbox = String(req.body.mailbox || 'INBOX');
-
-        let outcome;
-        try {
-            outcome = await worker.draftNow(user, { mailbox, uid, creds: req.creds });
-        } catch (err) {
-            // An IMAP failure surfaces as a gateway error, not a 500.
-            throw fromImapError(err);
-        }
-        if (!outcome || outcome.ok === false) {
-            const status = outcome && outcome.status;
-            if (status === 404) throw notFound(outcome.message || 'Not found');
-            if (status === 400) throw badRequest(outcome.message || 'Could not draft');
-            throw problem(status || 500, 'Takeover', outcome && outcome.message || 'Draft failed');
-        }
-        reply.code(outcome.queued ? 200 : 202);
-        req.log.info({ user, mailbox, uid, decision: outcome.decision }, 'takeover: on-demand draft');
-        return outcome;
-    });
 };

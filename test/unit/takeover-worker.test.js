@@ -91,7 +91,7 @@ function humanMessage(overrides = {}) {
 // model gives; classification is controlled separately so a test can say
 // "this one needs a reply" without also writing a reply.
 function makeEnv({ messages = [], classify, drafts = [], storePath = ':memory:', store = null, maxPerHour } = {}) {
-    const calls = { llm: [], deliver: [] };
+    const calls = { llm: [], deliver: [], send: [] };
     const state = { now: T0 };
     const imap = makeImap(messages);
 
@@ -136,6 +136,14 @@ function makeEnv({ messages = [], classify, drafts = [], storePath = ':memory:',
         deliver: async (payload) => {
             calls.deliver.push(payload);
             return { pendingApproval: true, token: 'tok' };
+        },
+        // The direct-send seam. Present here so the default environment
+        // exercises the auto-send path a wired deployment gets; tests that
+        // want the approval gate either turn autoSend off in the store or
+        // build a worker without this dep.
+        send: async (payload) => {
+            calls.send.push(payload);
+            return { sent: true, messageId: `<sent-${calls.send.length}@test.example>` };
         }
     });
 
@@ -148,6 +156,9 @@ function makeEnv({ messages = [], classify, drafts = [], storePath = ':memory:',
         now: () => state.now,
         drafts() {
             return calls.deliver.map((c) => c.message);
+        },
+        sends() {
+            return calls.send.map((c) => c.message);
         }
     };
 }
@@ -180,8 +191,9 @@ test('rate limit: the second reply in an hour is held back, and released when th
 
     await env.worker.tick();
 
-    assert.strictEqual(env.calls.deliver.length, 1, 'exactly one draft is put up for approval per hour');
-    assert.strictEqual(env.store.repliesSince(USER, env.now() - 60 * MINUTE), 1);
+    assert.strictEqual(env.calls.send.length, 1, 'exactly one confident reply goes out per hour (auto-send)');
+    assert.strictEqual(env.calls.deliver.length, 0, 'nothing is parked in the approval queue');
+    assert.strictEqual(env.store.repliesSince(USER, env.now() - 60 * MINUTE), 1, 'the direct send uses the hourly slot');
 
     const held = env.store.recentDecisions(USER, 50).find((d) => d.messageId === 'm2@x' && d.decision === 'rate-limited');
     assert.ok(held, 'the held-back message is explained in the audit trail');
@@ -191,12 +203,12 @@ test('rate limit: the second reply in an hour is held back, and released when th
     // Same hour, same limit.
     env.advance(30 * MINUTE);
     await env.worker.tick();
-    assert.strictEqual(env.calls.deliver.length, 1, 'still held back inside the same hour');
+    assert.strictEqual(env.calls.send.length, 1, 'still held back inside the same hour');
 
     // Hour over: the queued message goes out.
     env.advance(31 * MINUTE);
     await env.worker.tick();
-    assert.strictEqual(env.calls.deliver.length, 2, 'released once the hour has passed');
+    assert.strictEqual(env.calls.send.length, 2, 'released once the hour has passed');
 });
 
 test('rate limit: a draft that stopped for a missing fact does not use up the slot', async () => {
@@ -214,7 +226,8 @@ test('rate limit: a draft that stopped for a missing fact does not use up the sl
     env.store.resolveNeedsInput(USER, item.id, 'It arrives on 14 October');
     await env.worker.tick();
 
-    assert.strictEqual(env.calls.deliver.length, 1, 'the resumed draft is not blocked by the hourly limit');
+    assert.strictEqual(env.calls.send.length, 1, 'the resumed reply is not blocked by the hourly limit');
+    assert.strictEqual(env.calls.deliver.length, 0);
 });
 
 // --------------------------------------------------------------------------
@@ -245,7 +258,8 @@ test('delay: nothing is drafted until the message has been waiting five minutes'
 
     await env.worker.tick();
 
-    assert.strictEqual(env.calls.deliver.length, 0, 'the delay is enforced before any draft is made');
+    assert.strictEqual(env.calls.send.length, 0, 'the delay is enforced before any draft is made');
+    assert.strictEqual(env.calls.deliver.length, 0);
     assert.strictEqual(env.calls.llm.length, 0, 'and before the model is even asked');
     const held = env.store.recentDecisions(USER, 50).find((d) => d.decision === 'delayed');
     assert.ok(held, 'the delay is explained rather than silent');
@@ -254,7 +268,7 @@ test('delay: nothing is drafted until the message has been waiting five minutes'
 
     env.advance(5 * MINUTE);
     await env.worker.tick();
-    assert.strictEqual(env.calls.deliver.length, 1, 'once the delay has passed the reply is drafted');
+    assert.strictEqual(env.calls.send.length, 1, 'once the delay has passed the reply is drafted and sent');
 });
 
 // --------------------------------------------------------------------------
@@ -311,7 +325,7 @@ test('missing fact: a figure that is already established is not treated as inven
     assert.deepStrictEqual(unbackedFigures('I have asked 2 people.', 'nothing here'), []);
 });
 
-test('resume with advice: the answer is fed into the next draft and still goes to approval', async () => {
+test('resume with advice: the answer is fed into the next draft and still goes out on the auto-send path', async () => {
     const env = makeEnv({
         messages: [humanMessage()],
         drafts: ['NEEDS INPUT:\n- the delivery date', 'REPLY:\nIt arrives on 14 October.\n']
@@ -323,11 +337,12 @@ test('resume with advice: the answer is fed into the next draft and still goes t
 
     await env.worker.tick();
 
-    assert.strictEqual(env.calls.deliver.length, 1, 'the resumed reply still goes through the approval gate');
+    assert.strictEqual(env.calls.send.length, 1, 'the resumed reply follows the normal routing');
+    assert.strictEqual(env.calls.deliver.length, 0);
     const prompt = env.calls.llm.filter((c) => c.system === TAKEOVER_REPLY_SYSTEM).pop().userPrompt;
-    assert.match(prompt, /Owner's instructions \(verbatim, from the owner himself\):/);
+    assert.match(prompt, /Owner's instructions for this thread \(verbatim, from the owner himself\):/);
     assert.match(prompt, /arrives on 14 October and there is no charge/);
-    assert.ok(env.store.wasProcessed(USER, 'm1@vendor.example'), 'once drafted it is never looked at again');
+    assert.ok(env.store.wasProcessed(USER, 'm1@vendor.example'), 'once sent it is never looked at again');
 });
 
 // --------------------------------------------------------------------------
@@ -397,7 +412,7 @@ test('restart: a second worker on the same database does not draft again', async
 
     const first = makeEnv({ messages: [humanMessage()], drafts: 'REPLY:\nYes, that works.\n', storePath: dbPath });
     await first.worker.tick();
-    assert.strictEqual(first.calls.deliver.length, 1);
+    assert.strictEqual(first.calls.send.length, 1);
     assert.strictEqual(first.store.repliesSince(USER, first.now() - 60 * MINUTE), 1);
     first.store.close();
 
@@ -406,7 +421,7 @@ test('restart: a second worker on the same database does not draft again', async
 
     // Straight after the restart the hourly limit is still holding too.
     await second.worker.tick();
-    assert.strictEqual(second.calls.deliver.length, 0);
+    assert.strictEqual(second.calls.send.length, 0);
 
     // Well past the hour, so the rate limit cannot be what stops it: only the
     // record of what has already been handled stands between this and a
@@ -416,7 +431,7 @@ test('restart: a second worker on the same database does not draft again', async
     await second.worker.tick();
     await second.worker.tick();
 
-    assert.strictEqual(second.calls.deliver.length, 0, 'the message was already handled and is not drafted twice');
+    assert.strictEqual(second.calls.send.length, 0, 'the message was already handled and is not drafted twice');
     assert.ok(second.store.wasProcessed(USER, 'm1@vendor.example'), 'the outcome survived the restart');
     second.store.close();
     fs.rmSync(dir, { recursive: true, force: true });
@@ -444,7 +459,7 @@ test('the reply ends with the one-line sign-off and carries no extra AI banner',
     });
     await env.worker.tick();
 
-    const text = env.drafts()[0].text;
+    const text = env.sends()[0].text;
     assert.ok(text.endsWith(DISCLOSURE), 'the sign-off is the last thing in the message');
     assert.strictEqual(text.match(/This reply came from my AI assistant\./g).length, 1, 'and it appears exactly once');
     assert.strictEqual(DISCLOSURE, '-- \nThis reply came from my AI assistant.');
@@ -500,6 +515,7 @@ test('nothing is delivered for a user who has not switched takeover on', async (
     env.store.set(USER, { enabled: false });
     await env.worker.tick();
     assert.strictEqual(env.calls.deliver.length, 0);
+    assert.strictEqual(env.calls.send.length, 0);
     assert.strictEqual(env.calls.llm.length, 0);
 });
 
@@ -508,8 +524,13 @@ test('a paused user (0 replies per hour) never gets a draft', async () => {
     env.store.set(USER, { maxRepliesPerHour: 0 });
     await env.worker.tick();
     assert.strictEqual(env.calls.deliver.length, 0);
+    assert.strictEqual(env.calls.send.length, 0);
     assert.strictEqual(env.calls.llm.length, 0);
 });
+
+// --------------------------------------------------------------------------
+// Parsing and prompt-contract helpers.
+// --------------------------------------------------------------------------
 
 // --------------------------------------------------------------------------
 // Parsing and prompt-contract helpers.
@@ -521,20 +542,62 @@ test('a NEEDS INPUT answer is never read as a reply, even if it also contains on
     assert.deepStrictEqual(parsed.missing, ['the delivery date']);
 });
 
+test('NEEDS INPUT also wins over an UNSURE answer', () => {
+    // Both are "hold it back" shapes, but a missing fact is the stronger
+    // claim, so that is the one the owner sees.
+    const parsed = parseDraft('UNSURE:\nIt probably ships tomorrow.\nWhy unsure: tone\n\nNEEDS INPUT:\n- the delivery date');
+    assert.strictEqual(parsed.needsInput, true);
+    assert.deepStrictEqual(parsed.missing, ['the delivery date']);
+});
+
+test('an UNSURE answer parses into body plus the one-line reason', () => {
+    const parsed = parseDraft('UNSURE:\nIt should arrive on 14 October.\n\nWhy unsure: the tone could sound like a promise');
+    assert.strictEqual(parsed.needsInput, false);
+    assert.strictEqual(parsed.needsApproval, true);
+    assert.strictEqual(parsed.body, 'It should arrive on 14 October.');
+    assert.strictEqual(parsed.reason, 'the tone could sound like a promise');
+});
+
+test('an UNSURE answer without a reason still parses, with an empty reason', () => {
+    const parsed = parseDraft('UNSURE:\nDraft body here.');
+    assert.strictEqual(parsed.needsApproval, true);
+    assert.strictEqual(parsed.body, 'Draft body here.');
+    assert.strictEqual(parsed.reason, '');
+});
+
+test('a REPLY answer is read as confident, with no approval flag', () => {
+    const parsed = parseDraft('REPLY:\nIt ships tomorrow.');
+    assert.strictEqual(parsed.needsInput, false);
+    assert.strictEqual(parsed.needsApproval, undefined);
+    assert.strictEqual(parsed.body, 'It ships tomorrow.');
+});
+
+test('marker lines are stripped from the body wherever the model echoes them', () => {
+    // Some models answer with the bare body — and some echo the markers
+    // inside it. The markers are structural and must never reach a
+    // recipient; the disclosure line is stripped the same way.
+    const out = finalizeReply('Short answer.\nUNSURE:\nWhy unsure: none\nREPLY:', true);
+    assert.strictEqual(out, `Short answer.\n\n${DISCLOSURE}`);
+    assert.strictEqual(finalizeReply('Short answer.', false), 'Short answer.');
+});
+
 test('classifier answers that cannot be read are a block, not a guess', () => {
     assert.strictEqual(parseClassify('I think so'), null);
     assert.deepStrictEqual(parseClassify('{"needsReply":false,"reason":"newsletter"}'), { needsReply: false, reason: 'newsletter' });
 });
 
-test('the reply prompt states the rules the feature is judged on', () => {
+test('the reply prompt states the rules the new contract is judged on', () => {
     for (const must of [
         'NEVER invent facts',
         'NEEDS INPUT:',
-        'This reply came from my AI assistant.',
+        'UNSURE:',
+        'REPLY:',
+        'Why unsure:',
+        'A REPLY IS SENT IMMEDIATELY',
         'The recipient is a real person',
         'No tells',
         'Never say you have done something',
-        'you never send anything'
+        'never write "This reply came from my AI assistant"'
     ]) {
         assert.ok(TAKEOVER_REPLY_SYSTEM.includes(must), `prompt must say: ${must}`);
     }
@@ -542,6 +605,163 @@ test('the reply prompt states the rules the feature is judged on', () => {
     // asked anything, so the prompt is never the thing standing between the
     // owner and a second reply in an hour.
     assert.ok(!TAKEOVER_REPLY_SYSTEM.includes('one reply per hour'));
+    // The old contract told the model the owner approves every reply; that
+    // is no longer true and the prompt must not claim it.
+    assert.ok(!TAKEOVER_REPLY_SYSTEM.includes('approves it before it is sent'));
+});
+
+// --------------------------------------------------------------------------
+// Routing: confident → direct send; unsure / autoSend off / no send dep →
+// the approval gate.
+// --------------------------------------------------------------------------
+
+test('a confident REPLY with autoSend on is sent directly and never queued for approval', async () => {
+    const env = makeEnv({
+        messages: [humanMessage()],
+        drafts: 'REPLY:\nIt arrives on 14 October.\n'
+    });
+    await env.worker.tick();
+
+    assert.strictEqual(env.calls.send.length, 1, 'the reply left via the injected send path');
+    assert.strictEqual(env.calls.deliver.length, 0, 'no approval row was created');
+    const payload = env.calls.send[0];
+    assert.strictEqual(payload.user, USER);
+    assert.strictEqual(payload.pass, 'pw');
+    assert.strictEqual(payload.hash, 'hash');
+    assert.strictEqual(payload.messageId, 'm1@vendor.example');
+    assert.strictEqual(payload.message.subject, 'Re: Delivery date for order 4471');
+    assert.ok(env.store.wasProcessed(USER, 'm1@vendor.example'), 'recorded with a terminal outcome');
+    const decision = env.store.recentDecisions(USER, 10).find((d) => d.decision === 'sent');
+    assert.ok(decision, 'the send is explained in the audit trail');
+    assert.match(decision.reason, /sent it directly/i);
+});
+
+test('autoSend off routes every draft to the approval gate, even a confident one', async () => {
+    const env = makeEnv({
+        messages: [humanMessage()],
+        drafts: 'REPLY:\nIt arrives on 14 October.\n'
+    });
+    env.store.set(USER, { autoSend: false });
+    await env.worker.tick();
+
+    assert.strictEqual(env.calls.send.length, 0, 'nothing leaves directly');
+    assert.strictEqual(env.calls.deliver.length, 1, 'the draft waits for approval');
+    const text = env.drafts()[0].text;
+    assert.ok(text.endsWith(DISCLOSURE), 'the sign-off knob is independent of routing and stays on');
+});
+
+test('without an injected send function even a confident draft waits for approval', async () => {
+    // The approval-gate test files cover this worker too; this pins the
+    // routing rule directly: no `send` dep means the direct path does not
+    // exist, whatever the settings say.
+    const env = makeEnv({ messages: [humanMessage()], drafts: 'REPLY:\nYes.\n' });
+    const noSendWorker = createTakeoverWorker({
+        config: { takeover: { enabled: true }, ai: {} },
+        store: env.store,
+        cache: { listActiveSessions: () => [{ user: USER, pass: 'pw', hash: 'hash', expires_at: env.now() + 3600_000 }] },
+        pool: {},
+        clock: () => env.now(),
+        resolveProvider: () => ({ kind: 'openai', model: 'test', apiKey: 'k', timeoutMs: 5000, maxInputChars: 50_000 }),
+        withClient: (p, c, fn) => fn(env.imap),
+        llm: async (args) => (args.system === TAKEOVER_CLASSIFY_SYSTEM
+            ? { ok: true, content: '{"needsReply":true,"reason":"a question"}' }
+            : { ok: true, content: 'REPLY:\nYes.\n' }),
+        deliver: async (payload) => {
+            env.calls.deliver.push(payload);
+            return { pendingApproval: true, token: 'tok' };
+        }
+        // deliberately no `send`
+    });
+
+    await noSendWorker.tick();
+
+    assert.strictEqual(env.calls.deliver.length, 1, 'the approval gate is the only exit');
+    const drafted = env.store.recentDecisions(USER, 10).find((d) => d.decision === 'drafted');
+    assert.ok(drafted, 'the draft is explained in the audit trail');
+    assert.match(drafted.reason, /waiting for you to approve/i);
+});
+
+test('an UNSURE draft goes to approval even with autoSend on, and carries the model reason', async () => {
+    const env = makeEnv({
+        messages: [humanMessage()],
+        drafts: 'UNSURE:\nIt should arrive on 14 October.\n\nWhy unsure: the sender asked for a guarantee and the thread only supports an estimate'
+    });
+    await env.worker.tick();
+
+    assert.strictEqual(env.calls.send.length, 0, 'an unsure draft never leaves directly');
+    assert.strictEqual(env.calls.deliver.length, 1);
+    const message = env.drafts()[0];
+    assert.match(message.unsureReason, /guarantee/);
+    assert.ok(!message.text.includes('UNSURE'), 'no marker leaks into the draft body');
+    assert.ok(!message.text.includes('Why unsure'), 'nor the reason line');
+    const decision = env.store.recentDecisions(USER, 10).find((d) => d.decision === 'drafted');
+    assert.ok(decision, 'the held draft is explained in the audit trail');
+    assert.match(decision.reason, /unsure/i);
+});
+
+test('a direct send that throws becomes a blocked record, never a fallback approval', async () => {
+    const env = makeEnv({ messages: [humanMessage()], drafts: 'REPLY:\nYes.\n' });
+    const failing = createTakeoverWorker({
+        config: { takeover: { enabled: true }, ai: {} },
+        store: env.store,
+        cache: { listActiveSessions: () => [{ user: USER, pass: 'pw', hash: 'hash', expires_at: env.now() + 3600_000 }] },
+        pool: {},
+        clock: () => env.now(),
+        resolveProvider: () => ({ kind: 'openai', model: 'test', apiKey: 'k', timeoutMs: 5000, maxInputChars: 50_000 }),
+        withClient: (p, c, fn) => fn(env.imap),
+        llm: async (args) => (args.system === TAKEOVER_CLASSIFY_SYSTEM
+            ? { ok: true, content: '{"needsReply":true,"reason":"a question"}' }
+            : { ok: true, content: 'REPLY:\nYes.\n' }),
+        deliver: async () => { throw new Error('must not be reached'); },
+        send: async () => { throw new Error('SMTP connection refused'); }
+    });
+
+    await failing.tick();
+
+    assert.strictEqual(env.store.repliesSince(USER, env.now() - 60 * MINUTE), 0, 'nothing is counted as sent');
+    assert.ok(!env.store.wasProcessed(USER, 'm1@vendor.example'), 'the message is retried on a later poll');
+    const items = env.store.listNeedsInput(USER);
+    assert.strictEqual(items.length, 1);
+    assert.match(items[0].reason, /the reply could not be sent/);
+    assert.match(items[0].reason, /Nothing was sent/);
+});
+
+// --------------------------------------------------------------------------
+// The sign-off knob.
+// --------------------------------------------------------------------------
+
+test('signReplies off drops the disclosure entirely, even when the model writes one', async () => {
+    const env = makeEnv({
+        messages: [humanMessage()],
+        drafts: 'REPLY:\nIt arrives on 14 October.\n\n-- \nThis reply came from my AI assistant.'
+    });
+    env.store.set(USER, { signReplies: false });
+    await env.worker.tick();
+
+    const text = env.sends()[0].text;
+    assert.ok(!text.includes('This reply came from my AI assistant.'), 'no disclosure survives');
+    assert.ok(!text.includes('-- \n'), 'no dangling signature separator either');
+    assert.match(text, /It arrives on 14 October\.$/, 'the body itself is untouched');
+});
+
+// --------------------------------------------------------------------------
+// Standing instructions reach both prompts.
+// --------------------------------------------------------------------------
+
+test('standing instructions reach the draft prompt and the classifier prompt', async () => {
+    const env = makeEnv({
+        messages: [humanMessage()],
+        drafts: 'REPLY:\nIt arrives on 14 October.\n'
+    });
+    env.store.set(USER, { instructions: 'Never promise delivery dates. Keep replies under three sentences.' });
+    await env.worker.tick();
+
+    const draftPrompt = env.calls.llm.filter((c) => c.system === TAKEOVER_REPLY_SYSTEM).pop().userPrompt;
+    assert.match(draftPrompt, /Owner's standing instructions \(verbatim, from the owner himself/);
+    assert.match(draftPrompt, /Never promise delivery dates\./);
+    const classifyPrompt = env.calls.llm.filter((c) => c.system === TAKEOVER_CLASSIFY_SYSTEM).pop().userPrompt;
+    assert.match(classifyPrompt, /The owner's standing instructions for this assistant/);
+    assert.match(classifyPrompt, /Keep replies under three sentences\./);
 });
 
 test('figures are only flagged when they are the kind of fact that matters', () => {

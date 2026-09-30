@@ -36,7 +36,10 @@ test('a user who has never touched the feature gets the documented defaults', ()
         maxRepliesPerHour: 1,
         minDelayMinutes: 5,
         lookbackHours: 24,
-        considerAttachments: false
+        considerAttachments: false,
+        instructions: '',
+        autoSend: true,
+        signReplies: true
     });
     store.close();
 });
@@ -48,7 +51,10 @@ test('operator defaults apply to a user who has never touched the feature', () =
         maxRepliesPerHour: 3,
         minDelayMinutes: 5,
         lookbackHours: 48,
-        considerAttachments: true
+        considerAttachments: true,
+        instructions: '',
+        autoSend: true,
+        signReplies: true
     });
     store.close();
 });
@@ -68,7 +74,10 @@ test('set merges a patch and returns the state that is actually in force', () =>
         maxRepliesPerHour: 1,
         minDelayMinutes: 30,
         lookbackHours: 24,
-        considerAttachments: false
+        considerAttachments: false,
+        instructions: '',
+        autoSend: true,
+        signReplies: true
     });
     assert.deepStrictEqual(store.get(USER), state);
     store.close();
@@ -96,7 +105,8 @@ test('set rejects a typo rather than silently ignoring it', () => {
     assert.throws(() => store.set(USER, { minDelayMinutes: 'five' }), /must be a number/);
     assert.throws(() => store.set(USER, { enabled: 'yes' }), /must be a boolean/);
     assert.deepStrictEqual(store.get(USER), {
-        enabled: false, maxRepliesPerHour: 1, minDelayMinutes: 5, lookbackHours: 24, considerAttachments: false
+        enabled: false, maxRepliesPerHour: 1, minDelayMinutes: 5, lookbackHours: 24, considerAttachments: false,
+        instructions: '', autoSend: true, signReplies: true
     }, 'a rejected patch changes nothing');
     store.close();
 });
