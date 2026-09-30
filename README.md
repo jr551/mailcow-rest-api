@@ -350,6 +350,37 @@ For production edge hardening (rate limiting, security headers, ban coverage), s
 
 </details>
 
+## 🤖 AI assistant takeover
+
+An opt-in mode where the webmail assistant works through your unread mail and drafts replies in your voice. **It never sends anything.** Every draft becomes an approval request that lands in your own inbox with an approve/deny link — the same gate that has always held API and MCP sends.
+
+Turn it on under **Settings → AI → AI assistant takeover**. It is off by default, and `TAKEOVER_ENABLED=false` disables the feature entirely at the server.
+
+**What it does, in order.** It looks at unread INBOX mail and works out which messages a real person is actually waiting on — skipping newsletters, receipts, shipping notices, calendar invites, monitoring and CI mail, bounces, auto-replies and anything from a no-reply address. For the rest it drafts a short reply, and hands that draft to you for approval.
+
+**The rules are enforced in code, not just in the prompt:**
+
+| Rule | How it is enforced |
+|---|---|
+| At most one reply per hour | blocked before any model is called, and the hold is recorded with its reason |
+| At least five minutes' delay | a younger message is held, with the wait stated in minutes; `5` is the floor and cannot be lowered |
+| No invented facts | money, percentages, dates, times and reference numbers in a draft are checked against the thread and your instructions; anything unsupported becomes a question to you instead of a claim to them |
+| No replies to machines | the automated-sender check runs before any model call at all |
+| Fail closed | an answer the assistant cannot parse stops it rather than guessing, and a request for information always beats a draft |
+
+**The sign-off.** Every reply ends with exactly one line — `This reply came from my AI assistant.` — and nothing else. There is deliberately no disclaimer block.
+
+**When it cannot continue**, it stops and says why rather than bluffing. Opening the inbox shows a window listing what is missing and offering two choices:
+
+- **Resume with advice** — you write the answer, which is fed back in as context. The next draft still comes to you for approval.
+- **Stop** — the item is closed and the message is marked done, so it is never touched again.
+
+**What it will not do.** It will not send without your click. It will not invent a date, price, order number or policy. It will not reply to a newsletter or an alert. It will not pretend to be you.
+
+Tuning: `TAKEOVER_MAX_REPLIES_PER_HOUR` (default `1`, `0` pauses it entirely), `TAKEOVER_MIN_DELAY_MINUTES` (default `5`, floor `5`), `TAKEOVER_LOOKBACK_HOURS`, `TAKEOVER_POLL_INTERVAL_MS`. See `.env.example`.
+
+> A note on what approval actually means: an approval link works for one hour, and every pending approval is lost when the service restarts. If a link has gone stale the page says plainly that **nothing was sent**.
+
 ## 🧪 Development
 
 ```sh
