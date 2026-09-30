@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { untrack } from 'svelte';
     import { renderMarkdown } from '../../lib/markdown';
     import Icon from '../Icon.svelte';
 
@@ -11,7 +12,9 @@
 
     let { item, initialContent, onSave, onClose }: Props = $props();
 
-    let content = $state(initialContent);
+    // Seed only — the $effect below re-syncs content when the parent swaps
+    // the file underneath this live editor.
+    let content = $state(untrack(() => initialContent));
     let tab = $state<'edit' | 'preview'>('edit');
     let saving = $state(false);
     let textareaEl = $state<HTMLTextAreaElement | null>(null);

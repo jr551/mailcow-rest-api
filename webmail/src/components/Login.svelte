@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { untrack } from 'svelte';
     import { authState, upsertSession, setError, setPending, setAddingAccount, login as loginCall } from '../lib/auth.svelte';
     import { rememberedUsers, recallCreds } from '../lib/keychain';
     import Icon from './Icon.svelte';
@@ -45,7 +46,10 @@
     // !addingAccount and so never runs to reset it. The card was dead:
     // no email field, no submit, and a cancel button as the only way out.
     // A returning user could not add a second account at all.
-    let autoLoggingIn = $state(!isAddAccountMode && hasRememberedReturnUser());
+    // Mount-time seed only: addingAccount can flip AFTER mount while the
+    // remembered-user check must not re-trigger auto-login — untrack pins
+    // the initial capture (the effect below handles the flip explicitly).
+    let autoLoggingIn = $state(untrack(() => !isAddAccountMode && hasRememberedReturnUser()));
     let autoTried = false; // gate so we only attempt once per mount
 
     // Adding an account must also cancel an auto-login already in flight

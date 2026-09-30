@@ -4,6 +4,7 @@
     // async — first paint shows the initial placeholder; if a remote
     // image loads we swap to it. Cached so subsequent renders are instant.
 
+    import { untrack } from 'svelte';
     import { resolveAvatar, avatarSync, type AvatarRecord } from '../lib/avatars.svelte';
 
     interface Props {
@@ -14,7 +15,9 @@
     }
     let { email, name = null, size = 32, title }: Props = $props();
 
-    let rec = $state<AvatarRecord>(avatarSync(email || '', name));
+    // Seed for first paint only — the $effect below re-resolves on any
+    // email/name change, so this deliberately captures the initial props.
+    let rec = $state<AvatarRecord>(untrack(() => avatarSync(email || '', name)));
     let imgFailed = $state(false);
 
     $effect(() => {

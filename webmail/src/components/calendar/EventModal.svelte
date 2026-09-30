@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { onMount } from 'svelte';
+    import { onMount, untrack } from 'svelte';
     import Icon from '../Icon.svelte';
     import { trapFocus } from '../../lib/focus-trap';
     import { showToast } from '../../lib/store.svelte';
@@ -52,8 +52,10 @@
         try { return format(parseISO(iso), 'HH:mm'); } catch { return fallback; }
     }
 
-    // event > seed > defaults
-    const src = event ?? seed ?? null;
+    // event > seed > defaults — captured once at mount; the parent mounts a
+    // fresh EventModal per open ({#if modalOpen} / {#if ui.suggestedEvent}),
+    // so re-reading the props would never produce a different source.
+    const src = untrack(() => event ?? seed ?? null);
 
     let title = $state(src?.title ?? '');
     let location = $state(src?.location ?? '');

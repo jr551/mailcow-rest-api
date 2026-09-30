@@ -4,6 +4,7 @@
         format, isSameMonth, isSameDay, addMonths
     } from 'date-fns';
     import Icon from '../Icon.svelte';
+    import { untrack } from 'svelte';
 
     interface Props {
         cursor: Date;
@@ -12,7 +13,10 @@
     }
     let { cursor, selected, onSelect }: Props = $props();
 
-    let viewMonth = $state(new Date(cursor));
+    // Local view month: seeded from cursor once, freely navigable via the
+    // month nav buttons; the $effect re-syncs it when the parent's
+    // cursor actually changes.
+    let viewMonth = $state(untrack(() => new Date(cursor)));
     $effect(() => { viewMonth = new Date(cursor); });
 
     let weeks = $derived.by(() => {
