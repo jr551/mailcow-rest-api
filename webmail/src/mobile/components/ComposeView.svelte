@@ -2,9 +2,9 @@
     import { onMount } from 'svelte';
     import { mobileState, goBack, showToast } from '../lib/store.svelte';
     import { authState } from '../../lib/auth.svelte';
-    import { sendStub, getSendFromAddresses, type SendAttachment } from '../../lib/api';
+    import { sendStub, getSendFromAddresses, draftReply, ApiError, type SendAttachment } from '../../lib/api';
     import { trackSent } from '../../lib/sent-status.svelte';
-    import { settings, pickFromName, setDisplayName, deriveNameFromAddress } from '../../lib/settings.svelte';
+    import { settings, pickFromName, setDisplayName, deriveNameFromAddress, aiAvailable } from '../../lib/settings.svelte';
     import { addressBook } from '../../lib/address-book.svelte';
     import Icon from '../../components/Icon.svelte';
 
@@ -67,7 +67,7 @@
     }
 
     function pickReplyFrom(): string {
-        const fallback = authState.activeUser || '';
+        const fallback = settings.defaultFromAddress || authState.activeUser || '';
         if (!replyTo || mode === 'forward') return fallback;
         const known = new Set<string>();
         if (fallback) known.add(fallback.toLowerCase());
@@ -176,7 +176,18 @@
                 });
             }
         } catch { /* silent fallback */ }
-        if (!from) from = settings.defaultFromAddress || authState.activeUser || '';
+        const fallbackFrom = settings.defaultFromAddress || authState.activeUser || '';
+        if (!from) {
+            from = fallbackFrom;
+        } else if (replyTo && mode !== 'new' && mode !== 'forward' && from === fallbackFrom) {
+            // The prefill effect picked `from` before sendFromOptions was
+            // populated, so an alias match silently missed. Re-pick now —
+            // but only while `from` still holds the untouched fallback, so
+            // a manual pick is never stomped. Do NOT re-run the prefill
+            // effect; it also assigns to/subject/body and would destroy
+            // user edits.
+            from = pickReplyFrom();
+        }
     });
 
     const fromPickerList = $derived(() => {
@@ -186,6 +197,166 @@
             list.unshift(primary);
         }
         return list;
+    });
+
+    // --- AI reply suggestion strip -----------------------------------------
+    // Ported inline from desktop Compose.svelte (lines ~360-580). Desktop
+    // still keeps its own copy — a shared lib extraction was deliberately
+    // skipped to keep this change small; if a third consumer appears, hoist
+    // the request machinery rather than growing a second divergence.
+    // Same contract:
+    // 1. NEVER BLOCKS. Fired from a setTimeout(0) in onMount, after the
+    //    view is already interactive. The user can type, edit and send the
+    //    whole time it runs.
+    // 2. ABORTS ON UNMOUNT. Navigating away cancels the HTTP request rather
+    //    than letting it finish into a component that no longer exists.
+    // 3. SUBORDINATE TO THE MASTER SWITCH. replySuggestEligible() re-checks
+    //    settings.aiFeatures on every call, and the $effect below aborts +
+    //    hides in-flight work if the user flips AI off while the view is
+    //    open. aiSuggestReply only ever narrows the feature.
+    let replySuggest = $state<string | null>(null);
+    let replySuggestLoading = $state(false);
+    let replySuggestError = $state<string | null>(null);
+    // Epoch of the last request we actually let out; a response from a
+    // superseded request is dropped rather than shown.
+    let replySuggestSeq = 0;
+    let replySuggestAbort: AbortController | null = null;
+    // Regenerate is one thumb tap and spends real tokens per click, so one
+    // request in flight plus a short cooldown between them.
+    const REGEN_COOLDOWN_MS = 4000;
+    let lastReplySuggestAt = 0;
+
+    /** Every gate, in one place, re-evaluated on each call. */
+    function replySuggestEligible(): boolean {
+        return (mode === 'reply' || mode === 'replyAll')
+            && !!replyTo
+            && settings.aiFeatures
+            && settings.aiSuggestReply
+            && aiAvailable();
+    }
+
+    /** Kill whatever is running. Safe to call when nothing is. */
+    function abortReplySuggest() {
+        if (replySuggestAbort) {
+            replySuggestAbort.abort();
+            replySuggestAbort = null;
+        }
+        replySuggestLoading = false;
+    }
+
+    /** The original message as the model should see it: headers plus the
+     *  plain-text body. Same shape desktop's AI panel Draft button sends. */
+    function threadForAi(): string {
+        if (!replyTo) return '';
+        const env = replyTo.envelope;
+        const headers = [
+            `From: ${env.from?.[0]?.name || ''} <${env.from?.[0]?.address || ''}>`,
+            env.subject ? `Subject: ${env.subject}` : '',
+            env.date ? `Date: ${env.date}` : ''
+        ].filter(Boolean).join('\n');
+        const text = replyTo.text || htmlToPlainText(replyTo.html || '');
+        return `${headers}\n\n${text}`;
+    }
+
+    async function requestReplySuggest(opts: { regen: boolean }) {
+        if (!replySuggestEligible()) return;
+        if (replySuggestLoading) return;
+        if (opts.regen) {
+            const since = Date.now() - lastReplySuggestAt;
+            if (since < REGEN_COOLDOWN_MS) return;
+        }
+        abortReplySuggest();
+        lastReplySuggestAt = Date.now();
+        const seq = ++replySuggestSeq;
+        const controller = new AbortController();
+        replySuggestAbort = controller;
+        replySuggestLoading = true;
+        replySuggestError = null;
+        if (opts.regen) replySuggest = null;   // don't leave stale text under a spinner
+        try {
+            const r = await draftReply(threadForAi(), undefined, { signal: controller.signal });
+            // Dropped if the user navigated away or turned AI off while
+            // this was in the air.
+            if (seq !== replySuggestSeq || controller.signal.aborted) return;
+            const text = (r.content || '').trim();
+            if (!text) {
+                replySuggestError = 'No suggestion came back — carry on.';
+            } else {
+                replySuggest = text;
+            }
+        } catch (err) {
+            if (controller.signal.aborted || seq !== replySuggestSeq) return;
+            // Quiet one-liner, never an interruption: the user never asked
+            // for this strip.
+            replySuggestError = err instanceof ApiError
+                ? (err.detail || err.title)
+                : 'Couldn\'t draft a reply — carry on.';
+        } finally {
+            if (seq === replySuggestSeq) {
+                replySuggestLoading = false;
+                if (replySuggestAbort === controller) replySuggestAbort = null;
+            }
+        }
+    }
+
+    /** A brief glow on the body field so accepting a suggestion FEELS like
+     *  something happened rather than text silently appearing. Purely
+     *  decorative: no-op under prefers-reduced-motion, cleared by its own
+     *  timer so the class never outlives the animation. */
+    let draftSparkleTimer: ReturnType<typeof setTimeout> | null = null;
+    let draftSparkleTick = $state(0);
+    function flashDraftSparkle() {
+        try {
+            if (typeof window !== 'undefined'
+                && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+        } catch { /* matchMedia unavailable — animate anyway */ }
+        if (draftSparkleTimer) clearTimeout(draftSparkleTimer);
+        draftSparkleTick++;
+        const mine = draftSparkleTick;
+        draftSparkleTimer = setTimeout(() => {
+            if (draftSparkleTick === mine) draftSparkleTick = 0;
+        }, 1400);
+    }
+
+    /** Accept by PREPENDING above whatever is already in the body — the
+     *  reply prefill leaves the quoted original below a blank line, and the
+     *  user types above it, so the suggestion lands where the caret was
+     *  going. Replacing the body would delete words the user typed while
+     *  the model was thinking. */
+    function acceptReplySuggest() {
+        const text = replySuggest;
+        if (!text) return;
+        abortReplySuggest();
+        body = text + '\n\n' + body.replace(/^\n+/, '');
+        replySuggest = null;
+        replySuggestError = null;
+        flashDraftSparkle();
+    }
+
+    function dismissReplySuggest() {
+        abortReplySuggest();
+        replySuggest = null;
+        replySuggestError = null;
+    }
+
+    // The hard-off can be flipped while this view is open. Abort, hide,
+    // and never re-fire: the master switch is the privacy control.
+    $effect(() => {
+        if (settings.aiFeatures) return;
+        abortReplySuggest();
+        replySuggest = null;
+        replySuggestError = null;
+    });
+
+    onMount(() => {
+        // Fire only after the view is up, on its own macrotask, so the
+        // suggestion request never queues behind the alias lookup in the
+        // main onMount and never delays first paint or the first keystroke.
+        const t = setTimeout(() => { void requestReplySuggest({ regen: false }); }, 0);
+        return () => {
+            clearTimeout(t);
+            abortReplySuggest();
+        };
     });
 </script>
 
@@ -260,8 +431,63 @@
             </label>
         </div>
 
+        <!-- AI reply suggestion strip. Render-gated on settings.aiFeatures
+             in addition to the request guard in requestReplySuggest(): the
+             request guard alone is enough for privacy, but a strip left on
+             screen after the master switch flips would lie about state. -->
+        {#if settings.aiFeatures && (replySuggestLoading || replySuggest || replySuggestError)}
+            <div class="draft-sugg" role="status" aria-live="polite" data-testid="compose-reply-suggest">
+                <Icon name="sparkles" size={15} />
+                {#if replySuggestLoading}
+                    <span class="draft-sugg-text muted">Drafting a reply you can keep or throw away…</span>
+                    <span class="spinner" style="width:14px;height:14px"></span>
+                    <button
+                        type="button"
+                        class="draft-sugg-btn"
+                        onclick={dismissReplySuggest}
+                        aria-label="Dismiss"
+                        data-testid="compose-reply-suggest-cancel"
+                    ><Icon name="close" size={14} /></button>
+                {:else if replySuggest}
+                    <span class="draft-sugg-text" data-testid="compose-reply-suggest-text">{replySuggest}</span>
+                    <div class="draft-sugg-actions">
+                        <button
+                            type="button"
+                            class="draft-sugg-btn accept"
+                            onclick={acceptReplySuggest}
+                            data-testid="compose-reply-suggest-accept"
+                        >Use</button>
+                        <button
+                            type="button"
+                            class="draft-sugg-btn"
+                            onclick={() => void requestReplySuggest({ regen: true })}
+                            aria-label="Suggest another reply"
+                            data-testid="compose-reply-suggest-regen"
+                        ><Icon name="refresh" size={14} /></button>
+                        <button
+                            type="button"
+                            class="draft-sugg-btn"
+                            onclick={dismissReplySuggest}
+                            aria-label="Discard reply suggestion"
+                            data-testid="compose-reply-suggest-dismiss"
+                        ><Icon name="close" size={14} /></button>
+                    </div>
+                {:else}
+                    <span class="draft-sugg-text muted">{replySuggestError}</span>
+                    <button
+                        type="button"
+                        class="draft-sugg-btn"
+                        onclick={dismissReplySuggest}
+                        aria-label="Dismiss"
+                        data-testid="compose-reply-suggest-cancel"
+                    ><Icon name="close" size={14} /></button>
+                {/if}
+            </div>
+        {/if}
+
         <textarea
             class="body-input"
+            class:sparkle={draftSparkleTick > 0}
             placeholder="Write your message…"
             bind:value={body}
         ></textarea>
@@ -558,5 +784,107 @@
     .close-btn:active {
         background: var(--bg-hover);
         border-radius: 10px;
+    }
+
+    /* AI reply suggestion strip — sits between the header fields and the
+       body textarea. Palette mirrors the desktop .draft-sugg strip
+       (accent-tinted card), sized for thumbs: 30px targets instead of the
+       desktop's 22px, and the action buttons drop to their own trailing
+       row via flex-wrap instead of squeezing beside the text. */
+    .draft-sugg {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-start;
+        gap: 8px;
+        margin: 8px 16px;
+        padding: 10px 12px;
+        background: color-mix(in srgb, var(--accent) 6%, var(--bg-surface));
+        border: 0.5px solid color-mix(in srgb, var(--accent) 22%, var(--border-subtle));
+        border-radius: 12px;
+        font-size: 14px;
+        line-height: 1.45;
+        color: var(--text-primary);
+    }
+    .draft-sugg > :global(svg) { flex-shrink: 0; margin-top: 2px; color: var(--accent-text); }
+    .draft-sugg-text {
+        flex: 1;
+        min-width: 0;
+        white-space: pre-wrap;
+        overflow: hidden;
+        display: -webkit-box;
+        -webkit-line-clamp: 4;
+        line-clamp: 4;
+        -webkit-box-orient: vertical;
+    }
+    .draft-sugg-actions {
+        margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+    .draft-sugg-btn {
+        flex-shrink: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 30px;
+        height: 30px;
+        padding: 0 10px;
+        border-radius: 8px;
+        border: 0.5px solid var(--border-subtle);
+        background: var(--bg-surface);
+        color: var(--text-secondary);
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        touch-action: manipulation;
+        -webkit-tap-highlight-color: transparent;
+    }
+    .draft-sugg-btn :global(svg) { margin-top: 0; }
+    .draft-sugg-btn:active { background: var(--bg-active); }
+    .draft-sugg-btn.accept {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: var(--bg-base);
+    }
+    .draft-sugg-btn.accept:active { filter: brightness(1.06); }
+
+    /* The sparkle flash: a one-shot accent ring + soft background tint on
+       the textarea for ~1.4s after a suggestion is inserted. A ::after
+       sheen like desktop's can't be used — <textarea> is a replaced
+       element and never renders pseudo-elements — so the sweep is done on
+       background-image instead (a 3×-wide accent band whose position is
+       animated across the field, behind the text). Ends fully
+       transparent, so removing the class snaps to a clean state. */
+    .body-input.sparkle {
+        animation: draft-sparkle-m 1.4s cubic-bezier(0.2, 0.7, 0.2, 1) 1,
+                   draft-sheen-m 1.4s ease-out 1;
+        background-image: linear-gradient(
+            115deg,
+            transparent 0%,
+            transparent 42%,
+            color-mix(in srgb, var(--accent) 10%, transparent) 47%,
+            color-mix(in srgb, var(--accent) 26%, transparent) 50%,
+            color-mix(in srgb, var(--accent) 10%, transparent) 53%,
+            transparent 58%,
+            transparent 100%
+        );
+        background-size: 300% 100%;
+        background-repeat: no-repeat;
+    }
+    @keyframes draft-sheen-m {
+        0%   { background-position: 100% 0; }
+        100% { background-position: 0% 0; }
+    }
+    @keyframes draft-sparkle-m {
+        0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 0%, transparent); }
+        30%  { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent); }
+        100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 0%, transparent); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+        /* Defence in depth: flashDraftSparkle() already no-ops, but if the
+           class is ever present under reduced motion the static band must
+           not sit parked over the text. */
+        .body-input.sparkle { animation: none; background-image: none; }
     }
 </style>
