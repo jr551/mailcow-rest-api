@@ -201,11 +201,17 @@ lost when the service restarts. The draft was not delivered to anyone.</p>
 </body></html>`;
 }
 
-function buildApprovalEmail({ from, to, subject, approveUrl, denyUrl }) {
+function buildApprovalEmail({ from, to, subject, approveUrl, denyUrl, text: bodyText, html: bodyHtml }) {
     const toList = Array.isArray(to) ? to.join(', ') : to;
     const fromSafe = escapeEmailHtml(from);
     const toSafe = escapeEmailHtml(toList, 400);
     const subjectSafe = escapeEmailHtml(subject);
+    // Show the draft so the approver can read what they're approving.
+    // Plain text is escaped into a <pre>; an HTML-only draft gets a note
+    // rather than injecting raw markup into the approval email.
+    const bodyBlock = bodyText
+        ? `<pre style="white-space:pre-wrap;word-wrap:break-word;border:1px solid #ddd;border-radius:6px;padding:12px;background:#f6f6f6;max-height:400px;overflow:auto;">${escapeEmailHtml(bodyText, 4000)}</pre>`
+        : (bodyHtml ? '<p style="color:#666;font-size:13px;"><em>HTML-only draft — the body is not shown in this preview.</em></p>' : '');
     const html = `
 <!DOCTYPE html>
 <html>
@@ -215,6 +221,8 @@ function buildApprovalEmail({ from, to, subject, approveUrl, denyUrl }) {
   <p><strong>From:</strong> ${fromSafe}</p>
   <p><strong>To:</strong> ${toSafe}</p>
   <p><strong>Subject:</strong> ${subjectSafe}</p>
+  <p><strong>Body:</strong></p>
+  ${bodyBlock}
   <div style="margin:24px 0;">
     <a href="${approveUrl}" style="display:inline-block;padding:12px 24px;background:#10b981;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;">✅ Approve & Send</a>
     <a href="${denyUrl}" style="display:inline-block;padding:12px 24px;background:#ef4444;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;margin-left:12px;">❌ Deny</a>
@@ -222,11 +230,17 @@ function buildApprovalEmail({ from, to, subject, approveUrl, denyUrl }) {
   <p style="color:#666;font-size:13px;">This request was made via the MCP/API. If you didn't request this, click Deny.</p>
 </body>
 </html>`;
+    const bodyPreview = bodyText
+        ? clipText(bodyText, 2000)
+        : (bodyHtml ? '(HTML-only draft — the body is not shown in this preview.)' : '(empty)');
     const text = `Approve sending this email?
 
 From: ${clipText(from)}
 To: ${clipText(toList, 400)}
 Subject: ${clipText(subject)}
+
+Body:
+${bodyPreview}
 
 Approve: ${approveUrl}
 Deny: ${denyUrl}
@@ -329,7 +343,9 @@ module.exports = async function sendRoutes(app, { db, smtp, pool, trackingStore,
                 to: body.to,
                 subject: body.subject,
                 approveUrl,
-                denyUrl
+                denyUrl,
+                text: body.text,
+                html: body.html
             });
 
             try {
@@ -513,6 +529,12 @@ module.exports = async function sendRoutes(app, { db, smtp, pool, trackingStore,
             return reply.code(404).type('text/html').send(buildExpiredApprovalPage());
         }
         const toList = Array.isArray(entry.to) ? entry.to.join(', ') : String(entry.to || '');
+        // Show the draft body so the approver sees what is being sent.
+        // Plain text is escaped into a <pre>; an HTML-only draft gets a
+        // note — the raw html is never injected into this page (XSS).
+        const bodyCell = entry.text
+            ? `<pre style="white-space:pre-wrap;word-wrap:break-word;margin:0;max-height:320px;overflow:auto;">${escapeEmailHtml(entry.text, 4000)}</pre>`
+            : (entry.html ? '<em>HTML-only draft — the body is not shown in this preview.</em>' : '<em>(empty)</em>');
         return reply.type('text/html').send(`<!DOCTYPE html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
@@ -530,6 +552,7 @@ p.note{color:#666;font-size:13px}</style></head>
   <dt>From</dt><dd>${escapeEmailHtml(entry.from)}</dd>
   <dt>To</dt><dd>${escapeEmailHtml(toList, 400)}</dd>
   <dt>Subject</dt><dd>${escapeEmailHtml(entry.subject)}</dd>
+  <dt>Body</dt><dd>${bodyCell}</dd>
 </dl>
 <form method="POST" action="">
   <button type="submit">Send now</button>

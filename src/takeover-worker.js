@@ -2,6 +2,7 @@
 
 const crypto = require('node:crypto');
 const { withClient: pooledWithClient, withMailbox, walkStructure, downloadPartText } = require('./imap');
+const { hashCreds } = require('./cache');
 const { htmlToText } = require('./webhook-payload');
 const { chat: defaultChat, resolveProvider: defaultResolveProvider } = require('./llm');
 
@@ -39,6 +40,11 @@ const { chat: defaultChat, resolveProvider: defaultResolveProvider } = require('
 // Steps 4 and 5 deliberately run before the model is called: a message
 // waiting out its delay or the hourly slot costs zero model calls, and a
 // message that gets skipped as automated never costs one at all.
+
+// A second entry point sits alongside the poll: draftNow() runs this same
+// pipeline on ONE message chosen by uid when the owner asks for it. It is a
+// second ENTRY, not a second exit — the draft still ends at the approval
+// gate, never at a recipient.
 
 const HOUR_MS = 60 * 60 * 1000;
 const MINUTE_MS = 60 * 1000;
@@ -391,6 +397,12 @@ function createTakeoverWorker(options = {}) {
     // restart and an expunge.
     const scanOffsets = new Map();
 
+    // Messages mid-consideration, tagged by user + ledger key. wasProcessed
+    // only settles AFTER a draft is with the approval gate, so without this
+    // an on-demand draftNow() and a poll tick could both draft the same
+    // message and put two identical approvals in the owner's inbox.
+    const considering = new Set();
+
     function note(user, entry) {
         try {
             store.recordDecision(user, entry);
@@ -420,9 +432,43 @@ function createTakeoverWorker(options = {}) {
             logger?.warn({ err: err.message, user }, 'takeover: could not queue a needs-input item');
         }
         note(user, { messageId: message.key, decision, reason });
+        return { decision, reason };
     }
 
     // --- IMAP ------------------------------------------------------------
+
+    // Header pass for ONE message — the same fetch collectCandidates does
+    // per unread uid. A fetch failure throws (the caller decides whether to
+    // drop or report it); a message that is not there returns null.
+    async function fetchCandidate(client, uid, now) {
+        const msg = await client.fetchOne(String(uid), {
+            uid: true,
+            envelope: true,
+            headers: [
+                'list-id', 'precedence', 'auto-submitted', 'list-unsubscribe',
+                'x-auto-response-suppress', 'return-path', 'content-type', 'in-reply-to'
+            ]
+        }, { uid: true });
+        if (!msg || !msg.envelope) return null;
+        const env = msg.envelope;
+        const from = firstAddress(env.from);
+        const messageId = String(env.messageId || '').replace(/[<>]/g, '') || null;
+        const date = env.date ? new Date(env.date).getTime() : null;
+        const key = messageId || `synthetic:${hashKey(from?.address || '', date || 0, env.subject || '')}`;
+        return {
+            uid: String(uid),
+            key,
+            messageIdHeader: env.messageId || null,
+            from: from?.address || '',
+            fromName: from?.name || '',
+            replyTo: firstAddress(env.replyTo)?.address || from?.address || '',
+            subject: env.subject || '',
+            date,
+            inReplyTo: env.inReplyTo || null,
+            headers: headerMap(msg.headers),
+            age: date ? now - date : 0
+        };
+    }
 
     // Cheap pass: unread message headers only. No body is downloaded until a
     // message has cleared the deterministic checks, the delay and the rate
@@ -454,6 +500,7 @@ function createTakeoverWorker(options = {}) {
     // rotation is a scan position over the current search result and never
     // message identity: identity is always the ledger key, because the uid
     // is not usable for it (it is reassigned after an expunge).
+
     async function collectCandidates(client, { now, user, isSettled }) {
         const uids = (await client.search({ unseen: true }, { uid: true })) || [];
         // Oldest first: a message that has been waiting longest gets the
@@ -465,41 +512,17 @@ function createTakeoverWorker(options = {}) {
         for (const uid of uids.slice(start, start + maxHeaderScanPerTick)) {
             if (out.length >= maxCandidatesPerTick) break;
             scanned++;
-            let msg;
+            let candidate;
             try {
-                msg = await client.fetchOne(String(uid), {
-                    uid: true,
-                    envelope: true,
-                    headers: [
-                        'list-id', 'precedence', 'auto-submitted', 'list-unsubscribe',
-                        'x-auto-response-suppress', 'return-path', 'content-type', 'in-reply-to'
-                    ]
-                }, { uid: true });
+                candidate = await fetchCandidate(client, uid, now);
             } catch (err) {
                 logger?.warn({ err: err.message, uid }, 'takeover: could not fetch a message header');
                 continue;
             }
-            if (!msg || !msg.envelope) continue;
-            const env = msg.envelope;
-            const from = firstAddress(env.from);
-            const messageId = String(env.messageId || '').replace(/[<>]/g, '') || null;
-            const date = env.date ? new Date(env.date).getTime() : null;
-            const key = messageId || `synthetic:${hashKey(from?.address || '', date || 0, env.subject || '')}`;
+            if (!candidate) continue;
             // Settled messages free their window slot: see above.
-            if (isSettled && isSettled(key)) continue;
-            out.push({
-                uid: String(uid),
-                key,
-                messageIdHeader: env.messageId || null,
-                from: from?.address || '',
-                fromName: from?.name || '',
-                replyTo: firstAddress(env.replyTo)?.address || from?.address || '',
-                subject: env.subject || '',
-                date,
-                inReplyTo: env.inReplyTo || null,
-                headers: headerMap(msg.headers),
-                age: date ? now - date : 0
-            });
+            if (isSettled && isSettled(candidate.key)) continue;
+            out.push(candidate);
         }
         if (out.length === 0) {
             // Nothing live in this slice — it is all settled — so rotate
@@ -577,12 +600,39 @@ function createTakeoverWorker(options = {}) {
 
     // --- per message -----------------------------------------------------
 
+    // The guard shared by the poll and the on-demand path: one message may
+    // only be in consideration once. An "in-flight" outcome means another
+    // consider() for the same ledger key is already running — nothing new
+    // was decided, so nothing is recorded.
     async function consider(user, message, ctx) {
+        const tag = `${user}${message.key}`;
+        if (considering.has(tag)) {
+            return { decision: 'in-flight', reason: 'This message is already being worked on.' };
+        }
+        considering.add(tag);
+        try {
+            return await considerMessage(user, message, ctx);
+        } finally {
+            considering.delete(tag);
+        }
+    }
+
+    async function considerMessage(user, message, ctx) {
         const { session, settings, open, now } = ctx;
+        // Forced means the owner asked for THIS message (draftNow): the
+        // autonomous governors — the lookback window, the delay and the
+        // hourly rate — do not apply to an explicit request. Dedup, the
+        // automated-sender check, the model judgement and the approval gate
+        // still run exactly as on a poll.
+        const forced = ctx.forced === true;
         const key = message.key;
 
-        if (store.wasProcessed(user, key)) return;
-        if (open.has(key)) return;
+        if (store.wasProcessed(user, key)) {
+            return { decision: 'already-processed', reason: 'The assistant has already handled this message.' };
+        }
+        if (open.has(key)) {
+            return { decision: 'blocked', reason: 'This message is already waiting on your input — it is in the needs-input queue.' };
+        }
 
         const auto = automatedReason({
             from: { address: message.from, name: message.fromName },
@@ -597,11 +647,11 @@ function createTakeoverWorker(options = {}) {
                 reason: `No reply drafted — ${auto}.`,
                 at: now
             });
-            return;
+            return { decision: 'declined', reason: `No reply drafted — ${auto}.` };
         }
 
         const lookbackMs = (settings.lookbackHours || defaultLookbackHours) * 60 * MINUTE_MS;
-        if (message.date && message.age > lookbackMs) {
+        if (!forced && message.date && message.age > lookbackMs) {
             store.recordProcessed(user, key, 'out-of-window', now);
             note(user, {
                 messageId: key,
@@ -609,15 +659,19 @@ function createTakeoverWorker(options = {}) {
                 reason: `No reply drafted — this message arrived ${Math.round(message.age / 60000)} minutes ago, outside the ${settings.lookbackHours || defaultLookbackHours}-hour lookback window.`,
                 at: now
             });
-            return;
+            return {
+                decision: 'declined',
+                reason: `No reply drafted — this message arrived ${Math.round(message.age / 60000)} minutes ago, outside the ${settings.lookbackHours || defaultLookbackHours}-hour lookback window.`
+            };
         }
 
         // The hard delay. Nothing has been drafted, nothing has been sent;
         // the message simply waits for a later poll. 5 minutes is the floor
-        // the owner asked for and the store will not accept less.
+        // the owner asked for and the store will not accept less. A forced
+        // draft skips it: the owner is asking for this one right now.
         const delayMs = (settings.minDelayMinutes || defaultMinDelayMinutes) * MINUTE_MS;
         const ageMs = Number.isFinite(message.date) ? message.age : delayMs;
-        if (ageMs < delayMs) {
+        if (!forced && ageMs < delayMs) {
             const waitMinutes = Math.ceil((delayMs - ageMs) / MINUTE_MS);
             note(user, {
                 messageId: key,
@@ -625,21 +679,30 @@ function createTakeoverWorker(options = {}) {
                 reason: `Holding back: the reply cannot be drafted for another ${waitMinutes} minute${waitMinutes === 1 ? '' : 's'} (minimum ${settings.minDelayMinutes || defaultMinDelayMinutes}-minute delay after a message arrives).`,
                 at: now
             });
-            return;
+            return {
+                decision: 'delayed',
+                reason: `Holding back: the reply cannot be drafted for another ${waitMinutes} minute${waitMinutes === 1 ? '' : 's'} (minimum ${settings.minDelayMinutes || defaultMinDelayMinutes}-minute delay after a message arrives).`
+            };
         }
 
         // The hard rate limit. It counts drafts handed to the approval gate,
         // so a draft that stopped for a missing fact does not use a slot.
+        // Forced drafts pass: the throttle exists to slow an autonomous
+        // assistant, not to tell the owner "no" to a direct request — and
+        // the approval gate still holds every draft.
         const maxPerHour = settings.maxRepliesPerHour ?? defaultMaxRepliesPerHour;
         const sent = store.repliesSince(user, now - HOUR_MS);
-        if (sent >= maxPerHour) {
+        if (!forced && sent >= maxPerHour) {
             note(user, {
                 messageId: key,
                 decision: 'rate-limited',
                 reason: `Holding back: ${sent} of the ${maxPerHour} reply per hour is already with you for approval. This one is queued for the next slot.`,
                 at: now
             });
-            return;
+            return {
+                decision: 'rate-limited',
+                reason: `Holding back: ${sent} of the ${maxPerHour} reply per hour is already with you for approval. This one is queued for the next slot.`
+            };
         }
 
         const provider = resolveProvider(options.config?.ai);
@@ -655,22 +718,17 @@ function createTakeoverWorker(options = {}) {
 
         const classification = await classify(provider, thread);
         if (classification.error) {
-            stopAndAsk(user, message, {
+            return stopAndAsk(user, message, {
                 missing: [],
                 decision: 'blocked',
                 reason: `Couldn't continue: ${classification.error}. Nothing was drafted and nothing was sent. Open this again to retry, or answer it yourself.`
             });
-            return;
         }
         if (!classification.needsReply) {
             store.recordProcessed(user, key, 'no-reply-needed', now);
-            note(user, {
-                messageId: key,
-                decision: 'declined',
-                reason: `No reply drafted — nothing in this message is waiting on the owner${classification.reason ? `: ${classification.reason}` : '.'}`,
-                at: now
-            });
-            return;
+            const reason = `No reply drafted — nothing in this message is waiting on the owner${classification.reason ? `: ${classification.reason}` : '.'}`;
+            note(user, { messageId: key, decision: 'declined', reason, at: now });
+            return { decision: 'declined', reason };
         }
 
         note(user, {
@@ -684,22 +742,20 @@ function createTakeoverWorker(options = {}) {
         const instruction = advice ? advice.advice : '';
         const drafted = await draft(provider, thread, instruction);
         if (drafted.error) {
-            stopAndAsk(user, message, {
+            return stopAndAsk(user, message, {
                 missing: [],
                 decision: 'blocked',
                 reason: `Couldn't continue: ${drafted.error}. Nothing was drafted and nothing was sent. Open this again to retry, or answer it yourself.`
             });
-            return;
         }
 
         if (drafted.needsInput) {
             const missing = drafted.missing.length ? drafted.missing : ['what you want to say in reply'];
-            stopAndAsk(user, message, {
+            return stopAndAsk(user, message, {
                 missing,
                 decision: 'needs-input',
                 reason: `The reply needs something the message thread does not contain: ${missing.join('; ')}. Nothing was drafted and nothing was sent. Answer this and it will be drafted again with your answer in mind.`
             });
-            return;
         }
 
         // The fabrication guard: a figure that appears in neither the thread
@@ -707,21 +763,19 @@ function createTakeoverWorker(options = {}) {
         const unbacked = unbackedFigures(drafted.body, `${thread}\n${instruction}`);
         if (unbacked.length) {
             const missing = unbacked.map((f) => `confirmation that "${f}" is right — it does not appear in the message thread`);
-            stopAndAsk(user, message, {
+            return stopAndAsk(user, message, {
                 missing,
                 decision: 'needs-input',
                 reason: `The draft stated ${unbacked.map((f) => `"${f}"`).join(', ')}, which appears nowhere in the message thread. Rather than invent it, the assistant is asking you. Nothing was sent.`
             });
-            return;
         }
 
         if (!drafted.body.trim()) {
-            stopAndAsk(user, message, {
+            return stopAndAsk(user, message, {
                 missing: ['what you want to say in reply'],
                 decision: 'needs-input',
                 reason: 'The assistant came back with an empty reply. Nothing was drafted and nothing was sent.'
             });
-            return;
         }
 
         const text = finalizeReply(drafted.body);
@@ -735,12 +789,11 @@ function createTakeoverWorker(options = {}) {
             inReplyTo: message.messageIdHeader || undefined
         };
         if (!outgoing.to.length) {
-            stopAndAsk(user, message, {
+            return stopAndAsk(user, message, {
                 missing: ['who this should be replied to'],
                 decision: 'blocked',
                 reason: 'Couldn\'t continue: the message has no reply address. Nothing was sent.'
             });
-            return;
         }
 
         // THE ONLY EXIT. deliver() must reject if the approval request was
@@ -757,31 +810,31 @@ function createTakeoverWorker(options = {}) {
                 message: outgoing
             });
         } catch (err) {
-            stopAndAsk(user, message, {
+            return stopAndAsk(user, message, {
                 missing: [],
                 decision: 'blocked',
                 reason: `Couldn't continue: the approval request could not be created (${String(err && err.message || err).slice(0, 200)}). Nothing was sent.`
             });
-            return;
         }
         const refusal = deliverRefusal(result);
         if (refusal) {
-            stopAndAsk(user, message, {
+            return stopAndAsk(user, message, {
                 missing: [],
                 decision: 'blocked',
                 reason: `Couldn't continue: the approval request was refused (${refusal}). Nothing was sent.`
             });
-            return;
         }
 
         store.markReplySent(user, key, now);
         store.recordProcessed(user, key, 'drafted', now);
+        const draftedReason = 'A reply was drafted and is waiting for you to approve it. It has not been sent.';
         note(user, {
             messageId: key,
             decision: 'drafted',
-            reason: 'A reply was drafted and is waiting for you to approve it. It has not been sent.',
+            reason: draftedReason,
             at: now
         });
+        return { decision: 'drafted', reason: draftedReason };
     }
 
     // A resolved deliver() is taken to mean "the approval request exists",
@@ -843,6 +896,81 @@ function createTakeoverWorker(options = {}) {
             // still there and the next poll will read it.
             logger?.warn({ err: err.message, user }, 'takeover: could not read INBOX');
         }
+    }
+
+    // Draft a reply to ONE named message on demand — the route's
+    // POST /v1/me/takeover/draft lands here. The pipeline is the same one a
+    // poll runs (consider(), then deliver() into the approval gate), except
+    // `forced` lifts the autonomous governors: lookback, the minimum delay
+    // and the hourly rate exist to slow an unattended assistant, and the
+    // owner is asking for this message right now. Dedup (wasProcessed), the
+    // needs-input overlap, the automated-sender check, the model judgement
+    // and the approval gate all still apply — nothing here can send.
+    //
+    // Returns a resolved outcome: { ok: true, decision, reason } from the
+    // draft path itself, or { ok: false, status, message } when the draft
+    // could not even start so the route can map it to an HTTP status.
+    // `creds` is the caller's { user, pass, hash } (req.creds); it is what
+    // the self-POST to the approval gate authenticates with, exactly like
+    // the session credential a poll would use.
+    async function draftNow(user, { mailbox = 'INBOX', uid, creds } = {}) {
+        if (!enabled || stopped) {
+            return { ok: false, status: 404, message: 'The assistant is not running' };
+        }
+        const n = Number(uid);
+        if (!Number.isInteger(n) || n <= 0) {
+            return { ok: false, status: 400, message: 'uid must be a positive integer' };
+        }
+        const session = creds && creds.pass
+            ? {
+                user: creds.user || user,
+                pass: creds.pass,
+                hash: creds.hash || hashCreds(creds.user || user, creds.pass)
+            }
+            : null;
+        if (!session) {
+            return { ok: false, status: 400, message: 'No credentials available to draft with' };
+        }
+
+        const settings = store.get(user);
+        if (!settings.enabled) {
+            return { ok: false, status: 404, message: 'The assistant is switched off for this account' };
+        }
+
+        const now = clock();
+        const open = new Map(store.listNeedsInput(user).map((item) => [item.messageId, item]));
+
+        // Same pool and same read-only mailbox lock as a poll. The body of
+        // withClient below mirrors processUser's inner block; a connection
+        // or mailbox failure escapes to the route as a 502 (fromImapError),
+        // never as a fabricated "not found".
+        return withClient(pool, session, async (client) =>
+            withMailbox(client, String(mailbox), true, async () => {
+                const message = await fetchCandidate(client, n, now);
+                if (!message) {
+                    return { ok: false, status: 404, message: `No message with uid ${n} in ${mailbox}` };
+                }
+                try {
+                    const outcome = await consider(user, message, {
+                        session, settings, open, now, client, forced: true
+                    });
+                    return { ok: true, queued: outcome.decision === 'drafted', ...outcome };
+                } catch (err) {
+                    // Same failure policy as the poll path: a mid-draft
+                    // crash becomes a needs-input item, never a send and
+                    // never an unhandled rejection.
+                    logger?.warn({ err: err.message, user, uid: n }, 'takeover: on-demand draft failed mid-consideration');
+                    return {
+                        ok: true,
+                        ...(await Promise.resolve(stopAndAsk(user, message, {
+                            missing: [],
+                            decision: 'blocked',
+                            reason: `Couldn't continue: ${String((err && err.message) || err).slice(0, 200)}. Nothing was sent.`
+                        })))
+                    };
+                }
+            })
+        );
     }
 
     // The pass currently in flight, so stop() can wait for its bookkeeping
@@ -919,7 +1047,7 @@ function createTakeoverWorker(options = {}) {
         tick();
     }
 
-    return { start, stop, tick, wake, enabled };
+    return { start, stop, tick, wake, draftNow, enabled };
 }
 
 // A message with no Message-ID header still has to be tracked, or it would

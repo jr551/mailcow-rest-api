@@ -1039,6 +1039,14 @@ export async function updateTakeover(patch: Partial<TakeoverSettings>): Promise<
     return request<TakeoverSettings>('PUT', '/v1/me/takeover', { body: patch });
 }
 
+/** On-demand drafting: ask the takeover assistant to draft a reply to ONE
+ *  message now instead of waiting for its next poll. The draft still goes
+ *  through the same approval gate as a polled draft — nothing sends
+ *  automatically. */
+export async function draftTakeoverReply(mailbox: string, uid: number): Promise<{ ok: boolean }> {
+    return request('POST', '/v1/me/takeover/draft', { body: { mailbox, uid } });
+}
+
 export async function listTakeoverNeedsInput(): Promise<TakeoverNeedsInputItem[]> {
     const r = await request<{ items: TakeoverNeedsInputItem[] }>('GET', '/v1/me/takeover/needs-input');
     return r.items || [];

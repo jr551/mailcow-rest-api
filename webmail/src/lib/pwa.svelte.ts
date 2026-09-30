@@ -1,4 +1,5 @@
 import { apiUrl } from './api';
+import { ui } from './store.svelte';
 // PWA install + service-worker registration.
 //
 // Two responsibilities:
@@ -93,7 +94,10 @@ export function initPwa(): void {
 function wireUpdateDetection(reg: ServiceWorkerRegistration) {
     // A SW already in "waiting" before init means a previous tab
     // installed an update we never picked up. Show the prompt now.
-    if (reg.waiting) state.updateAvailable = true;
+    if (reg.waiting) {
+        state.updateAvailable = true;
+        maybeAutoApplyUpdate();
+    }
 
     // updatefound → a new SW is "installing". Watch its state for the
     // moment it lands in "installed" while a controller is still
@@ -104,6 +108,7 @@ function wireUpdateDetection(reg: ServiceWorkerRegistration) {
         installing.addEventListener('statechange', () => {
             if (installing.state === 'installed' && navigator.serviceWorker.controller) {
                 state.updateAvailable = true;
+                maybeAutoApplyUpdate();
             }
         });
     });
@@ -123,6 +128,16 @@ export function applyPwaUpdate(): void {
     try { waiting.postMessage({ type: 'SKIP_WAITING' }); } catch { /* noop */ }
     // If postMessage is rejected, fall back to a hard reload.
     setTimeout(() => { if (state.updateAvailable) window.location.reload(); }, 1500);
+}
+
+/** Apply a waiting update automatically when it's safe. Reloading
+ *  under an open compose would lose the draft, so in that case we
+ *  leave state.updateAvailable set and let PwaUpdatePrompt's toast
+ *  handle it. Otherwise kick SKIP_WAITING — the controllerchange
+ *  listener in initPwa reloads onto the fresh shell. */
+function maybeAutoApplyUpdate(): void {
+    if (ui.composeOpen) return;
+    applyPwaUpdate();
 }
 
 export async function promptInstall(): Promise<'accepted' | 'dismissed' | 'unavailable'> {
