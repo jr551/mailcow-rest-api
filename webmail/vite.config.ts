@@ -77,10 +77,16 @@ export default defineConfig({
                 // both entry points load eagerly. Naming them explicitly
                 // keeps them isolated even if a future static import
                 // accidentally makes them "shared" between main and mobile.
-                manualChunks: {
-                    pdf: ['pdfjs-dist', 'pdf-lib'],
-                    tldraw: ['tldraw', '@tiptap/core', '@tiptap/starter-kit'],
-                    tesseract: ['tesseract.js'],
+                // vite 8 builds with rolldown: object-form manualChunks is
+                // unsupported; codeSplitting.groups is the equivalent
+                // (includeDependenciesRecursively defaults to true, matching
+                // rollup's manualChunks dependency pull-in).
+                codeSplitting: {
+                    groups: [
+                        { name: 'pdf', test: /node_modules[\\/](pdfjs-dist|pdf-lib)[\\/]/ },
+                        { name: 'tldraw', test: /node_modules[\\/](tldraw|@tiptap[\\/](core|starter-kit))[\\/]/ },
+                        { name: 'tesseract', test: /node_modules[\\/]tesseract\.js[\\/]/ },
+                    ],
                 },
             },
         },
