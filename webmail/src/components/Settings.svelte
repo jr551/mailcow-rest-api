@@ -1374,7 +1374,11 @@
         </header>
 
         <div class="body">
-            <aside class="tabs settings-rail" role="tablist" aria-label="Settings sections">
+            <!-- A tablist is a widget, not a complementary landmark — on an
+                 <aside> the explicit role was being flagged as a
+                 non-interactive element given an interactive role. A <div>
+                 says exactly what this is. -->
+            <div class="tabs settings-rail" role="tablist" aria-label="Settings sections">
                 <div class="rail-search">
                     <input
                         type="search"
@@ -1430,7 +1434,7 @@
                         </div>
                     {/each}
                 {/if}
-            </aside>
+            </div>
 
             <div class="panel">
                 <!-- The rail is a flat wall of ~20 rows; without this the open
@@ -5153,12 +5157,6 @@
         background: var(--bg-surface-alt);
     }
     .foot .muted { font-size: 12px; flex: 1; }
-    .section-head h3 {
-        margin: 0 0 4px;
-        font-size: 14px;
-        font-weight: 600;
-        letter-spacing: -0.01em;
-    }
     .section-head .muted { margin: 0 0 12px; font-size: 12px; line-height: 1.5; }
     /* h4-style subsection divider used inside the Appearance tab. The icon
      * sits before the label and picks up the accent so each group is

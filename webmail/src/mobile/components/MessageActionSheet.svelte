@@ -34,8 +34,12 @@
     let summaryResult = $state<string | null>(null);
     let summaryError = $state<string | null>(null);
 
-    const isUnread = !msg.flags.includes('\\Seen');
-    const isStarred = msg.flags.includes('\\Flagged');
+    // Derived, not captured at init: the sheet stays open after a Star /
+    // mark-read tap and the handlers mutate `msg.flags` in place, so frozen
+    // booleans left the button reading "Star" after starring (the next tap
+    // then silently UN-starred) and "Mark read" after marking read.
+    const isUnread = $derived(!msg.flags.includes('\\Seen'));
+    const isStarred = $derived(msg.flags.includes('\\Flagged'));
 
     function bodyForAi(): string {
         if (!detail) return '';
@@ -78,7 +82,10 @@
 </script>
 
 {#if isOpen}
-    <div class="sheet-backdrop" onclick={closeAll}></div>
+    <!-- Presentation role: this layer only provides the tap-outside-to-close
+         convenience for pointer users; the sheet's close button is the
+         accessible dismiss path. -->
+    <div class="sheet-backdrop" role="presentation" onclick={closeAll}></div>
     <div class="action-sheet slide-up" role="dialog" aria-modal="true" aria-label="Message actions">
         {#if summaryResult || summaryLoading || summaryError}
             <div class="sheet-header">
@@ -214,6 +221,7 @@
         text-align: left;
         cursor: pointer;
         transition: background-color 80ms;
+        user-select: none;
         -webkit-user-select: none;
     }
     .action-row:active { background: var(--bg-hover); }

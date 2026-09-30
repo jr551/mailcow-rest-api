@@ -50,7 +50,7 @@
 </script>
 
 <div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) onCancel(); }} role="button" tabindex="0" onkeydown={(e) => { if (e.key === 'Escape') onCancel(); }}>
-    <div class="modal" onclick={(e) => e.stopPropagation()}>
+    <div class="modal">
         <div class="header">
             <span class="title">Choose folder in Drive</span>
             <button type="button" class="close-btn" onclick={onCancel}>

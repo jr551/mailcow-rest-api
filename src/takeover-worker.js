@@ -362,13 +362,21 @@ function createTakeoverWorker(options = {}) {
     const enabled = !!cfg.enabled;
     const pollIntervalMs = cfg.pollIntervalMs || 5 * MINUTE_MS;
     const maxCandidatesPerTick = cfg.maxCandidatesPerTick || 20;
+    // Header fetches per tick per user. The scan window is allowed to run
+    // ahead of the candidate cap so a backlog of settled messages cannot
+    // hide live mail (see collectCandidates), but it is always finite: a
+    // tick never fetches unbounded headers.
+    const maxHeaderScanPerTick = Math.max(maxCandidatesPerTick, cfg.maxHeaderScanPerTick || 5 * maxCandidatesPerTick);
     const maxThreadChars = cfg.maxThreadChars || 12_000;
     const defaultMaxRepliesPerHour = Number.isFinite(cfg.maxRepliesPerHour) ? cfg.maxRepliesPerHour : 1;
     const defaultMinDelayMinutes = Number.isFinite(cfg.minDelayMinutes) ? cfg.minDelayMinutes : 5;
     const defaultLookbackHours = Number.isFinite(cfg.lookbackHours) ? cfg.lookbackHours : 24;
 
     if (!store) throw new Error('createTakeoverWorker: store is required');
-    if (!cache) throw new Error('createTakeoverWorker: cache is required');
+    // A missing session cache is the documented fail-open state (a broken
+    // cache.db must never take the whole service down): there are no
+    // sessions to poll, so the worker stays inert. Throwing here instead
+    // would reject build() outright and take every feature down with it.
     if (enabled && typeof deliver !== 'function') {
         throw new Error('createTakeoverWorker: deliver is required when takeover is enabled — it is the only path to the approval gate');
     }
@@ -376,6 +384,12 @@ function createTakeoverWorker(options = {}) {
     let timer = null;
     let running = false;
     let stopped = false;
+
+    // Per-user scan rotation position for collectCandidates. In-memory on
+    // purpose: it is a scan position, not message state — message state
+    // lives in the ledger, keyed by content-derived ids that survive a
+    // restart and an expunge.
+    const scanOffsets = new Map();
 
     function note(user, entry) {
         try {
@@ -413,14 +427,44 @@ function createTakeoverWorker(options = {}) {
     // Cheap pass: unread message headers only. No body is downloaded until a
     // message has cleared the deterministic checks, the delay and the rate
     // limit.
-    async function collectCandidates(client, { now }) {
+    //
+    // The pass is bounded twice over, and those bounds are what keep one
+    // poll from turning into an unbounded bill:
+    //
+    //   * at most maxHeaderScanPerTick unseen messages have their headers
+    //     fetched (the scan window), and
+    //   * at most maxCandidatesPerTick of those become candidates — the only
+    //     messages that cost a body fetch and, past the deterministic
+    //     checks, up to two model calls each.
+    //
+    // A message the ledger has settled — processed, or parked in needs-input
+    // — is skipped inside the window instead of consuming a candidate slot.
+    // Those messages stay UNSEEN in IMAP: read state is the human's, and
+    // this worker holds the mailbox read-only, so nothing here may set
+    // \Seen. Without the skip, a growing pile of settled messages sits at
+    // the head of the oldest-first window forever and stops newer mail from
+    // ever being looked at.
+    //
+    // A window that comes back with no candidates held nothing live — it is
+    // all settled — so the scan rotates forward and the next tick looks at
+    // the next slice of unseen messages: a backlog of settled mail ahead of
+    // a live message delays it by at most one rotation instead of starving
+    // it. A window that produced candidates stays put, so a message waiting
+    // out its delay or its hourly slot is re-examined on every tick. The
+    // rotation is a scan position over the current search result and never
+    // message identity: identity is always the ledger key, because the uid
+    // is not usable for it (it is reassigned after an expunge).
+    async function collectCandidates(client, { now, user, isSettled }) {
         const uids = (await client.search({ unseen: true }, { uid: true })) || [];
         // Oldest first: a message that has been waiting longest gets the
-        // first reply slot. The pass is bounded so one poll cannot turn into
-        // an unbounded model bill.
-        const picked = uids.slice(0, maxCandidatesPerTick);
+        // first reply slot.
+        let start = scanOffsets.get(user) || 0;
+        if (start >= uids.length) start = 0;
         const out = [];
-        for (const uid of picked) {
+        let scanned = 0;
+        for (const uid of uids.slice(start, start + maxHeaderScanPerTick)) {
+            if (out.length >= maxCandidatesPerTick) break;
+            scanned++;
             let msg;
             try {
                 msg = await client.fetchOne(String(uid), {
@@ -440,9 +484,12 @@ function createTakeoverWorker(options = {}) {
             const from = firstAddress(env.from);
             const messageId = String(env.messageId || '').replace(/[<>]/g, '') || null;
             const date = env.date ? new Date(env.date).getTime() : null;
+            const key = messageId || `synthetic:${hashKey(from?.address || '', date || 0, env.subject || '')}`;
+            // Settled messages free their window slot: see above.
+            if (isSettled && isSettled(key)) continue;
             out.push({
                 uid: String(uid),
-                key: messageId || `synthetic:${hashKey(from?.address || '', date || 0, env.subject || '')}`,
+                key,
                 messageIdHeader: env.messageId || null,
                 from: from?.address || '',
                 fromName: from?.name || '',
@@ -453,6 +500,15 @@ function createTakeoverWorker(options = {}) {
                 headers: headerMap(msg.headers),
                 age: date ? now - date : 0
             });
+        }
+        if (out.length === 0) {
+            // Nothing live in this slice — it is all settled — so rotate
+            // past it. A slice that produced candidates stays put, so an
+            // unsettled message is re-examined on the very next tick.
+            const next = start + scanned;
+            scanOffsets.set(user, next >= uids.length ? 0 : next);
+        } else {
+            scanOffsets.set(user, start);
         }
         return out;
     }
@@ -759,7 +815,14 @@ function createTakeoverWorker(options = {}) {
             // limit. The mailbox is locked like every other IMAP caller.
             await withClient(pool, creds, async (client) =>
                 withMailbox(client, 'INBOX', true, async () => {
-                    const candidates = await collectCandidates(client, { now });
+                    const candidates = await collectCandidates(client, {
+                        now,
+                        user,
+                        // A settled message must not occupy a candidate
+                        // slot: processed ones never come back, and a
+                        // needs-input one waits there until the owner acts.
+                        isSettled: (key) => store.wasProcessed(user, key) || open.has(key)
+                    });
                     for (const message of candidates) {
                         try {
                             await consider(user, message, { session, settings, open, now, client });
@@ -782,12 +845,25 @@ function createTakeoverWorker(options = {}) {
         }
     }
 
-    async function tick() {
+    // The pass currently in flight, so stop() can wait for its bookkeeping
+    // before server.js closes the stores underneath it.
+    let inFlight = null;
+
+    function tick() {
+        const p = runTick();
+        inFlight = p;
+        void p.finally(() => { if (inFlight === p) inFlight = null; });
+        return p;
+    }
+
+    async function runTick() {
         if (!enabled || running || stopped) return;
         running = true;
         try {
             const now = clock();
-            const sessions = cache.listActiveSessions ? cache.listActiveSessions(now) : [];
+            // A null session cache (the documented fail-open mode) simply
+            // means no sessions to poll — not a poll failure.
+            const sessions = cache && cache.listActiveSessions ? cache.listActiveSessions(now) : [];
             if (!sessions.length) return;
 
             // A user can hold several sessions; work on the first credential
@@ -830,6 +906,9 @@ function createTakeoverWorker(options = {}) {
             clearInterval(timer);
             timer = null;
         }
+        // Resolves once the in-flight pass has finished. Callers that close
+        // stores (server.js onClose) MUST await this before closing them.
+        return inFlight || Promise.resolve();
     }
 
     // Fire a poll now — used after the owner answers a question or switches

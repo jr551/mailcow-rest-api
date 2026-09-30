@@ -30,8 +30,12 @@ const { deliverOutbound } = require('./outbound-webhook-deliver');
 // The rule cannot do this itself — Sieve has no HTTP action — so it files
 // the message into a hidden mailbox (`.wh-<id>`) and this worker polls it.
 // That is why the mailbox exists at all, and why the delivery state is keyed
-// by (user, uidvalidity, uid): the message is a real IMAP message sitting in a
-// real folder, so it can be re-seen after a restart.
+// by (mailbox, uidvalidity, uid): the message is a real IMAP message sitting
+// in a real folder, so it can be re-seen after a restart. The key must name
+// the MAILBOX, not the user — each webhook polls its own folder with its own
+// UID space, and keying by user made two webhooks for one user alias each
+// other's state (a leftover `delivered` row destroyed the other webhook's
+// never-POSTed message; a leftover `giving_up` row suppressed it forever).
 //
 // Ordering is deliberate and matches webhook-forwarder.js: POST first, and
 // only act on the message once the POST is confirmed. A failed delivery leaves
@@ -314,7 +318,7 @@ function createOutboundWebhookForwarder({
 
                 for (const uid of uids || []) {
                     if (stopped) return;
-                    const state = queue.get(webhook.user, uidvalidity, uid);
+                    const state = queue.get(webhook.mailbox, uidvalidity, uid);
                     if (state?.giving_up) continue;
 
                     // Already delivered on a previous poll but the mailbox
@@ -333,13 +337,13 @@ function createOutboundWebhookForwarder({
                         if (!payload) {
                             // Vanished between search and fetch (another
                             // client moved or deleted it) — nothing to do.
-                            queue.clear(webhook.user, uidvalidity, uid);
+                            queue.clear(webhook.mailbox, uidvalidity, uid);
                             continue;
                         }
                         outcome = await deliver(webhook, payload);
                     } catch (err) {
                         const givingUp = attempts >= maxAttempts || err.permanent === true;
-                        queue.recordFailure(webhook.user, uidvalidity, uid, {
+                        queue.recordFailure(webhook.mailbox, uidvalidity, uid, {
                             attempts,
                             nextAttemptAt: current + backoffFor(attempts),
                             error: err.message,
@@ -368,7 +372,7 @@ function createOutboundWebhookForwarder({
                     // durable while the Sent append and mailbox action are
                     // not — a restart in that gap would otherwise re-POST an
                     // already-delivered message on the next poll.
-                    queue.recordDelivered(webhook.user, uidvalidity, uid);
+                    queue.recordDelivered(webhook.mailbox, uidvalidity, uid);
                     await appendSentRecord(client, webhook, payload, outcome);
                     store.touch(webhook.id, current);
                     logger?.info(
@@ -400,9 +404,9 @@ function createOutboundWebhookForwarder({
             } else {
                 await client.messageDelete(String(uid), { uid: true });
             }
-            queue.clear(webhook.user, uidvalidity, uid);
+            queue.clear(webhook.mailbox, uidvalidity, uid);
         } catch (err) {
-            queue.recordDelivered(webhook.user, uidvalidity, uid);
+            queue.recordDelivered(webhook.mailbox, uidvalidity, uid);
             logger?.warn(
                 { err: err.message, id: webhook.id, uid },
                 'outbound webhook delivered but mailbox action failed; will retry that only'
@@ -410,7 +414,19 @@ function createOutboundWebhookForwarder({
         }
     }
 
-    async function tick() {
+    // The poll currently in flight, so stop() can wait for its bookkeeping:
+    // a confirmed POST must be able to record 'delivered' before the store
+    // closes underneath it, or the message is re-sent after the restart.
+    let inFlight = null;
+
+    function tick() {
+        const p = runTick();
+        inFlight = p;
+        void p.finally(() => { if (inFlight === p) inFlight = null; });
+        return p;
+    }
+
+    async function runTick() {
         if (running || stopped) return;
         running = true;
         try {
@@ -462,6 +478,9 @@ function createOutboundWebhookForwarder({
             clearInterval(timer);
             timer = null;
         }
+        // Resolves once the in-flight poll has finished. Callers that close
+        // stores (server.js onClose) MUST await this before closing them.
+        return inFlight || Promise.resolve();
     }
 
     return { start, stop, tick, processWebhook, buildPayload, buildSentRecord };

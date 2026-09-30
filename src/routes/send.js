@@ -64,9 +64,12 @@ async function checkDeliveryStatus(pool, creds, messageId) {
     return withClient(pool, creds, async (client) => {
         return withMailbox(client, 'INBOX', true, async () => {
             // Fast path: search by In-Reply-To header if the server supports it.
+            // `header` must be an OBJECT keyed by header name — imapflow's
+            // search compiler iterates Object.keys, so an array compiled to
+            // `HEADER "0" ...`, which matches nothing and hid every bounce.
             let uids = [];
             try {
-                uids = await client.search({ header: ['In-Reply-To', `<${messageId}>`] });
+                uids = await client.search({ header: { 'In-Reply-To': `<${messageId}>` } });
             } catch {
                 // Fallback: broader search then filter manually.
                 uids = await client.search({ from: 'MAILER-DAEMON' });
@@ -403,26 +406,36 @@ module.exports = async function sendRoutes(app, { db, smtp, pool, trackingStore,
 
         const folders = ['Sent', 'INBOX.Sent', 'Sent Items', 'Sent Messages'];
         for (const folder of folders) {
+            let appended = false;
             try {
                 await withClient(pool, fullCreds, async (client) => {
                     await client.append(folder, raw, ['\\Seen']);
                 });
-                // Invalidate cache so the next listMessages sees the new message.
-                imapCache?.invalidateFolderUid(hash, folder);
-                imapCache?.invalidateFolderStatus(hash, folder);
-                return;
+                appended = true;
             } catch (err) {
                 const isMailboxNotFound = err?.problem?.status === 404 || /not found|nonexistent|does not exist/i.test(err?.message || '');
                 if (!isMailboxNotFound) {
                     // Log real errors (quota, auth, connection) but don't fail the SMTP send.
                     app.log.warn({ err, folder, user: creds.user }, 'Failed to append sent message to Sent folder');
                 }
-                // If this was the last folder, we've exhausted fallbacks — still don't fail the request.
-                if (folder === folders[folders.length - 1]) {
-                    app.log.warn({ user: creds.user }, 'Could not append sent message to any Sent folder');
+            }
+            if (appended) {
+                // Invalidate cache so the next listMessages sees the new
+                // message. Best-effort AND outside the append try: a cache
+                // write failure must not look like a failed APPEND, or the
+                // loop falls through and appends a duplicate copy to the
+                // next candidate folder.
+                try {
+                    imapCache?.invalidateFolderUid(hash, folder);
+                    imapCache?.invalidateFolderStatus(hash, folder);
+                } catch (err) {
+                    app.log.warn({ err, folder, user: creds.user }, 'Could not invalidate sent-folder cache');
                 }
+                return;
             }
         }
+        // All folders failed — still don't fail the request; the message is sent.
+        app.log.warn({ user: creds.user }, 'Could not append sent message to any Sent folder');
     }
 
     async function resolvePendingAndSend(token, req) {
@@ -434,24 +447,29 @@ module.exports = async function sendRoutes(app, { db, smtp, pool, trackingStore,
             throw problem(404, 'Not Found', 'Approval request not found or expired.');
         }
 
+        // Everything that can fail before the message is safely handed to
+        // SMTP sits inside this try: the entry has been CLAIMED at this
+        // point, so any throw must restore it or the user's approved draft
+        // is destroyed by a transient store failure (e.g. tracking.sqlite
+        // hitting SQLITE_FULL) with no way to retry the link.
         let html = entry.html;
-        if (entry.trackOpens && trackingStore) {
-            const baseUrl = getPublicBaseUrl ? getPublicBaseUrl(req) : '';
-            if (baseUrl) {
-                const ref = trackingStore.create({
-                    sender: entry.from,
-                    owner: entry.user,
-                    senderPass: entry.pass,
-                    recipient: entry.to[0] || '',
-                    subject: entry.subject
-                });
-                const pixelUrl = `${baseUrl}/v1/track/${ref}.gif`;
-                html = appendTrackingPixel(entry.html, entry.text, pixelUrl);
-            }
-        }
-
         let result;
         try {
+            if (entry.trackOpens && trackingStore) {
+                const baseUrl = getPublicBaseUrl ? getPublicBaseUrl(req) : '';
+                if (baseUrl) {
+                    const ref = trackingStore.create({
+                        sender: entry.from,
+                        owner: entry.user,
+                        senderPass: entry.pass,
+                        recipient: entry.to[0] || '',
+                        subject: entry.subject
+                    });
+                    const pixelUrl = `${baseUrl}/v1/track/${ref}.gif`;
+                    html = appendTrackingPixel(entry.html, entry.text, pixelUrl);
+                }
+            }
+
             result = await sendMessage({
             smtpConfig: smtp,
             user: entry.user,
@@ -552,6 +570,10 @@ p{color:#666}</style></head>
             } else {
                 req.log.warn({ err }, 'Approval send failed');
                 const detail = err && err.response ? `${err.response} (${err.message})` : err.message;
+                // SMTP responses can echo attacker-influenced text (recipient
+                // addresses, policy quotes) — escape it like every other
+                // interpolated value on these pages.
+                const detailSafe = escapeEmailHtml(detail, 2000);
                 reply.code(502).type('text/html').send(`<!DOCTYPE html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Error</title>
@@ -562,7 +584,7 @@ p{color:#666}</style></head>
 <body>
 <div class="error">⚠️</div>
 <h1>Failed to send</h1>
-<p>${detail}</p>
+<p>${detailSafe}</p>
 </body></html>`);
             }
         }
@@ -629,7 +651,9 @@ p{color:#666}</style></head>
         if (!pool) {
             throw problem(501, 'Not Implemented', 'IMAP pool not available for delivery status checks.');
         }
-        const messageId = decodeURIComponent(req.params.messageId);
+        // The router has already percent-decoded the param; decoding again
+        // turned any id containing a literal '%' into a URIError 500.
+        const messageId = req.params.messageId;
         const result = await checkDeliveryStatus(pool, req.creds, messageId);
         return { messageId, ...result };
     });

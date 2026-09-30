@@ -23,6 +23,14 @@ module.exports = async function sessionRoutes(app, { cache, imap, sessionTtlMs, 
             }
         }
     }, async (req, reply) => {
+        // With the session store down (the fail-open path in server.js) a
+        // token could not be created AND could never be validated again, so
+        // issuing one would be a lie. Say so plainly instead of throwing a
+        // TypeError at `cache.hashCreds`. Basic-authenticated API calls
+        // keep working in this state — only bearer tokens are unavailable.
+        if (!cache) {
+            throw problem(503, 'Service Unavailable', 'Session store unavailable — use Basic authentication');
+        }
         const creds = parseBasicAuth(req.headers.authorization);
         if (!creds) {
             throw unauthorized('Missing Basic credentials');
@@ -114,10 +122,15 @@ module.exports = async function sessionRoutes(app, { cache, imap, sessionTtlMs, 
             }
         }
     }, async (req, reply) => {
-        if (req.session?.token) {
-            cache.deleteSession(req.session.token);
-        } else {
-            cache.deleteSessionsByUser(req.creds.user);
+        // Nothing can be revoked from a session store that isn't there —
+        // and nothing can be validated against it either, so every token it
+        // ever issued is already unusable. 204 is the honest answer.
+        if (cache) {
+            if (req.session?.token) {
+                cache.deleteSession(req.session.token);
+            } else {
+                cache.deleteSessionsByUser(req.creds.user);
+            }
         }
         reply.code(204).send();
     });

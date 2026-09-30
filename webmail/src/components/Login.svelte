@@ -233,6 +233,12 @@
                     <p class="muted">Welcome back — signing you in…</p>
                 </div>
             {:else}
+            <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+            <!-- The form's pointerdown/keydown listeners only set the
+                 `interacted` flag that gates the captcha after a failed
+                 attempt (see `captchaRequired`); every interactive control
+                 inside is a native input. Nothing here is "interaction" in
+                 the a11y sense — there is no action to move to a widget. -->
             <form
                 onsubmit={handleSubmit}
                 onpointerdown={markInteracted}

@@ -142,14 +142,26 @@ function createAuthHook({ cache, imap, appPasswords = null, verifier = verifyWit
             // `cache` can be null: server.js now survives an unusable
             // session store rather than refusing to start. Without one,
             // every session token is simply unknown, which reads as
-            // 'sign in again' rather than a 500 on the request.
-            const session = cache?.getSession(bearerToken, now()) || null;
+            // 'sign in again' rather than a 500 on the request. The same
+            // applies when the store exists but a read throws (corrupt
+            // file, I/O error): an unreadable cache must not 500 every
+            // authenticated request.
+            let session = null;
+            try {
+                session = cache?.getSession(bearerToken, now()) || null;
+            } catch (err) {
+                req.log.warn({ err: err.message }, 'session cache read failed; treating token as unknown');
+            }
             if (!session) {
                 reply.header('WWW-Authenticate', 'Bearer realm="imap-rest"');
                 throw unauthorized('Invalid or expired session token');
             }
             req.creds = { user: session.user, pass: session.pass, hash: session.hash };
-            req.session = { expiresAt: session.expiresAt };
+            // The presented token is carried on req.session so the session
+            // routes can revoke exactly this token on Bearer sign-out (the
+            // documented contract) instead of falling through to revoking
+            // every session for the mailbox.
+            req.session = { token: bearerToken, expiresAt: session.expiresAt };
             return;
         }
 
@@ -168,7 +180,15 @@ function createAuthHook({ cache, imap, appPasswords = null, verifier = verifyWit
         }
 
         const hash = hashCreds(creds.user, creds.pass);
-        const cached = cache?.get(hash, now()) || null;
+        let cached = null;
+        try {
+            cached = cache?.get(hash, now()) || null;
+        } catch (err) {
+            // The auth cache only saves an IMAP round-trip. If it cannot be
+            // read, fall through to the real verification rather than
+            // failing the request.
+            req.log.warn({ err: err.message }, 'auth cache read failed; verifying against IMAP');
+        }
         if (cached) {
             if (!cached.valid) {
                 reply.header('WWW-Authenticate', 'Bearer realm="imap-rest"');

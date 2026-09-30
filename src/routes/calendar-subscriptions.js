@@ -15,7 +15,30 @@ const { validateTargetUrl, createPinnedDispatcher } = require('../utils/ssrf-gua
 // pin on fetch, and keep upstream error text in the log only.
 const FEED_SCHEMES = ['https:', 'http:'];
 
-module.exports = async function calendarSubscriptionRoutes(app, { store }) {
+// A subscribed feed is a user-controlled URL serving attacker-controlled
+// bytes. `body.text()` streamed it all into the heap with no limit — on
+// both the success and the error path. 10 MB is far above any real feed
+// (a year of densely recurring events is well under 1 MB) and far below
+// anything that can hurt the process.
+const DEFAULT_MAX_FEED_BYTES = 10 * 1024 * 1024;
+
+// Drain an undici response body as text, refusing to buffer past maxBytes
+// and destroying the stream at the cap so undici stops pulling the rest.
+async function readBodyCapped(body, maxBytes) {
+    const chunks = [];
+    let total = 0;
+    for await (const chunk of body) {
+        total += chunk.length;
+        if (total > maxBytes) {
+            if (typeof body.destroy === 'function') body.destroy();
+            throw new Error(`feed exceeds ${maxBytes} bytes`);
+        }
+        chunks.push(chunk);
+    }
+    return Buffer.concat(chunks).toString('utf8');
+}
+
+module.exports = async function calendarSubscriptionRoutes(app, { store, maxFeedBytes = DEFAULT_MAX_FEED_BYTES }) {
     if (!store) {
         app.log.warn('calendar subscription routes disabled: store not available');
         return;
@@ -107,7 +130,7 @@ module.exports = async function calendarSubscriptionRoutes(app, { store }) {
         }
     }, async (req, reply) => {
         const user = requireUser(req);
-        const id = decodeURIComponent(req.params.id);
+        const id = req.params.id;
         const removed = store.remove({ id, user });
         if (!removed) throw problem(404, 'Not Found', 'Subscription not found');
         reply.code(204).send();
@@ -140,7 +163,7 @@ module.exports = async function calendarSubscriptionRoutes(app, { store }) {
         }
     }, async (req) => {
         const user = requireUser(req);
-        const id = decodeURIComponent(req.params.id);
+        const id = req.params.id;
         const sub = store.get({ id, user });
         if (!sub) throw problem(404, 'Not Found', 'Subscription not found');
 
@@ -162,18 +185,28 @@ module.exports = async function calendarSubscriptionRoutes(app, { store }) {
         let icalText;
         try {
             // Resolve, reject private answers, pin to the checked address.
-            const dispatcher = await createPinnedDispatcher(sub.url);
+            // A literal-IP host has nothing to pin: createPinnedDispatcher
+            // returns null for it, and undici's request() throws on a null
+            // dispatcher — pass undefined so the request goes out normally.
+            const dispatcher = (await createPinnedDispatcher(sub.url)) || undefined;
             const { body, statusCode } = await request(sub.url, {
                 method: 'GET',
                 dispatcher,
                 headers: { accept: 'text/calendar, application/octet-stream, */*' },
                 signal: AbortSignal.timeout(30000)
             });
-            if (statusCode >= 400) {
-                const text = await body.text();
+            // undici's request() does not follow redirects (maxRedirections
+            // defaults to 0), so anything outside 2xx — including a 301/302
+            // for a feed that moved — is a fetch failure. Treating 3xx as
+            // success used to parse the redirect's empty body into
+            // {events: []}, indistinguishable from a healthy empty calendar.
+            if (statusCode < 200 || statusCode >= 300) {
+                // A capped prefix of the error body for the log only — an
+                // error response is still attacker-controlled bytes.
+                const text = await readBodyCapped(body, maxFeedBytes).catch(() => '');
                 throw new Error(`HTTP ${statusCode}: ${text.slice(0, 200)}`);
             }
-            icalText = await body.text();
+            icalText = await readBodyCapped(body, maxFeedBytes);
         } catch (err) {
             // The upstream message names hosts, ports and errno — exactly
             // what makes this a scanning oracle. Log it; return a generic

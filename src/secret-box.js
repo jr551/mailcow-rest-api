@@ -45,18 +45,36 @@ function loadKey({ envValue, dataDir, logger }) {
 
     const keyPath = path.join(dataDir, KEY_FILE);
     try {
+        let hadKeyFile = false;
         if (fs.existsSync(keyPath)) {
+            hadKeyFile = true;
             const raw = fs.readFileSync(keyPath, 'utf8').trim();
             if (raw) return { key: deriveKey(raw), source: 'file' };
         }
         fs.mkdirSync(dataDir, { recursive: true });
         const generated = crypto.randomBytes(32).toString('hex');
         fs.writeFileSync(keyPath, generated + '\n', { mode: 0o600 });
-        logger?.warn(
-            { keyPath },
-            'generated a credential encryption key on disk — set CREDENTIAL_ENCRYPTION_KEY ' +
-            'to this value in the environment so backups of the data volume do not carry the key with them'
-        );
+        if (hadKeyFile) {
+            // An EXISTING but empty/unreadable key file is not a fresh
+            // install: whatever sealed credentials are in the databases was
+            // sealed under a different key, and this replacement cannot read
+            // any of it. Generating is the only way to keep the service
+            // running, but the operator has to be told the truth — this is a
+            // master-key rotation and previously sealed sessions, app
+            // passwords and tracking senders are now unreadable.
+            logger?.error(
+                { keyPath },
+                'credential-key file exists but is empty or unusable — generated a NEW key; ' +
+                'every credential sealed under the previous key is now unreadable and its owner must sign in again. ' +
+                'If you still have the previous key, set CREDENTIAL_ENCRYPTION_KEY to it to recover.'
+            );
+        } else {
+            logger?.warn(
+                { keyPath },
+                'generated a credential encryption key on disk — set CREDENTIAL_ENCRYPTION_KEY ' +
+                'to this value in the environment so backups of the data volume do not carry the key with them'
+            );
+        }
         return { key: deriveKey(generated), source: 'file' };
     } catch (err) {
         logger?.error({ err: err.message }, 'could not establish a credential encryption key');

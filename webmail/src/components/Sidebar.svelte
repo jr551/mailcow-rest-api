@@ -184,6 +184,7 @@
     let bulkRunning = $state(false);
     let bulkProgress = $state<{ done: number; total: number } | null>(null);
     let stylePickerOpen = $state(false);
+    let stylePickerBtn = $state<HTMLButtonElement | null>(null);
     let bulkAbort: AbortController | null = null;
 
     function toggleStylePicker() {
@@ -474,6 +475,7 @@
                     <button
                         type="button"
                         class={`footer-btn ${bulkRunning ? 'picking' : ''}`}
+                        bind:this={stylePickerBtn}
                         onclick={toggleStylePicker}
                         title={bulkRunning
                             ? 'Click to cancel'
@@ -510,6 +512,18 @@
                             role="menu"
                             data-testid="ai-icons-style-picker"
                             onclick={(e) => e.stopPropagation()}
+                            onkeydown={(e) => {
+                                // Escape dismisses (and returns focus to the
+                                // trigger) — previously the menu could only
+                                // be closed by picking a style or clicking
+                                // away, leaving keyboard users stranded in
+                                // it once focus was inside.
+                                if (e.key === 'Escape') {
+                                    e.stopPropagation();
+                                    stylePickerOpen = false;
+                                    stylePickerBtn?.focus();
+                                }
+                            }}
                         >
                             <li class="style-head">Pick a style</li>
                             {#each ICON_STYLES as s (s.id)}
@@ -541,6 +555,15 @@
         style={`top: ${menu.y}px; left: ${menu.x}px;`}
         onclick={(e) => e.stopPropagation()}
         oncontextmenu={(e) => e.preventDefault()}
+        onkeydown={(e) => {
+            // Escape dismisses — the menu previously only closed on outside
+            // click/right-click, so once focus was on an item there was no
+            // keyboard way out short of running one of the actions.
+            if (e.key === 'Escape') {
+                e.stopPropagation();
+                closeMenu();
+            }
+        }}
     >
         <li><button type="button" role="menuitem" onclick={() => doCreate(menu!.path)}>
             <Icon name="plus" size={12} /> New subfolder
@@ -658,11 +681,10 @@
         transition: transform 160ms ease-out, color var(--transition-fast);
     }
     .caret:hover { color: var(--text-primary); }
-    .folder-row:has(.folder.expanded) .caret,
-    .folder.expanded ~ .caret { transform: rotate(0deg); }
-    /* Rotate caret when the folder's expanded — easier to detect via the
-     * .folder.expanded sibling pattern above; if grouping changes we have
-     * a fallback that checks isFolderExpanded directly. */
+    .folder-row:has(.folder.expanded) .caret { transform: rotate(0deg); }
+    /* Rotate caret when the folder's expanded. The caret button PRECEDES the
+     * .folder button in the DOM, so a sibling combinator can never reach it —
+     * the :has() form above is the one that matches. */
     .caret-spacer { flex: 0 0 auto; width: 18px; height: 1px; }
     .folder {
         flex: 1;
@@ -867,20 +889,6 @@
     .footer-btn.new-folder { color: var(--text-secondary); font-weight: 600; }
     .footer-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
     .footer-btn span { flex: 1; }
-    .footer-btn kbd {
-        display: inline-block;
-        min-width: 18px;
-        text-align: center;
-        padding: 1px 5px;
-        font-family: var(--font-mono);
-        font-size: 10px;
-        font-weight: 600;
-        background: var(--bg-base);
-        border: 1px solid var(--border-subtle);
-        border-bottom-width: 2px;
-        border-radius: var(--radius-xs);
-        color: var(--text-secondary);
-    }
 
     /* Style picker popup */
     .ai-icons-wrap { position: relative; }

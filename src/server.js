@@ -7,6 +7,7 @@ const path = require('node:path');
 const Fastify = require('fastify');
 const sensible = require('@fastify/sensible');
 const fastifyStatic = require('@fastify/static');
+const { Agent } = require('undici');
 
 const config = require('./config');
 const { createCache } = require('./cache');
@@ -242,6 +243,43 @@ function isCorsOriginAllowed(origin) {
     return wildcardApex.some(apex => origin.startsWith('https://') && origin.endsWith(`.${apex}`));
 }
 
+// The takeover worker's ONLY exit to a message: a self-POST to
+// /v1/messages/send with the owner's Basic credentials, so the request lands
+// in the EXISTING approval gate (routes/send.js `isBasicAuth`) instead of
+// sending. Nothing in the takeover path can send mail directly.
+//
+// The URL targets the listener build() actually starts: https when
+// TLS_CERT/TLS_KEY are configured. Hardcoding http:// meant every draft died
+// before it could reach the gate on in-process-TLS deployments. And flipping
+// the scheme alone is not enough: the loopback listener's certificate is
+// issued for the public name (often self-signed), so a verified fetch fails
+// with DEPTH_ZERO_SELF_SIGNED_CERT before reaching the gate — hence the
+// dedicated dispatcher with verification relaxed FOR THIS CALL ONLY. It is
+// the process talking to itself over loopback; there is no network between
+// the two ends to attack.
+function createTakeoverDeliver({ config: cfg, fetchImpl = fetch }) {
+    const scheme = cfg.tls && cfg.tls.cert && cfg.tls.key ? 'https' : 'http';
+    const dispatcher = scheme === 'https'
+        ? new Agent({ connect: { rejectUnauthorized: false } })
+        : undefined;
+    return async function takeoverDeliver({ user, pass, message }) {
+        const res = await fetchImpl(`${scheme}://127.0.0.1:${cfg.port}/v1/messages/send`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json',
+                authorization: `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`
+            },
+            body: JSON.stringify(message),
+            ...(dispatcher ? { dispatcher } : {})
+        });
+        if (!res.ok) {
+            const detail = await res.text().catch(() => '');
+            throw new Error(`approval-gated send refused (${res.status}): ${detail.slice(0, 300)}`);
+        }
+        return res.json().catch(() => null);
+    };
+}
+
 async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap, pushLookup } = {}) {
     const app = Fastify({
         serverFactory: createServer,
@@ -320,7 +358,8 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
                 ttlInvalidMs: config.cache.ttlInvalidMs,
                 pruneIntervalMs: config.cache.pruneIntervalMs,
                 maxLifetimeMs: config.session.maxLifetimeMs,
-                secretBox
+                secretBox,
+                logger: app.log
             });
         } catch (err) {
             app.log.error(
@@ -330,11 +369,33 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         }
     }
 
+    // A corrupt or unwritable DISPOSABLE cache (imap-cache, ocr-cache,
+    // ai-cache, image-proxy) must not stop the service either: those files
+    // hold only rebuildable data, so a broken one costs a cache miss, not an
+    // outage. Fall back to an in-memory cache with the same API. Load-bearing
+    // stores (push subscriptions, tracking pixels, webhook delivery queues)
+    // deliberately keep failing startup instead — silently running them from
+    // memory would lose durable state on restart and lie about durability.
+    //
+    // As with the session cache above: deliberately NOT deleting or
+    // recreating a corrupt file — it is evidence, and the operator decides.
+    function openDisposableCache(name, filePath, factory) {
+        try {
+            return factory(filePath);
+        } catch (err) {
+            app.log.error(
+                { err: err.message, code: err.code, path: filePath },
+                `${name} cache unusable; continuing with an in-memory cache until the file is removed`
+            );
+            return factory(':memory:');
+        }
+    }
+
     if (ocrCache === undefined && config.ocr.cacheEnabled) {
-        ocrCache = createOcrCache({
-            filePath: config.ocr.cachePath,
+        ocrCache = openDisposableCache('OCR', config.ocr.cachePath, (filePath) => createOcrCache({
+            filePath,
             maxEntries: config.ocr.cacheMaxEntries
-        });
+        }));
     }
 
     pushStore = pushStore ?? createPushStore({ filePath: config.push.dbPath });
@@ -347,10 +408,13 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
 
     // Seal anything written before encryption existed. Lazy
     // replacement-on-write alone would leave real passwords readable until
-    // every pre-upgrade session expired.
+    // every pre-upgrade session expired. Each store migrates independently of
+    // whether the others exist: `cache` is null whenever the session cache
+    // failed to open, and a missing cache must not silently skip sealing the
+    // mailbox passwords tracking.db retains for pixel notifications.
     if (secretBox.enabled) {
         try {
-            const sessions = cache.migratePlaintextSessions ? cache.migratePlaintextSessions() : 0;
+            const sessions = cache && cache.migratePlaintextSessions ? cache.migratePlaintextSessions() : 0;
             const senders = trackingStore.migratePlaintextSenders();
             if (sessions || senders) {
                 app.log.info({ sessions, senders }, 'encrypted credentials written before this version');
@@ -360,16 +424,16 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         }
     }
 
-    const imageProxyCache = createImageProxyCache({
-        filePath: config.imageProxy.cachePath,
+    const imageProxyCache = openDisposableCache('image-proxy', config.imageProxy.cachePath, (filePath) => createImageProxyCache({
+        filePath,
         maxBytes: config.imageProxy.maxBytes
-    });
+    }));
 
-    imapCache = imapCache ?? createImapCache({
-        filePath: config.imapCache.path,
+    imapCache = imapCache ?? openDisposableCache('IMAP', config.imapCache.path, (filePath) => createImapCache({
+        filePath,
         ttlMs: config.cache.ttlValidMs,
         pruneIntervalMs: config.cache.pruneIntervalMs
-    });
+    }));
 
     pool = pool ?? createPool({
         imap: imapCfg,
@@ -379,14 +443,14 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
     });
 
     const aiCache = config.ai.cacheEnabled
-        ? createAiCache({
-            filePath: config.ai.cachePath,
+        ? openDisposableCache('AI', config.ai.cachePath, (filePath) => createAiCache({
+            filePath,
             ttlMs: config.ai.cacheTtlMs,
             maxEntries: config.ai.cacheMaxEntries,
             // Cache rows are sealed with a key derived from the server key
             // and the user's own password, so the file is inert without them.
             serverKey: secretBox.deriveSubKey('ai-cache')
-        })
+        }))
         : null;
     // Expiry is lazy on read; this just keeps the file from holding rows
     // nobody will ever ask for again.
@@ -497,26 +561,9 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         app.log.warn('takeover disabled — no credential encryption key available');
     }
 
-    // The ONLY exit for a drafted message. It self-POSTs to
-    // /v1/messages/send with the owner's own Basic credentials, so the
-    // request lands in the EXISTING approval gate: src/routes/send.js:278
-    // `if (isBasicAuth(req))` creates a pending approve/deny record instead
-    // of sending. Nothing in the takeover path can send mail directly.
-    async function takeoverDeliver({ user, pass, message }) {
-        const res = await fetch(`http://127.0.0.1:${config.port}/v1/messages/send`, {
-            method: 'POST',
-            headers: {
-                'content-type': 'application/json',
-                authorization: `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`
-            },
-            body: JSON.stringify(message)
-        });
-        if (!res.ok) {
-            const detail = await res.text().catch(() => '');
-            throw new Error(`approval-gated send refused (${res.status}): ${detail.slice(0, 300)}`);
-        }
-        return res.json().catch(() => null);
-    }
+    // The ONLY exit for a drafted message — see createTakeoverDeliver above
+    // for why it is a self-POST into the existing approval gate.
+    const takeoverDeliver = createTakeoverDeliver({ config });
 
     const takeoverWorker = takeoverStore
         ? createTakeoverWorker({
@@ -712,7 +759,7 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         ok: true,
         // Lets the SPA notice it's running a stale build and self-refresh.
         version: pkg.version,
-        cache: cache.size(),
+        cache: cache ? cache.size() : null,
         pool: pool.count(),
         capabilities: {
             ai: !!config.ai.apiKey,
@@ -795,13 +842,22 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
     await app.register(telemetryRoutes, { logPath: process.env.TELEMETRY_LOG_PATH || path.join(path.dirname(config.cache.path), 'error.log') });
 
     app.addHook('onClose', async () => {
-        if (pushSender) pushSender.stop();
-        if (webhookForwarder) webhookForwarder.stop();
+        // Stop the workers FIRST and wait for any in-flight poll to finish
+        // its bookkeeping. stop() resolves only once the running tick has
+        // settled; closing a store beneath a running poll loses the
+        // 'delivered'/watermark write that keeps a confirmed POST from being
+        // re-sent (or a notification dropped) after the restart.
+        await Promise.all([
+            pushSender ? pushSender.stop() : null,
+            webhookForwarder ? webhookForwarder.stop() : null,
+            outboundWebhookForwarder ? outboundWebhookForwarder.stop() : null,
+            takeoverWorker ? takeoverWorker.stop() : null
+        ]);
         if (webhookStore) webhookStore.close();
         if (aiCachePruneTimer) clearInterval(aiCachePruneTimer);
         if (aiCache) aiCache.close();
         await pool.closeAll();
-        cache.close();
+        if (cache) cache.close();
         if (ocrCache) ocrCache.close();
         if (pushStore && pushStore.close) pushStore.close();
         if (trackingStore) trackingStore.close();
@@ -810,10 +866,8 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         if (adminSettings) adminSettings.close();
         if (appPasswordStore) appPasswordStore.close();
         if (webhookInboxStore) webhookInboxStore.close();
-        if (outboundWebhookForwarder) outboundWebhookForwarder.stop();
         if (outboundWebhookQueue) outboundWebhookQueue.close();
         if (outboundWebhookStore) outboundWebhookStore.close();
-        if (takeoverWorker) takeoverWorker.stop();
         if (takeoverStore) takeoverStore.close();
         if (mailcowDb) await mailcowDb.close();
     });
@@ -857,7 +911,7 @@ async function start() {
     }
 }
 
-module.exports = { build, start, getPublicBaseUrl };
+module.exports = { build, start, getPublicBaseUrl, createTakeoverDeliver };
 
 if (require.main === module) {
     start();

@@ -16,7 +16,18 @@
     let saving = $state(false);
     let textareaEl = $state<HTMLTextAreaElement | null>(null);
 
-    const isMarkdown = item.name.toLowerCase().endsWith('.md');
+    const isMarkdown = $derived(item.name.toLowerCase().endsWith('.md'));
+
+    // Re-seed when the parent swaps the file underneath a live editor.
+    // The editor is mounted under {#if driveState.textEditor}, but
+    // openTextEditor() replaces that state without unmounting when a second
+    // Edit lands while one is open (two quick right-click Edits race two
+    // fetches; both assignments hit the same mounted component). Without
+    // this, the textarea kept the FIRST file's body under the SECOND file's
+    // name and saving wrote the wrong content to the new path.
+    $effect(() => {
+        content = initialContent;
+    });
 
     async function save() {
         if (saving) return;
@@ -55,7 +66,7 @@
 <svelte:window onkeydown={onKeydown} />
 
 <div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) onClose(); }} role="button" tabindex="0" onkeydown={(e) => { if (e.key === 'Escape') onClose(); }}>
-    <div class="modal" onclick={(e) => e.stopPropagation()}>
+    <div class="modal">
         <div class="header">
             <span class="title">Edit {item.name}</span>
             <div class="tabs">

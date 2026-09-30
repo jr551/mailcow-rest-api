@@ -106,8 +106,8 @@
 </script>
 
 {#if item}
-    <div class="preview-overlay" onclick={onClose} role="button" tabindex="0" onkeydown={(e) => { if (e.key === 'Escape') onClose(); }}>
-        <div class="preview-modal" onclick={(e) => e.stopPropagation()}>
+    <div class="preview-overlay" onclick={(e) => { if (e.target === e.currentTarget) onClose(); }} role="button" tabindex="0" onkeydown={(e) => { if (e.key === 'Escape') onClose(); }}>
+        <div class="preview-modal">
             <div class="preview-header">
                 <span class="preview-title">{item.name}</span>
                 <div class="preview-actions">

@@ -196,9 +196,14 @@ module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorize
         requirePassword(req);
         const user = req.creds.user;
         const pass = req.creds.pass;
-        const calendar = decodeURIComponent(req.params.calendar);
+        const calendar = req.params.calendar;
         const { start, end } = req.query;
         if (!start || !end) throw badRequest('start and end query parameters are required');
+        // The CalDAV date formatter throws `Invalid date` on anything it
+        // can't parse — a 500 for a user typo. Validate up front.
+        if (Number.isNaN(new Date(start).getTime()) || Number.isNaN(new Date(end).getTime())) {
+            throw badRequest('Invalid start or end date');
+        }
         const events = await client.listEvents(user, pass, calendar, start, end);
         return { user, calendar, events };
     });
@@ -216,8 +221,8 @@ module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorize
         requirePassword(req);
         const user = req.creds.user;
         const pass = req.creds.pass;
-        const calendar = decodeURIComponent(req.params.calendar);
-        const uid = decodeURIComponent(req.params.uid);
+        const calendar = req.params.calendar;
+        const uid = req.params.uid;
         const event = await client.getEvent(user, pass, calendar, uid);
         if (!event) throw problem(404, 'Not Found', 'Event not found');
         return event;
@@ -254,7 +259,7 @@ module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorize
         requirePassword(req);
         const user = req.creds.user;
         const pass = req.creds.pass;
-        const calendar = decodeURIComponent(req.params.calendar);
+        const calendar = req.params.calendar;
         const { summary, start, end, description, location } = req.body;
         try {
             const result = await client.createEvent(user, pass, calendar, { summary, start, end, description, location });
@@ -279,7 +284,7 @@ module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorize
         requirePassword(req);
         const user = req.creds.user;
         const pass = req.creds.pass;
-        const calendar = decodeURIComponent(req.params.calendar);
+        const calendar = req.params.calendar;
         // Wide window: 2 years back, 2 years forward.
         const now = new Date();
         const start = new Date(now.getFullYear() - 2, now.getMonth(), 1).toISOString();
@@ -315,7 +320,7 @@ module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorize
         requirePassword(req);
         const user = req.creds.user;
         const pass = req.creds.pass;
-        const calendar = decodeURIComponent(req.params.calendar);
+        const calendar = req.params.calendar;
         const { token, expiresAt } = icalTokens.issue({ user, pass, calendar });
         const proto = req.headers['x-forwarded-proto'] || 'https';
         const host = req.headers['x-forwarded-host'] || req.headers.host;
@@ -342,7 +347,7 @@ module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorize
         }
     }, async (req) => {
         const user = req.creds.user;
-        const calendar = decodeURIComponent(req.params.calendar);
+        const calendar = req.params.calendar;
         const rec = icalTokens.findByUserCalendar(user, calendar);
         if (!rec) return { token: null, url: null, createdAt: null, expiresAt: null };
         const proto = req.headers['x-forwarded-proto'] || 'https';
@@ -359,7 +364,7 @@ module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorize
         schema: { tags: ['calendar'], summary: 'Revoke the public iCal token for this calendar' }
     }, async (req, reply) => {
         const user = req.creds.user;
-        const calendar = decodeURIComponent(req.params.calendar);
+        const calendar = req.params.calendar;
         icalTokens.revoke(user, calendar);
         reply.code(204);
     });
@@ -583,7 +588,18 @@ module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorize
             return renderErrorPage({ status: 404, title: 'Not found', detail: 'This event link is unknown, expired, or not valid for this event.' });
         }
         const { rec, uid } = claim;
-        const raw = await client.getEventRaw(rec.user, rec.pass, rec.calendar, uid).catch(() => null);
+        // getEventRaw returns null only on a genuine 404 and throws
+        // otherwise; swallowing the throw here made a CalDAV outage render
+        // "Event not found" (404) — every event looked deleted. Mirror the
+        // POST handler below and surface backend failures as 502.
+        let raw;
+        try {
+            raw = await client.getEventRaw(rec.user, rec.pass, rec.calendar, uid);
+        } catch (err) {
+            req.log.warn({ err: err.message }, 'public edit: fetch raw failed');
+            reply.code(502).type('text/html');
+            return renderErrorPage({ status: 502, title: 'Could not load event', detail: 'The calendar server is unreachable. Try again in a moment.' });
+        }
         if (!raw) {
             reply.code(404).type('text/html');
             return renderErrorPage({ status: 404, title: 'Event not found', detail: 'The event may have been deleted from the calendar.' });
@@ -791,8 +807,8 @@ module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorize
         requirePassword(req);
         const user = req.creds.user;
         const pass = req.creds.pass;
-        const calendar = decodeURIComponent(req.params.calendar);
-        const uid = decodeURIComponent(req.params.uid);
+        const calendar = req.params.calendar;
+        const uid = req.params.uid;
         try {
             await client.deleteEvent(user, pass, calendar, uid);
             reply.code(204).send();

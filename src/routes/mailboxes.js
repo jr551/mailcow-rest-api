@@ -28,8 +28,12 @@ function isInternalMailbox(path) {
     return isWebhookMailbox(path) || isAddressBookMailbox(path);
 }
 
-function decodeMailboxPathParam(req) {
-    return decodeURIComponent(req.params['*'] || req.params.path || '');
+// find-my-way has already percent-decoded the param exactly once. Decoding
+// again turned a mailbox literally named `A%2FB` into `A/B` — so DELETE/PUT
+// operated on a different mailbox than the caller addressed — and threw
+// URIError (a 500) on any name containing a bare percent, like `100%`.
+function mailboxPathParam(req) {
+    return req.params['*'] || req.params.path || '';
 }
 
 module.exports = async function mailboxRoutes(app, { pool, imapCache }) {
@@ -129,7 +133,7 @@ module.exports = async function mailboxRoutes(app, { pool, imapCache }) {
             response: { 200: mailboxSchema, 404: problemSchema, 409: problemSchema }
         }
     }, async (req) => {
-        const from = decodeMailboxPathParam(req);
+        const from = mailboxPathParam(req);
         const { newPath } = req.body;
         return withClient(pool, req.creds, async (client) => {
             const res = await client.mailboxRename(from, newPath);
@@ -155,7 +159,7 @@ module.exports = async function mailboxRoutes(app, { pool, imapCache }) {
             response: { 204: { type: 'null' }, 404: problemSchema }
         }
     }, async (req, reply) => {
-        const path = decodeMailboxPathParam(req);
+        const path = mailboxPathParam(req);
         if (path.toUpperCase() === 'INBOX') throw badRequest('Cannot delete INBOX');
         await withClient(pool, req.creds, async (client) => {
             await client.mailboxDelete(path);

@@ -303,7 +303,9 @@
 </div>
 
 {#if showFromPicker}
-    <div class="sheet-backdrop" onclick={() => showFromPicker = false}></div>
+    <!-- Tap-outside-to-close is a pointer convenience; the sheet's close
+         button is the accessible dismiss path. -->
+    <div class="sheet-backdrop" role="presentation" onclick={() => showFromPicker = false}></div>
     <div class="picker-sheet slide-up">
         <div class="picker-header">
             <h2>From</h2>

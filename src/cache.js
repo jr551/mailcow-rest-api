@@ -22,6 +22,7 @@ function createCache(opts) {
     // deployment where no key could be established) values pass through
     // unchanged, so behaviour is unaffected.
     const secretBox = opts.secretBox || null;
+    const logger = opts.logger || null;
     const seal = (v) => (secretBox ? secretBox.encrypt(v) : v);
     const open = (v) => (secretBox ? secretBox.decrypt(v) : v);
 
@@ -89,6 +90,21 @@ function createCache(opts) {
         map.set(key, value);
     }
 
+    // Maintenance writes (sliding-TTL extension, expired-row cleanup) are
+    // best-effort: the read result is the truth, and a full or read-only
+    // database must not turn a cache lookup into a failed request. Real write
+    // operations (set/createSession/invalidate) still throw — their callers
+    // decide what a failed write means.
+    function bestEffort(what, fn) {
+        try {
+            fn();
+        } catch (err) {
+            if (logger) {
+                logger.warn({ err: err.message, op: what }, 'session cache maintenance write failed (ignored)');
+            }
+        }
+    }
+
     function memGet(map, key, now) {
         const entry = map.get(key);
         if (entry === undefined) return undefined;
@@ -106,7 +122,7 @@ function createCache(opts) {
         const row = getStmt.get(hash);
         if (!row) return null;
         if (row.expires_at < now) {
-            deleteStmt.run(hash);
+            bestEffort('auth-cache cleanup', () => deleteStmt.run(hash));
             return null;
         }
         const result = { valid: row.valid === 1, expiresAt: row.expires_at };
@@ -179,35 +195,35 @@ function createCache(opts) {
         const cached = memGet(sessionMem, token, now);
         if (cached !== undefined) {
             if (cached.createdAt != null && now - cached.createdAt > maxLifetimeMs) {
-                sessionDeleteStmt.run(token);
+                bestEffort('session lifetime cleanup', () => sessionDeleteStmt.run(token));
                 sessionMem.delete(token);
                 return null;
             }
             const newExpiresAt = now + ttlValidMs;
             cached.expiresAt = newExpiresAt;
-            sessionExtendStmt.run(newExpiresAt, token);
+            bestEffort('session TTL extension', () => sessionExtendStmt.run(newExpiresAt, token));
             return { user: cached.user, pass: cached.pass, hash: cached.hash, expiresAt: newExpiresAt };
         }
 
         const row = sessionGetStmt.get(token);
         if (!row) return null;
         if (row.expires_at < now) {
-            sessionDeleteStmt.run(token);
+            bestEffort('session expiry cleanup', () => sessionDeleteStmt.run(token));
             return null;
         }
         const createdAt = row.created_at != null ? row.created_at : (row.expires_at - ttlValidMs);
         if (now - createdAt > maxLifetimeMs) {
-            sessionDeleteStmt.run(token);
+            bestEffort('session lifetime cleanup', () => sessionDeleteStmt.run(token));
             return null;
         }
         const newExpiresAt = now + ttlValidMs;
-        sessionExtendStmt.run(newExpiresAt, token);
+        bestEffort('session TTL extension', () => sessionExtendStmt.run(newExpiresAt, token));
         const pass = open(row.pass);
         if (pass === null) {
             // Undecryptable — the key changed or the row was tampered
             // with. Treat as no session rather than handing IMAP a
             // password we can't vouch for.
-            sessionDeleteStmt.run(token);
+            bestEffort('session undecryptable cleanup', () => sessionDeleteStmt.run(token));
             return null;
         }
         const result = { user: row.user, pass, hash: row.hash, expiresAt: newExpiresAt };

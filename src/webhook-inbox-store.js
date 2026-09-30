@@ -138,7 +138,14 @@ function createWebhookInboxStore({ filePath, secretBox, maxPerUser = 10 } = {}) 
         const password = secretBox ? secretBox.decrypt(row.secret) : null;
         if (!password) return { ok: false, reason: 'undecryptable' };
 
-        touchStmt.run(now, row.id);
+        // The last_used touch is maintenance, not part of the token check: a
+        // full or read-only database must not fail a request whose token just
+        // verified. Same reasoning as app-password-store.verify().
+        try {
+            touchStmt.run(now, row.id);
+        } catch {
+            /* last_used tracking is best-effort */
+        }
         return { ok: true, user: row.user, password, id: row.id, label: row.label };
     }
 

@@ -15,8 +15,26 @@ const { notFound, badRequest, problem } = require('../errors');
 const config = require('../config');
 const { ocrAttachment, pagesToText } = require('../ocr');
 
-function decodeMailboxPathParam(req) {
-    return decodeURIComponent(req.params['*'] || req.params.path || '');
+// The router (find-my-way) percent-decodes route params before handlers see
+// them — '%252F' is already '%2F' here. Decoding again was both wrong and
+// dangerous: a mailbox literally named 'A%2FB' was addressed as 'A/B', so
+// move/delete silently acted on a DIFFERENT mailbox than the caller named,
+// and a mailbox named '100%' threw URIError → 500. Use the param exactly as
+// the router hands it over.
+function mailboxPathParam(req) {
+    return req.params['*'] || req.params.path || '';
+}
+
+// IMAP UIDs are positive integers. An unvalidated Number() here turned
+// 'abc' into NaN and stringified it to 'NaN' for the IMAP layer, which
+// rejected it — a 502 with an upstream-error shape for what is a plain
+// client mistake. Malformed uids are 400s and must never reach IMAP.
+function parseUidParam(req) {
+    const raw = String(req.params.uid ?? '');
+    if (!/^\d+$/.test(raw)) throw badRequest('uid must be a positive integer');
+    const uid = Number(raw);
+    if (!Number.isSafeInteger(uid) || uid < 1) throw badRequest('uid must be a positive integer');
+    return uid;
 }
 
 // Parse one or more Authentication-Results headers into discrete
@@ -185,7 +203,7 @@ module.exports = async function messageRoutes(app, { pool, ocrCache, imapCache }
             }
         }
     }, async (req, reply) => {
-        const mboxPath = decodeMailboxPathParam(req);
+        const mboxPath = mailboxPathParam(req);
         const body = req.body;
         if (!Buffer.isBuffer(body) || body.length === 0) {
             throw badRequest('Body must be raw RFC822 bytes (Content-Type: message/rfc822)');
@@ -230,7 +248,7 @@ module.exports = async function messageRoutes(app, { pool, ocrCache, imapCache }
             }
         }
     }, async (req, reply) => {
-        const mboxPath = decodeMailboxPathParam(req);
+        const mboxPath = mailboxPathParam(req);
         const { page = 0, pageSize = 20, search } = req.query;
         const userHash = req.creds.hash;
 
@@ -283,17 +301,11 @@ module.exports = async function messageRoutes(app, { pool, ocrCache, imapCache }
                                 known.set(msg.uid, has);
                                 learned.push([msg.uid, has]);
                             }
-                            // Same call, same reason for the try/catch as the
-                            // one further down this file: the attachment-flag
-                            // cache is an OPTIMISATION, so a write that fails
-                            // (full disk, read-only volume) must not fail the
-                            // message list the user is trying to read. It was
-                            // wrapped on one path and not the other, so a full
-                            // disk broke list reads on exactly the path that
-                            // was learning attachment flags.
+                            // The attachment-flag cache is fail-soft at the
+                            // module level (see src/imap-cache.js): a write
+                            // that fails can never fail this list read.
                             if (learned.length && imapCache) {
-                                try { imapCache.setAttachmentFlags(userHash, mboxPath, uidValidity, learned); }
-                                catch { /* cache is best-effort */ }
+                                imapCache.setAttachmentFlags(userHash, mboxPath, uidValidity, learned);
                             }
                         }
                         uids = uids.filter((u) => known.get(u) === true).sort((a, b) => b - a);
@@ -332,8 +344,7 @@ module.exports = async function messageRoutes(app, { pool, ocrCache, imapCache }
                             .filter((m) => typeof m.hasAttachments === 'boolean')
                             .map((m) => [m.uid, m.hasAttachments]);
                         if (flags.length) {
-                            try { imapCache.setAttachmentFlags(userHash, mboxPath, uidValidity, flags); }
-                            catch { /* cache is best-effort */ }
+                            imapCache.setAttachmentFlags(userHash, mboxPath, uidValidity, flags);
                         }
                     }
                 }
@@ -353,11 +364,11 @@ module.exports = async function messageRoutes(app, { pool, ocrCache, imapCache }
         schema: {
             tags: ['messages'],
             summary: 'Get a message',
-            response: { 200: messageDetailSchema, 404: problemSchema }
+            response: { 200: messageDetailSchema, 400: problemSchema, 404: problemSchema }
         }
     }, async (req, reply) => {
-        const mboxPath = decodeMailboxPathParam(req);
-        const uid = Number(req.params.uid);
+        const mboxPath = mailboxPathParam(req);
+        const uid = parseUidParam(req);
 
         const result = await withClient(pool, req.creds, (client) =>
             withMailbox(client, mboxPath, true, async () => {
@@ -413,8 +424,8 @@ module.exports = async function messageRoutes(app, { pool, ocrCache, imapCache }
     app.get('/v1/mailboxes/:path(^.*)/messages/:uid/raw', {
         schema: { tags: ['messages'], summary: 'Download raw RFC822 source' }
     }, async (req, reply) => {
-        const mboxPath = decodeMailboxPathParam(req);
-        const uid = Number(req.params.uid);
+        const mboxPath = mailboxPathParam(req);
+        const uid = parseUidParam(req);
 
         return withClient(pool, req.creds, (client) =>
             withMailbox(client, mboxPath, true, async () => {
@@ -430,8 +441,8 @@ module.exports = async function messageRoutes(app, { pool, ocrCache, imapCache }
     app.get('/v1/mailboxes/:path(^.*)/messages/:uid/attachments/:attachmentId', {
         schema: { tags: ['messages'], summary: 'Download an attachment' }
     }, async (req, reply) => {
-        const mboxPath = decodeMailboxPathParam(req);
-        const uid = Number(req.params.uid);
+        const mboxPath = mailboxPathParam(req);
+        const uid = parseUidParam(req);
         const attachmentId = req.params.attachmentId;
 
         return withClient(pool, req.creds, (client) =>
@@ -451,8 +462,8 @@ module.exports = async function messageRoutes(app, { pool, ocrCache, imapCache }
     app.get('/v1/mailboxes/:path(^.*)/messages/:uid/attachments/:attachmentId/text', {
         schema: { tags: ['ocr'], summary: 'OCR an attachment via Mistral' }
     }, async (req, reply) => {
-        const mboxPath = decodeMailboxPathParam(req);
-        const uid = Number(req.params.uid);
+        const mboxPath = mailboxPathParam(req);
+        const uid = parseUidParam(req);
         const attachmentId = req.params.attachmentId;
         const wantJson = String(req.query.format || '').toLowerCase() === 'json';
 
@@ -514,12 +525,13 @@ module.exports = async function messageRoutes(app, { pool, ocrCache, imapCache }
                 200: {
                     type: 'object',
                     properties: { uid: { type: 'integer' }, flags: { type: 'array', items: { type: 'string' } } }
-                }
+                },
+                400: problemSchema
             }
         }
     }, async (req) => {
-        const mboxPath = decodeMailboxPathParam(req);
-        const uid = Number(req.params.uid);
+        const mboxPath = mailboxPathParam(req);
+        const uid = parseUidParam(req);
         const { add, remove, set } = req.body || {};
         if (!add && !remove && !set) throw badRequest('Provide add, remove, or set');
 
@@ -550,12 +562,13 @@ module.exports = async function messageRoutes(app, { pool, ocrCache, imapCache }
                         path: { type: 'string' },
                         destUid: { type: ['integer', 'null'] }
                     }
-                }
+                },
+                400: problemSchema
             }
         }
     }, async (req) => {
-        const mboxPath = decodeMailboxPathParam(req);
-        const uid = Number(req.params.uid);
+        const mboxPath = mailboxPathParam(req);
+        const uid = parseUidParam(req);
         const dest = req.body.path;
 
         return withClient(pool, req.creds, (client) =>
@@ -578,8 +591,8 @@ module.exports = async function messageRoutes(app, { pool, ocrCache, imapCache }
     app.delete('/v1/mailboxes/:path(^.*)/messages/:uid', {
         schema: { tags: ['messages'], summary: 'Delete a message' }
     }, async (req, reply) => {
-        const mboxPath = decodeMailboxPathParam(req);
-        const uid = Number(req.params.uid);
+        const mboxPath = mailboxPathParam(req);
+        const uid = parseUidParam(req);
 
         await withClient(pool, req.creds, (client) =>
             withMailbox(client, mboxPath, false, async () => {
@@ -623,7 +636,7 @@ module.exports = async function messageRoutes(app, { pool, ocrCache, imapCache }
             }
         }
     }, async (req, reply) => {
-        const mboxPath = decodeMailboxPathParam(req);
+        const mboxPath = mailboxPathParam(req);
         const { uids, sender, dryRun } = req.body;
         const hasUids = Array.isArray(uids);
         const hasSender = typeof sender === 'string';

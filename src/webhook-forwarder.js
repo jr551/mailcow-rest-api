@@ -37,6 +37,17 @@ function backoffFor(attempts) {
     return attempts <= BACKOFF_MS.length ? BACKOFF_MS[attempts - 1] : DAILY_MS;
 }
 
+// imapflow hands back the raw header text when it cannot parse a Date, and
+// `new Date(<garbage>).toISOString()` throws RangeError. That throw happens
+// while building the payload — before the POST — so it would abort delivery
+// and retry the message into giving_up for a reason neither the receiver nor
+// the operator can see. Degrade to null instead, like the outbound forwarder.
+function toIsoOrNull(value) {
+    if (!value) return null;
+    const d = new Date(value);
+    return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
 // `connectOverride` exists so tests can drive the whole delivery/delete
 // path without a live IMAP server. Production never passes it.
 function createWebhookForwarder({ config, store, logger, connect: connectOverride }) {
@@ -228,13 +239,13 @@ function createWebhookForwarder({ config, store, logger, connect: connectOverrid
             mailbox: account.mailbox,
             uid,
             uidvalidity,
-            internalDate: msg.internalDate ? new Date(msg.internalDate).toISOString() : null,
+            internalDate: toIsoOrNull(msg.internalDate),
             size: msg.size ?? source.length,
             flags: msg.flags ? [...msg.flags] : [],
             envelope: {
                 messageId: env.messageId || null,
                 inReplyTo: env.inReplyTo || null,
-                date: env.date ? new Date(env.date).toISOString() : null,
+                date: toIsoOrNull(env.date),
                 subject: env.subject || null,
                 from: addressList(env.from),
                 sender: addressList(env.sender),
@@ -360,7 +371,20 @@ function createWebhookForwarder({ config, store, logger, connect: connectOverrid
         }
     }
 
-    async function tick() {
+    // The poll currently in flight, so stop() can wait for its bookkeeping.
+    // A confirmed POST must be able to write 'delivered' before the store
+    // closes underneath it — losing that write re-sends the message after
+    // the restart, a duplicate on the receiver.
+    let inFlight = null;
+
+    function tick() {
+        const p = runTick();
+        inFlight = p;
+        void p.finally(() => { if (inFlight === p) inFlight = null; });
+        return p;
+    }
+
+    async function runTick() {
         if (!enabled || running || stopped) return;
         running = true;
         try {
@@ -395,6 +419,9 @@ function createWebhookForwarder({ config, store, logger, connect: connectOverrid
             clearInterval(timer);
             timer = null;
         }
+        // Resolves once the in-flight poll has finished. Callers that close
+        // stores (server.js onClose) MUST await this before closing them.
+        return inFlight || Promise.resolve();
     }
 
     return { start, stop, tick, enabled };

@@ -489,10 +489,25 @@
                             class:active={activeTextId === tb.id}
                             style={`left:${tb.x}px;top:${tb.y}px;width:${tb.width}px;`}
                         >
+                            <!-- The handle used to be drag-only, so a text
+                                 box could be deleted but never repositioned
+                                 from the keyboard. role=button + arrows give
+                                 it an equivalent keyboard path (Shift takes
+                                 bigger steps). -->
                             <div
                                 class="text-drag-handle"
+                                role="button"
+                                tabindex="0"
+                                aria-label="Move text box — arrow keys to nudge"
                                 onpointerdown={(e) => startDragText(e, tb.id)}
-                                title="Drag to move"
+                                onkeydown={(e) => {
+                                    const step = e.shiftKey ? 10 : 2;
+                                    if (e.key === 'ArrowLeft') { e.preventDefault(); updateTextBox(tb.id, { x: tb.x - step }); }
+                                    else if (e.key === 'ArrowRight') { e.preventDefault(); updateTextBox(tb.id, { x: tb.x + step }); }
+                                    else if (e.key === 'ArrowUp') { e.preventDefault(); updateTextBox(tb.id, { y: tb.y - step }); }
+                                    else if (e.key === 'ArrowDown') { e.preventDefault(); updateTextBox(tb.id, { y: tb.y + step }); }
+                                }}
+                                title="Drag to move · arrows to nudge"
                             >
                                 <Icon name="gripVertical" size={12} />
                             </div>

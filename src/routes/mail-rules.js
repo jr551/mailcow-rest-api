@@ -134,7 +134,9 @@ module.exports = async function mailRulesRoutes(app, { sieveManager, outboundWeb
         const user = req.creds.user;
         if (!sieveManager) throw notFound('Blocked recipient not found');
         const pass = req.creds.pass;
-        const recipient = decodeURIComponent(req.params.recipient);
+        // find-my-way already decoded the param; decoding again mangled
+        // recipients containing `%` (and threw a 500 on a bare one).
+        const recipient = req.params.recipient;
         try {
             await sieveManager.removeBlockedRecipient(user, pass, recipient);
             reply.code(204).send();
@@ -237,8 +239,12 @@ module.exports = async function mailRulesRoutes(app, { sieveManager, outboundWeb
         // A webhook rule points at a webhook the caller owns. Checking here
         // (rather than in validateRuleBody) because it needs the store, and
         // without it a user could aim a rule at someone else's webhook id and
-        // have their mail delivered to a stranger's endpoint.
-        if (req.body.action.type === 'webhook' && outboundWebhooks) {
+        // have their mail delivered to a stranger's endpoint. When the
+        // feature is disabled there is no store — and no forwarder polling
+        // the `.wh-*` parking mailboxes the rule files into, so matching
+        // mail would sit there forever. Refuse instead of parking mail.
+        if (req.body.action.type === 'webhook') {
+            if (!outboundWebhooks) throw badRequest('Outbound webhooks are disabled');
             const owned = outboundWebhooks.get({ id: req.body.action.webhookId, user });
             if (!owned) throw badRequest('No such outbound webhook');
         }

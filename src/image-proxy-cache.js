@@ -82,73 +82,127 @@ function createImageProxyCache(opts) {
     );
     const negDeleteStmt = db.prepare('DELETE FROM image_proxy_negative WHERE url = ?');
 
+    // This whole module is a cache (positive entries, negative entries and
+    // the usage counters stored alongside them): a full, read-only or corrupt
+    // database must never fail the image request it is meant to save work
+    // for. Reads that fail degrade to a miss — getUsage reports 0, i.e. the
+    // soft daily cap is unenforceable while the cache is down, which is
+    // strictly better than failing every image in the mailbox. Writes that
+    // fail simply mean nothing was cached.
+
     function totalSize() {
-        return totalSizeStmt.get().total;
+        try {
+            return totalSizeStmt.get().total;
+        } catch {
+            return 0;
+        }
     }
 
     function evictToMakeRoom(neededBytes) {
         while (totalSize() + neededBytes > maxBytes) {
             const row = oldestStmt.get();
             if (!row) break; // nothing left to evict
+            // Deliberately NOT swallowed: a failing delete must terminate the
+            // loop (via set()'s catch), not spin forever on the same row.
             deleteStmt.run(row.url);
         }
     }
 
     function get(url) {
-        const row = getStmt.get(url);
-        if (!row) return null;
-        return {
-            data: row.data,
-            contentType: row.content_type,
-            size: row.size,
-            cachedAt: row.cached_at
-        };
+        try {
+            const row = getStmt.get(url);
+            if (!row) return null;
+            return {
+                data: row.data,
+                contentType: row.content_type,
+                size: row.size,
+                cachedAt: row.cached_at
+            };
+        } catch {
+            return null; // unreadable cache is a miss, never an error
+        }
     }
 
     function set(url, data, contentType, now = Date.now()) {
-        const size = Buffer.isBuffer(data) ? data.length : Buffer.byteLength(data);
-        if (size > maxBytes) return false; // can't fit even after full eviction
-        evictToMakeRoom(size);
-        setStmt.run(url, data, contentType, size, now);
-        return true;
+        try {
+            const size = Buffer.isBuffer(data) ? data.length : Buffer.byteLength(data);
+            if (size > maxBytes) return false; // can't fit even after full eviction
+            evictToMakeRoom(size);
+            setStmt.run(url, data, contentType, size, now);
+            return true;
+        } catch {
+            return false; // not cached — the request is still served
+        }
     }
 
     function remove(url) {
-        return deleteStmt.run(url).changes;
+        try {
+            return deleteStmt.run(url).changes;
+        } catch {
+            return 0;
+        }
     }
 
     function count() {
-        return pruneCountStmt.get().c;
+        try {
+            return pruneCountStmt.get().c;
+        } catch {
+            return 0;
+        }
     }
 
     function getUsage(user, day) {
-        const row = usageGetStmt.get(user, day);
-        return row ? row.bytes : 0;
+        try {
+            const row = usageGetStmt.get(user, day);
+            return row ? row.bytes : 0;
+        } catch {
+            return 0;
+        }
     }
 
     function incrementUsage(user, day, bytes) {
-        usageIncStmt.run(user, day, bytes);
+        try {
+            usageIncStmt.run(user, day, bytes);
+        } catch {
+            /* usage accounting is best-effort */
+        }
     }
 
     function pruneUsage(beforeDay) {
-        return usagePruneStmt.run(beforeDay).changes;
+        try {
+            return usagePruneStmt.run(beforeDay).changes;
+        } catch {
+            return 0;
+        }
     }
 
     // Failed fetches (oversized, upstream 4xx/5xx, timeouts) are remembered
     // so an open webmail tab re-rendering the same message every ~30s
     // doesn't make us re-download the image from origin each time.
     function getNegative(url, ttlMs, now = Date.now()) {
-        const row = negGetStmt.get(url);
-        if (!row) return null;
-        if (now - row.cached_at > ttlMs) {
-            negDeleteStmt.run(url);
-            return null;
+        try {
+            const row = negGetStmt.get(url);
+            if (!row) return null;
+            if (now - row.cached_at > ttlMs) {
+                try {
+                    negDeleteStmt.run(url);
+                } catch {
+                    /* expiry cleanup is best-effort */
+                }
+                return null;
+            }
+            return { status: row.status, reason: row.reason, cachedAt: row.cached_at };
+        } catch {
+            return null; // unreadable cache is a miss, never an error
         }
-        return { status: row.status, reason: row.reason, cachedAt: row.cached_at };
     }
 
     function setNegative(url, status, reason, now = Date.now()) {
-        negSetStmt.run(url, status, String(reason || 'Fetch failed'), now);
+        try {
+            negSetStmt.run(url, status, String(reason || 'Fetch failed'), now);
+        } catch {
+            /* negative caching is best-effort */
+        }
     }
 
     function close() {
