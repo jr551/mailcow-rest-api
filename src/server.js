@@ -28,6 +28,8 @@ const { createSecretBox } = require('./secret-box');
 const { createCalendarSubStore } = require('./calendar-sub-store');
 const { createAdminSettings } = require('./admin-settings');
 const { createAppPasswordStore } = require('./app-password-store');
+const { createTakeoverStore } = require('./takeover-store');
+const { createTakeoverWorker } = require('./takeover-worker');
 const mailboxRoutes = require('./routes/mailboxes');
 const messageRoutes = require('./routes/messages');
 const sessionRoutes = require('./routes/session');
@@ -54,6 +56,7 @@ const imageProxyRoutes = require('./routes/image-proxy');
 const telemetryRoutes = require('./routes/telemetry');
 const webhookInboxRoutes = require('./routes/webhook-inbox');
 const outboundWebhookRoutes = require('./routes/outbound-webhooks');
+const takeoverRoutes = require('./routes/takeover');
 const linkCheckRoutes = require('./routes/link-check');
 const { createWebhookInboxStore } = require('./webhook-inbox-store');
 const { createMailcowDb } = require('./mailcow-db');
@@ -470,6 +473,67 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         })
         : null;
 
+    // AI assistant takeover: a per-user assistant that looks at unread INBOX,
+    // drafts replies to messages that seem to need one, and stops for
+    // approval. The store holds the per-user settings and the blocked
+    // ("needs input") queue; the worker does the drafting. Same gate as the
+    // other credential-holding stores above — inert without the feature
+    // switch and the secret box.
+    const takeoverStore = config.takeover.enabled && secretBox.enabled
+        ? createTakeoverStore({
+            filePath: config.takeover.dbPath,
+            secretBox,
+            maxPerUser: config.takeover.maxPerUser,
+            // Initial per-user values before the user sets their own.
+            defaults: {
+                maxRepliesPerHour: config.takeover.maxRepliesPerHour,
+                minDelayMinutes: config.takeover.minDelayMinutes,
+                lookbackHours: config.takeover.lookbackHours,
+                considerAttachments: config.takeover.considerAttachments
+            }
+        })
+        : null;
+    if (config.takeover.enabled && !secretBox.enabled) {
+        app.log.warn('takeover disabled — no credential encryption key available');
+    }
+
+    // The ONLY exit for a drafted message. It self-POSTs to
+    // /v1/messages/send with the owner's own Basic credentials, so the
+    // request lands in the EXISTING approval gate: src/routes/send.js:278
+    // `if (isBasicAuth(req))` creates a pending approve/deny record instead
+    // of sending. Nothing in the takeover path can send mail directly.
+    async function takeoverDeliver({ user, pass, message }) {
+        const res = await fetch(`http://127.0.0.1:${config.port}/v1/messages/send`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json',
+                authorization: `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`
+            },
+            body: JSON.stringify(message)
+        });
+        if (!res.ok) {
+            const detail = await res.text().catch(() => '');
+            throw new Error(`approval-gated send refused (${res.status}): ${detail.slice(0, 300)}`);
+        }
+        return res.json().catch(() => null);
+    }
+
+    const takeoverWorker = takeoverStore
+        ? createTakeoverWorker({
+            config,
+            store: takeoverStore,
+            cache,
+            pool,
+            logger: app.log,
+            deliver: takeoverDeliver
+        })
+        : null;
+    // Poll only while at least one user has the assistant on. The routes
+    // keep this rule up to date at runtime as people toggle the feature.
+    if (takeoverWorker && takeoverStore.hasEnabledUsers()) {
+        takeoverWorker.start();
+    }
+
     app.decorate('adminSettings', adminSettings);
     if (appPasswordStore) app.decorate('appPasswordStore', appPasswordStore);
     app.decorate('cache', cache);
@@ -724,6 +788,7 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         // green test proves nothing about the worker.
         timeoutMs: config.outboundWebhooks.timeoutMs
     });
+    await app.register(takeoverRoutes, { store: takeoverStore, worker: takeoverWorker });
     await app.register(iconProxyRoutes);
     await app.register(trackingRoutes, { store: trackingStore, smtp: config.smtp });
     await app.register(imageProxyRoutes, { cache: imageProxyCache, maxBytesPerDay: config.imageProxy.maxBytesPerDay });
@@ -748,6 +813,8 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         if (outboundWebhookForwarder) outboundWebhookForwarder.stop();
         if (outboundWebhookQueue) outboundWebhookQueue.close();
         if (outboundWebhookStore) outboundWebhookStore.close();
+        if (takeoverWorker) takeoverWorker.stop();
+        if (takeoverStore) takeoverStore.close();
         if (mailcowDb) await mailcowDb.close();
     });
 

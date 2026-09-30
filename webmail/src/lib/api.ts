@@ -991,3 +991,71 @@ export async function getDriveQuota(): Promise<DriveQuota | null> {
         throw e;
     }
 }
+
+// ---------- AI assistant takeover ----------
+// Server-side assistant that looks at unread INBOX, drafts replies to
+// messages that seem to need one, and STOPS for approval — it can never
+// send on its own (the only exit for a draft is the same approval-gated
+// /v1/messages/send every other API client uses). The knobs here are
+// SERVER-enforced limits; this UI only displays and edits them.
+
+export interface TakeoverSettings {
+    enabled: boolean;
+    /** 0 = paused (never drafts). 1-24 otherwise. */
+    maxRepliesPerHour: number;
+    /** Hard floor of 5 minutes, enforced server-side. */
+    minDelayMinutes: number;
+    lookbackHours: number;
+    considerAttachments: boolean;
+}
+
+export interface TakeoverStatus extends TakeoverSettings {
+    counts: { processed: number; needsInput: number };
+    /** True while the assistant has stopped on something that needs input. */
+    blocked: boolean;
+}
+
+export interface TakeoverNeedsInputItem {
+    id: string;
+    messageId: string;
+    from: string;
+    subject: string;
+    /** Specific facts the assistant refused to invent. Empty when it was
+     *  blocked for another reason (see `reason`). */
+    missing: string[];
+    /** Complete human sentence: what happened and that nothing was sent. */
+    reason: string;
+    threadSnippet: string;
+    createdAt: number | string | null;
+    status?: string;
+    advice?: string | null;
+}
+
+export async function getTakeover(): Promise<TakeoverStatus> {
+    return request<TakeoverStatus>('GET', '/v1/me/takeover');
+}
+
+export async function updateTakeover(patch: Partial<TakeoverSettings>): Promise<TakeoverSettings> {
+    return request<TakeoverSettings>('PUT', '/v1/me/takeover', { body: patch });
+}
+
+export async function listTakeoverNeedsInput(): Promise<TakeoverNeedsInputItem[]> {
+    const r = await request<{ items: TakeoverNeedsInputItem[] }>('GET', '/v1/me/takeover/needs-input');
+    return r.items || [];
+}
+
+/** "Resume with advice": the answer becomes context for the next draft,
+ *  which still waits for approval. Never sends. */
+export async function answerTakeoverNeedsInput(id: string, advice: string): Promise<{ ok: boolean; entry: TakeoverNeedsInputItem }> {
+    return request('POST', `/v1/me/takeover/needs-input/${encodeURIComponent(id)}`, { body: { advice } });
+}
+
+/** Per-item "stop": closes the item and the assistant leaves the thread alone. */
+export async function dismissTakeoverNeedsInput(id: string): Promise<void> {
+    return request('DELETE', `/v1/me/takeover/needs-input/${encodeURIComponent(id)}`);
+}
+
+/** Turn the whole thing off and clear the blocked state. */
+export async function stopTakeover(): Promise<{ enabled: boolean; cleared: number }> {
+    return request('POST', '/v1/me/takeover/stop');
+}

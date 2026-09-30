@@ -8,6 +8,14 @@ const num = (v, d) => {
     const n = Number(v);
     return Number.isFinite(n) && n > 0 ? n : d;
 };
+// Like num, but 0 is an answer rather than a typo. Used where 0 means "off"
+// or "paused": num would silently fall back to the default and the setting
+// would look like it had been ignored.
+const num0 = (v, d) => {
+    if (v === undefined || v === null || v === '') return d;
+    const n = Number(v);
+    return Number.isFinite(n) && n >= 0 ? n : d;
+};
 const bool = (v, d) => {
     if (v === undefined) return d;
     const s = String(v).toLowerCase();
@@ -294,6 +302,36 @@ module.exports = Object.freeze({
         includeAttachments: bool(process.env.OUTBOUND_WEBHOOK_INCLUDE_ATTACHMENTS, true),
         maxAttachmentBytes: num(process.env.OUTBOUND_WEBHOOK_MAX_ATTACHMENT_BYTES, 10 * 1024 * 1024),
         maxAttachmentsTotalBytes: num(process.env.OUTBOUND_WEBHOOK_MAX_ATTACHMENTS_TOTAL_BYTES, 20 * 1024 * 1024)
+    },
+
+    takeover: {
+        // AI assistant takeover. The assistant reads unread INBOX mail, works
+        // out which messages a real person is waiting on, drafts a reply in
+        // the owner's voice, and then stops for approval — every draft leaves
+        // through /v1/messages/send with Basic auth, which is the branch that
+        // creates a pending approval instead of sending. There is no send
+        // path of its own.
+        //
+        // Off by default: it writes mail in the owner's name, and that is
+        // something a deployment opts into.
+        enabled: bool(process.env.TAKEOVER_ENABLED, false),
+        dbPath: dataFile(process.env.TAKEOVER_DB_PATH, 'takeover.db'),
+        // Cap on the "couldn't continue" queue one user can have open. It is
+        // there to bound a run of model failures, not to ration real use.
+        maxPerUser: num(process.env.TAKEOVER_MAX_PER_USER, 50),
+        pollIntervalMs: num(process.env.TAKEOVER_POLL_INTERVAL_MS, 60_000),
+        // Hard server-side limits, and the initial per-user values (a user's
+        // own settings override these). maxRepliesPerHour 0 = paused: the
+        // assistant never drafts for a user in that state. The delay floors
+        // at 5 minutes in the store, so no setting can weaken it.
+        maxRepliesPerHour: num0(process.env.TAKEOVER_MAX_REPLIES_PER_HOUR, 1),
+        minDelayMinutes: num(process.env.TAKEOVER_MIN_DELAY_MINUTES, 5),
+        lookbackHours: num(process.env.TAKEOVER_LOOKBACK_HOURS, 24),
+        considerAttachments: bool(process.env.TAKEOVER_CONSIDER_ATTACHMENTS, false),
+        // Bound per poll: headers only for every candidate, bodies only for
+        // the ones that cleared the cheap checks.
+        maxCandidatesPerTick: num(process.env.TAKEOVER_MAX_CANDIDATES_PER_TICK, 20),
+        maxThreadChars: num(process.env.TAKEOVER_MAX_THREAD_CHARS, 12_000)
     },
 
     admin: {

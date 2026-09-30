@@ -37,6 +37,7 @@
     import BulkProgress from './BulkProgress.svelte';
     import BackgroundTaskFloater from './BackgroundTaskFloater.svelte';
     import PwaUpdatePrompt from './PwaUpdatePrompt.svelte';
+    import TakeoverNotice from './TakeoverNotice.svelte';
     import type { InboxMessageInput } from '../lib/inbox-summary';
     import ChatBot from './ChatBot.svelte';
     import CalendarApp from './calendar/CalendarApp.svelte';
@@ -58,6 +59,7 @@
     import { startNetworkWatchdog, withTimeout } from '../lib/network-watchdog.svelte';
     import { playNotify, playSent, playClick, playShred, primeAudio, sounds, setMuted } from '../lib/sounds.svelte';
     import { pwa, promptInstall } from '../lib/pwa.svelte';
+    import { takeoverActive, loadTakeover } from '../lib/takeover.svelte';
     import { recordEnvelope, loadAddressBook } from '../lib/address-book.svelte';
     import { ensureCountry, geoipCache, flagEmoji } from '../lib/geoip.svelte';
     import { myAvatars } from '../lib/avatars.svelte';
@@ -1564,6 +1566,10 @@
         }, 30_000);
         loadShortcuts();
         loadMailboxInfo();
+        // One-shot: fetch the AI assistant takeover status so the "couldn't
+        // continue" notice and the inbox indicator know whether it is
+        // active. Not a poll — no interval, no cleanup to add below.
+        loadTakeover().catch(() => { /* older server — the notice stays hidden */ });
         checkLastLogin();
         // Resume in-flight delivery polls from the previous session and
         // garbage-collect anything past the 24h window.
@@ -1801,6 +1807,20 @@
             {/if}
             {#if calendarTickerVisible}
                 <CalendarTicker />
+            {/if}
+            <!-- Subtle activity indicator: the server-side AI assistant is
+                 on and drafting replies (each one still waits for approval).
+                 Muted pill, no alarm colour — this is a normal state, not a
+                 warning. -->
+            {#if takeoverActive()}
+                <span
+                    class="takeover-chip"
+                    title="AI assistant takeover is active — replies it drafts wait for your approval."
+                    data-testid="takeover-indicator"
+                >
+                    <Icon name="sparkles" size={13} />
+                    <span>AI replies</span>
+                </span>
             {/if}
             <button
                 type="button"
@@ -2353,6 +2373,7 @@
 <BulkProgress />
 <BackgroundTaskFloater />
 <PwaUpdatePrompt />
+<TakeoverNotice />
 
 {#if !ui.online}
     <div class="net-banner net-offline" role="status" aria-live="polite" data-testid="offline-banner">
@@ -2367,6 +2388,18 @@
 {/if}
 
 <style>
+    .takeover-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 3px 9px;
+        border-radius: 999px;
+        border: 1px solid var(--border-subtle);
+        background: var(--bg-elevated);
+        color: var(--text-secondary);
+        font-size: 11.5px;
+        white-space: nowrap;
+    }
     .net-banner {
         position: fixed;
         left: 50%;
