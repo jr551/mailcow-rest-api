@@ -478,11 +478,12 @@ module.exports = Object.freeze({
                             // optional field anywhere else in this file.
                             let headers = {};
                             if (a.headers !== undefined && a.headers !== null) {
-                                try {
-                                    headers = sanitizeWebhookHeaders(a.headers);
-                                } catch (err) {
+                                const clean = sanitizeWebhookHeaders(a.headers);
+                                if (clean.ok) {
+                                    headers = clean.headers;
+                                } else {
                                     // eslint-disable-next-line no-console
-                                    console.warn(`[config] WEBHOOK_ACCOUNTS: dropping headers for ${a.address}:`, err.message);
+                                    console.warn(`[config] WEBHOOK_ACCOUNTS: dropping headers for ${a.address}:`, clean.error);
                                 }
                             }
                             return {

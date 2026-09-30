@@ -293,7 +293,7 @@ Each attachment carries `filename`, `contentType`, `size`, `included` and either
 ]
 ```
 
-`headers` is optional and merged into every POST for that account — `Authorization` is the usual case. Reserved transport names (`host`, `content-length`, `transfer-encoding`, …) and `x-webhook-*` are rejected; an invalid `headers` block is dropped with a warning rather than disabling the account.
+`headers` is optional and merged into every POST for that account — `Authorization` is the usual case. Up to 16 headers; names are RFC token characters of at most 64 chars and values printable ASCII of at most 1024 chars (no CR/LF). Reserved transport names (`host`, `content-length`, `connection`, `transfer-encoding`, `upgrade`, `te`, `trailer`, `keep-alive`, `proxy-authenticate`, `proxy-authorization`) and the two signature names (`x-webhook-timestamp`, `x-webhook-signature-v2`) are rejected; customs may override the default `Content-Type`/`User-Agent` but never the signature. An invalid `headers` block is dropped with a warning rather than disabling the account.
 
 A message is deleted **only** after the webhook answers 2xx. Anything else leaves it in the mailbox and schedules a retry — 1m, 5m, 15m, 1h, 3h, 6h, 12h, then daily, up to `WEBHOOK_MAX_ATTEMPTS` (default 14) — with attempt state in `WEBHOOK_DB_PATH` so restarts neither reset the backoff nor re-deliver. After the final attempt the message is left in place.
 
@@ -311,7 +311,7 @@ Verify the signature against the raw request body, not a re-serialized copy, and
 <details>
 <summary><b>📤 Outbound webhooks</b> — email → your URL, driven by a mail rule</summary>
 
-Create one under **Settings → Outbound webhooks**, then point a mail rule's "Send to external webhook" action at it (optionally keeping the message in the mailbox). Each delivery POSTs the envelope, parsed headers, text/HTML bodies, a prepend note you can set per webhook, optional custom request headers (`headers`, e.g. `{"Authorization":"Bearer …"}` — stored encrypted, listed masked, same reserved-name rules as `WEBHOOK_ACCOUNTS`), and gzip+base64 attachments with decode instructions for the receiver. A Sent-folder receipt records the outcome.
+Create one under **Settings → Outbound webhooks**, then point a mail rule's "Send to external webhook" action at it (optionally keeping the message in the mailbox). Each delivery POSTs the envelope, parsed headers, text/HTML bodies, a prepend note you can set per webhook, optional custom request headers (`headers`, e.g. `{"Authorization":"Bearer …"}` — stored encrypted; the API returns only the header names as `headerNames`, values are write-only and can never be read back; same limits and reserved-name rules as `WEBHOOK_ACCOUNTS` above), and gzip+base64 attachments with decode instructions for the receiver. A Sent-folder receipt records the outcome.
 
 Each card has a **Send test** button. It POSTs a synthetic payload through the *same* delivery code the background worker uses — same signature scheme, same header merge, same pinned connection — and reports the receiver's HTTP status, timing and the first 300 characters of its reply. It reads no message, consumes nothing, leaves the delivery queue untouched, and never returns the signing secret or the stored header values. A non-2xx is shown as a result, not an error: the receiver rejecting the request is exactly what you needed to see.
 

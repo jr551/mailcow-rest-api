@@ -19,8 +19,10 @@ import { bearerHeader, getSession, tryRenewSession } from './auth.svelte';
 
 /* Field names assumed of the server:
  *   GET    /v1/me/outbound-webhooks  -> { webhooks: OutboundWebhook[], limit: number }
- *   POST   /v1/me/outbound-webhooks  <- { label, url, keep, prepend } -> OutboundWebhook
- *   PATCH  /v1/me/outbound-webhooks/:id <- { label?, keep?, prepend? } -> OutboundWebhook
+ *   POST   /v1/me/outbound-webhooks  <- { label, url, keep, prepend, headers? } -> OutboundWebhook
+ *   PATCH  /v1/me/outbound-webhooks/:id <- { label?, keep?, prepend?, headers? } -> OutboundWebhook
+ *        (`headers` absent = unchanged, {} = clear, otherwise full replace;
+ *         values are write-only — responses carry headerNames, never values)
  *   DELETE /v1/me/outbound-webhooks/:id -> 204
  *   POST   /v1/me/outbound-webhooks/:id/test -> TestSendResult
  */
@@ -44,10 +46,11 @@ export interface OutboundWebhook {
      *  server derives it from the id and always returns it. It is internal
      *  plumbing the forwarder polls, not a folder the user manages. */
     mailbox: string;
-    /** Custom request headers as name → masked value ('•••'). The server
-     *  stores the real values encrypted and never returns them, so the map
-     *  is only good for showing which headers exist. */
-    headers?: Record<string, string>;
+    /** Names of the custom request headers stored for this webhook, sorted.
+     *  The server stores the real values encrypted and NEVER returns them —
+     *  this list is only good for showing which headers exist; to change a
+     *  value the user retypes it and PATCHes the whole map. */
+    headerNames?: string[];
     /** Returned ONLY by POST (creation); the server never lists it again.
      *  It is what the receiver uses to verify x-webhook-signature-v2, so the
      *  UI has to show it once or the user can never verify a delivery. */
@@ -78,7 +81,8 @@ export interface OutboundWebhookInput {
     keep?: boolean;
     prepend?: string;
     /** Extra headers sent with every delivery POST (e.g. Authorization).
-     *  Write-only: once stored the server masks the values forever. */
+     *  Write-only: the server stores values encrypted and only ever returns
+     *  their names in `headerNames`. */
     headers?: Record<string, string>;
 }
 

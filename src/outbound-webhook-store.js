@@ -96,7 +96,7 @@ function createOutboundWebhookStore({ filePath, secretBox, maxPerUser = 100 } = 
     // credentials — a bearer token in a header is exactly as sensitive as
     // the mailbox password — so the map is JSON-encoded and stored through
     // secretBox like `secret` and `password`, and the public shape only ever
-    // shows the header names with masked values.
+    // shows the header names, never the values.
     try {
         db.exec('ALTER TABLE outbound_webhooks ADD COLUMN headers TEXT');
     } catch { /* fresh db already has it */ }
@@ -126,12 +126,15 @@ function createOutboundWebhookStore({ filePath, secretBox, maxPerUser = 100 } = 
     `);
 
     // Stored form is `secretBox.encrypt(JSON.stringify(map))` or null.
-    // Public responses get the names with masked values; listAllLive (the
+    // Public responses get the sorted header names only; listAllLive (the
     // forwarder path) gets the real decrypted map.
     function encryptHeaders(headers) {
         if (headers === undefined || headers === null) return null;
-        const clean = sanitizeWebhookHeaders(headers);
-        return Object.keys(clean).length ? secretBox.encrypt(JSON.stringify(clean)) : null;
+        // The routes validate first, so a bad map here is a defensive
+        // throw, not the user-facing error path.
+        const res = sanitizeWebhookHeaders(headers);
+        if (!res.ok) throw new Error(res.error);
+        return Object.keys(res.headers).length ? secretBox.encrypt(JSON.stringify(res.headers)) : null;
     }
     function decryptHeaders(encoded) {
         if (!encoded) return {};
@@ -141,11 +144,8 @@ function createOutboundWebhookStore({ filePath, secretBox, maxPerUser = 100 } = 
             return {};
         }
     }
-    function maskedHeaders(encoded) {
-        const names = Object.keys(decryptHeaders(encoded));
-        const out = {};
-        for (const name of names) out[name] = '•••';
-        return out;
+    function headerNames(encoded) {
+        return Object.keys(decryptHeaders(encoded)).sort();
     }
 
     // The secret never leaves the server after creation, so it is not part of
@@ -160,9 +160,9 @@ function createOutboundWebhookStore({ filePath, secretBox, maxPerUser = 100 } = 
             mailbox: mailboxFor(row.id),
             createdAt: row.created_at ?? null,
             lastUsedAt: row.last_used_at ?? null,
-            // Names only — the values are credentials and never leave the
-            // server after the caller supplies them.
-            headers: maskedHeaders(row.headers)
+            // Names only, sorted — the values are credentials and never
+            // leave the server after the caller supplies them.
+            headerNames: headerNames(row.headers)
         };
     }
 

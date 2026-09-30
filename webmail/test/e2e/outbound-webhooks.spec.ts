@@ -18,7 +18,7 @@ type Webhook = {
     mailbox: string;
     createdAt: number;
     lastUsedAt: number | null;
-    headers?: Record<string, string>;
+    headerNames?: string[];
 };
 
 /** 100 is the new per-user cap; the panel has to stay usable at that size,
@@ -26,13 +26,11 @@ type Webhook = {
 const LIMIT = 100;
 
 /** The request body is untrusted JSON, so headers arrive as `unknown` and are
- *  narrowed here rather than cast. The mock only needs the NAMES, which is
- *  all the real list endpoint returns too. */
-function headerNames(raw: unknown): Record<string, string> {
-    if (!raw || typeof raw !== 'object') return {};
-    const out: Record<string, string> = {};
-    for (const key of Object.keys(raw)) out[key] = '•••';
-    return out;
+ *  narrowed here rather than cast. The mock returns only the NAMES — which
+ *  is all the real list endpoint returns too (values are write-only). */
+function headerNames(raw: unknown): string[] {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [];
+    return Object.keys(raw).sort((a, b) => a.localeCompare(b));
 }
 
 function installWebhookApi(
@@ -46,6 +44,12 @@ function installWebhookApi(
     const hooks = new Map<string, Webhook>();
     for (const w of opts.webhooks ?? []) hooks.set(w.id, { ...w });
     const testCalls: string[] = [];
+    // The request bodies the UI sent, so a test can assert what a save
+    // actually transmitted — "which fields reached the wire" is the whole
+    // contract for the keep/replace/clear header semantics.
+    const createBodies: Record<string, unknown>[] = [];
+    const patchBodies: { id: string; body: Record<string, unknown> }[] = [];
+
 
     const reply = (route: Route, status: number, body?: unknown) =>
         route.fulfill({
@@ -87,6 +91,7 @@ function installWebhookApi(
         }
 
         if (request.method() === 'POST') {
+            createBodies.push(body ?? {});
             const n = hooks.size + 1;
             const created: Webhook = {
                 id: `wh${n}`,
@@ -97,16 +102,29 @@ function installWebhookApi(
                 mailbox: `.wh-wh${n}`,
                 createdAt: Date.now(),
                 lastUsedAt: null,
-                headers: headerNames(body?.headers)
+                headerNames: headerNames(body?.headers)
             };
             hooks.set(created.id, created);
             return reply(route, 201, { ...created, secret: 'deadbeefsecret' });
         }
 
+        if (request.method() === 'PATCH') {
+            const id = path.split('/').pop() ?? '';
+            const existing = hooks.get(id);
+            if (!existing) return reply(route, 404, { title: 'Not Found' });
+            patchBodies.push({ id, body: body ?? {} });
+            // Absent `headers` = unchanged; anything else (incl. {}) is a
+            // full replace — the same contract the real PATCH documents.
+            const names = body && 'headers' in body ? headerNames(body.headers) : existing.headerNames;
+            const updated: Webhook = { ...existing, ...body, headerNames: names };
+            hooks.set(id, updated);
+            return reply(route, 200, updated);
+        }
+
         return reply(route, 404, { title: 'Not Found' });
     });
 
-    return { hooks, testCalls };
+    return { hooks, testCalls, createBodies, patchBodies };
 }
 
 function wh(over: Partial<Webhook> & { id: string }): Webhook {
@@ -156,7 +174,7 @@ test('the list shows each webhook with its URL, headers and last-used', async ({
                 label: 'Used once',
                 url: 'https://two.example/h',
                 lastUsedAt: Date.now() - 60_000,
-                headers: { Authorization: '•••' }
+                headerNames: ['Authorization']
             })
         ]
     });
@@ -168,8 +186,8 @@ test('the list shows each webhook with its URL, headers and last-used', async ({
     await expect(page.locator('[data-testid=ow-lastused-a1]')).toHaveText(/never delivered to/i);
     await expect(page.locator('[data-testid=ow-lastused-b2]')).toContainText('last used');
 
-    // Header names are the only meaningful part (values are masked), and the
-    // absence of headers is stated rather than left blank.
+    // Header names are the only thing the API returns for them (values are
+    // write-only), and the absence of headers is stated rather than blank.
     await expect(page.locator('[data-testid=ow-headers-b2]')).toContainText('Authorization');
     await expect(page.locator('[data-testid=ow-item-a1]')).toContainText(/headers:\s*none/i);
 
@@ -283,4 +301,67 @@ test('details reveal the rule action and the hidden mailbox', async ({ page }) =
     // A hand-built rule needs the id; hunting it elsewhere is miserable.
     await expect(details).toContainText('{"type":"webhook","webhookId":"a1"}');
     await expect(details).toContainText('.wh-a1');
+});
+
+
+test('creating a webhook sends its header rows and refuses a bad one', async ({ page }) => {
+    await applyMocks(page);
+    const api = installWebhookApi(page);
+    await openPanel(page);
+
+    await page.fill('[data-testid=ow-url]', 'https://agent.example/hook');
+    await page.fill('[data-testid=ow-label]', 'Agent');
+    await page.click('[data-testid=ow-header-add]');
+    await page.fill('[data-testid=ow-header-name-0]', 'Authorization');
+    await page.fill('[data-testid=ow-header-value-0]', 'Bearer crsr_secret');
+    // A second row with a name that can never go on the wire: the save
+    // must stop here, not reach the server with a partial map.
+    await page.click('[data-testid=ow-header-add]');
+    await page.fill('[data-testid=ow-header-name-1]', 'Host');
+    await page.fill('[data-testid=ow-header-value-1]', 'evil.example');
+    await page.click('[data-testid=ow-create]');
+
+    await expect(page.locator('[data-testid=ow-header-errors]')).toContainText('reserved');
+    expect(api.createBodies).toHaveLength(0);
+
+    // Removing the bad row and saving again sends exactly the good map —
+    // the row the user fixed is gone and nothing else is silently dropped.
+    await page.click('[data-testid=ow-header-remove-1]');
+    await page.click('[data-testid=ow-create]');
+    expect(api.createBodies).toHaveLength(1);
+    expect(api.createBodies[0]?.headers).toEqual({ Authorization: 'Bearer crsr_secret' });
+});
+
+test('editing headers replaces the map, and untouched rows keep it', async ({ page }) => {
+    await applyMocks(page);
+    const api = installWebhookApi(page, {
+        webhooks: [wh({ id: 'a1', headerNames: ['Authorization', 'X-Tenant'] })]
+    });
+    await openPanel(page);
+
+    // Open and save without touching a row: the PATCH must not carry a
+    // `headers` field at all, or an open-and-save would replace two stored
+    // credentials with blanks.
+    await page.click('[data-testid=ow-headers-edit-a1]');
+    await expect(page.locator('[data-testid=ow-a1-header-name-0]')).toHaveValue('Authorization');
+    await page.click('[data-testid=ow-headers-save-a1]');
+    expect(api.patchBodies).toHaveLength(0);
+
+    // A real edit sends the WHOLE map: the seeded names with retyped
+    // values, nothing left over from what the server had.
+    await page.click('[data-testid=ow-headers-edit-a1]');
+    await page.fill('[data-testid=ow-a1-header-value-0]', 'Bearer fresh');
+    await page.fill('[data-testid=ow-a1-header-value-1]', 'acme');
+    await page.click('[data-testid=ow-headers-save-a1]');
+    expect(api.patchBodies).toHaveLength(1);
+    expect(api.patchBodies[0]?.body.headers).toEqual({ Authorization: 'Bearer fresh', 'X-Tenant': 'acme' });
+
+    // Deleting every row is the honest "clear them all": `{}`, not an
+    // absent field, because absent would mean "unchanged".
+    await page.click('[data-testid=ow-headers-edit-a1]');
+    await page.click('[data-testid=ow-a1-header-remove-0]');
+    await page.click('[data-testid=ow-a1-header-remove-0]');
+    await page.click('[data-testid=ow-headers-save-a1]');
+    expect(api.patchBodies).toHaveLength(2);
+    expect(api.patchBodies[1]?.body.headers).toEqual({});
 });

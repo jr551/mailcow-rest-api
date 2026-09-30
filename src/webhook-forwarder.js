@@ -5,6 +5,7 @@ const { ImapFlow } = require('imapflow');
 const { request } = require('undici');
 const { walkStructure, downloadPartText, streamToBuffer, parseAuthResultsHeader } = require('./imap');
 const { headersFromSource, htmlToText, addressList } = require('./webhook-payload');
+const { setHeader } = require('./utils/webhook-headers');
 
 // Webhook conversion accounts.
 //
@@ -95,12 +96,17 @@ function createWebhookForwarder({ config, store, logger, connect: connectOverrid
         const body = JSON.stringify(payload);
         const headers = {
             'content-type': 'application/json',
-            'user-agent': 'mailcow-rest-api/webhook-forwarder',
-            // Operator-configured extra headers (Authorization etc.) merge
-            // after our defaults and before the signature block; reserved
-            // names were rejected when WEBHOOK_ACCOUNTS was parsed.
-            ...(account.headers || {})
+            'user-agent': 'mailcow-rest-api/webhook-forwarder'
         };
+        // Operator-configured extra headers (Authorization etc.) merge
+        // after our defaults — so Content-Type/User-Agent can be
+        // overridden — and before the signature block; reserved names were
+        // rejected when WEBHOOK_ACCOUNTS was parsed. setHeader replaces
+        // case-insensitively so a custom `Content-Type` cannot duplicate
+        // the default.
+        for (const [name, value] of Object.entries(account.headers || {})) {
+            setHeader(headers, name, value);
+        }
         if (account.secret) {
             // Lets the receiver verify the POST really came from us. Signed
             // over the exact bytes we send, so the receiver must verify
@@ -116,8 +122,8 @@ function createWebhookForwarder({ config, store, logger, connect: connectOverrid
             // stripping the two V2 headers leaves a request that still
             // validates.
             const timestamp = String(Math.floor(Date.now() / 1000));
-            headers['x-webhook-timestamp'] = timestamp;
-            headers['x-webhook-signature-v2'] = sign(account.secret, `${timestamp}.${body}`);
+            setHeader(headers, 'x-webhook-timestamp', timestamp);
+            setHeader(headers, 'x-webhook-signature-v2', sign(account.secret, `${timestamp}.${body}`));
         }
         const res = await request(account.url, {
             method: 'POST',

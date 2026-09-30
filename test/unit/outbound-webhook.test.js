@@ -340,16 +340,18 @@ test('sieve: a quote in a condition value survives the round-trip', () => {
     assert.deepStrictEqual(parsed.rules[0].condition, { type: 'subject-contains', value: 'say "hi"' });
 });
 
-test('store: headers are encrypted at rest, masked publicly, real in listAllLive', () => {
+test('store: headers are encrypted at rest, names-only publicly, real in listAllLive', () => {
     const store = freshStore();
     const created = store.create({
         user: 'a@example.com', password: 'pw', label: 'L', url: 'https://example.com/h',
         headers: { 'Authorization': 'Bearer abc', 'X-Tenant': 'ops' }
     });
-    // Public shape: names only, values masked — even the creation response.
-    assert.deepStrictEqual(created.headers, { 'Authorization': '•••', 'X-Tenant': '•••' });
-    assert.deepStrictEqual(store.get({ id: created.id, user: 'a@example.com' }).headers,
-        { 'Authorization': '•••', 'X-Tenant': '•••' });
+    // Public shape: sorted names only — values are write-only credentials,
+    // and that holds even in the creation response.
+    assert.deepStrictEqual(created.headerNames, ['Authorization', 'X-Tenant']);
+    assert.strictEqual(created.headers, undefined);
+    assert.deepStrictEqual(store.get({ id: created.id, user: 'a@example.com' }).headerNames,
+        ['Authorization', 'X-Tenant']);
     // At rest the column holds encrypted JSON, not the plaintext map.
     const raw = store.listAllLive()[0];
     assert.deepStrictEqual(raw.headers, { 'Authorization': 'Bearer abc', 'X-Tenant': 'ops' },
@@ -357,12 +359,12 @@ test('store: headers are encrypted at rest, masked publicly, real in listAllLive
     store.close();
 });
 
-test('store: a webhook without headers reports an empty map everywhere', () => {
+test('store: a webhook without headers reports empty names and an empty map', () => {
     const store = freshStore();
     const created = store.create({
         user: 'a@example.com', password: 'pw', label: 'L', url: 'https://example.com/h'
     });
-    assert.deepStrictEqual(created.headers, {});
+    assert.deepStrictEqual(created.headerNames, []);
     assert.deepStrictEqual(store.listAllLive()[0].headers, {});
     store.close();
 });
@@ -381,13 +383,13 @@ test('store: update replaces headers, {} clears them, undefined leaves them alon
         id: created.id, user: 'a@example.com',
         headers: { 'Authorization': 'Bearer two', 'X-Api-Key': 'k' }
     });
-    assert.deepStrictEqual(updated.headers, { 'Authorization': '•••', 'X-Api-Key': '•••' });
+    assert.deepStrictEqual(updated.headerNames, ['Authorization', 'X-Api-Key']);
     assert.deepStrictEqual(store.listAllLive()[0].headers,
         { 'Authorization': 'Bearer two', 'X-Api-Key': 'k' });
     // Empty object clears.
     store.update({ id: created.id, user: 'a@example.com', headers: {} });
     assert.deepStrictEqual(store.listAllLive()[0].headers, {});
-    assert.deepStrictEqual(store.get({ id: created.id, user: 'a@example.com' }).headers, {});
+    assert.deepStrictEqual(store.get({ id: created.id, user: 'a@example.com' }).headerNames, []);
     store.close();
 });
 
@@ -406,6 +408,15 @@ test('store: invalid headers throw and nothing is stored', () => {
             headers: { 'X-Evil': 'ok\r\nInjected: yes' }
         }),
         /cannot go on the wire/i
+    );
+    // Reserved names and a forged signature header are refused too — a
+    // caller must never out-vote the transport or the signature.
+    assert.throws(
+        () => store.create({
+            user: 'a@example.com', password: 'pw', label: 'L', url: 'https://example.com/h',
+            headers: { 'X-Webhook-Signature-V2': 'forged' }
+        }),
+        /reserved/i
     );
     assert.strictEqual(store.listAllLive().length, 0);
     store.close();

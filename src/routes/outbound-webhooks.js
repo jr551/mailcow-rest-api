@@ -118,12 +118,12 @@ const webhookPublic = {
         url: { type: 'string' },
         keep: { type: 'boolean', description: 'Keep the message in the mailbox after a successful delivery.' },
         prepend: { type: 'string', description: 'Free text placed above the quoted original in the forwarded body.' },
-        mailbox: { type: 'string', description: 'Hidden IMAP folder the rule delivers into.' },
-        // Names only; stored values are credentials and are masked forever.
-        headers: {
-            type: 'object',
-            description: 'Custom request headers (e.g. Authorization). Values are masked.',
-            additionalProperties: { type: 'string' }
+        // Names only, sorted; stored values are credentials and are
+        // write-only — they never come back over the API.
+        headerNames: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Names of the custom request headers set on this webhook. Values are write-only.'
         },
         createdAt: { type: ['integer', 'null'] },
         lastUsedAt: { type: ['integer', 'null'] }
@@ -131,24 +131,22 @@ const webhookPublic = {
 };
 
 // Shared request-body field for POST and PATCH. The finer rules (reserved
-// names, x-webhook-* prefix, control characters) live in
+// names, the signature header names, control characters) live in
 // sanitizeWebhookHeaders and map to 400 in the handler — JSON Schema can
 // only express the shape, not the blocklist.
 const headersBodyProp = {
     type: 'object',
-    maxProperties: 10,
-    additionalProperties: { type: 'string', maxLength: 2000 },
+    maxProperties: 16,
+    additionalProperties: { type: 'string', maxLength: 1024 },
     description: 'Extra HTTP headers sent with every delivery, e.g. {"Authorization":"Bearer …"}'
 };
 
 // Runs the real validation and turns sanitize failures into a 400. PATCH
 // semantics are handled by the store: undefined = unchanged, {} = clear.
 function sanitizeOr400(input) {
-    try {
-        return sanitizeWebhookHeaders(input);
-    } catch (err) {
-        throw badRequest(err.message);
-    }
+    const res = sanitizeWebhookHeaders(input);
+    if (!res.ok) throw badRequest(res.error);
+    return res.headers;
 }
 
 

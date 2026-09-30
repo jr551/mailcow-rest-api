@@ -102,9 +102,9 @@
         type OutboundWebhook, type TestSendResult
     } from '../lib/outbound-webhooks';
     import {
-        parseHeaderLines, formatHeaderLines, MASKED_VALUE,
-        type HeaderLineError
-    } from '../lib/webhook-header-lines';
+        validateHeaderRows, MAX_HEADERS,
+        type HeaderRow, type HeaderRowError
+    } from '../lib/webhook-headers';
     import Icon from './Icon.svelte';
     import Avatar from './Avatar.svelte';
     import { ensureCountry, geoipCache, flagEmoji } from '../lib/geoip.svelte';
@@ -171,7 +171,7 @@
                 { id: 'junk', label: 'Junk email', icon: 'shieldAlert', keywords: 'scam phishing ocr trusted spam quarantine' },
                 { id: 'filters', label: 'Message handling', icon: 'filter', keywords: 'block allow sender recipient catchall' },
                 { id: 'forwarding', label: 'Forwarding and IMAP', icon: 'send', keywords: 'alias imap smtp device connect port' },
-                { id: 'outbound-hooks', label: 'Outbound webhooks', icon: 'globe', keywords: 'webhook post url inbound outgoing api' }
+                { id: 'outbound-hooks', label: 'Outbound webhooks', icon: 'globe', keywords: 'webhook post url inbound outgoing api header authorization' }
             ]
         },
         {
@@ -689,31 +689,33 @@
     let owKeep = $state(true);
     let owPrepend = $state('');
     let owSaving = $state(false);
-    // Custom request headers for the next webhook, as raw `Name: value`
-    // lines in one box.
+    // Custom request headers as a name/value row list.
     //
-    // This replaces a name/value repeater, and the reason is the input, not
-    // the aesthetics: nobody configuring a webhook is composing two fields,
-    // they are holding one line somebody else wrote them —
-    // `Authorization: Bearer crsr_…` — and the repeater made them re-type
-    // it, then press "Add header", for every one. Parsing at submit keeps
-    // the box a plain textarea (native multi-line paste, native undo,
-    // native caret) and leaves nothing to get wrong per row.
-    let owHeaderText = $state('');
-    // Per-line problems, resolved only on submit or on demand.
-    //
-    // Deliberately NOT a $derived: the box is typed into continuously, and
-    // a live "line 2 is reserved" while the user is still halfway through
-    // typing `Content-Type` is noise, not help. The same reasons the old
-    // row UI was replaced apply to error timing. Re-checked on every
-    // input so the moment they fix a line the message goes away.
-    let owHeaderErrors = $state<HeaderLineError[]>([]);
-    let owHeaderIgnored = $state<HeaderLineError[]>([]);
+    // This was once a pasted `Name: value` textarea, and it became rows when
+    // the API stopped returning stored values: the editor's whole job is now
+    // "build a fresh map", and a row per header is the honest shape for that.
+    // Values are write-only — the server stores them encrypted and only ever
+    // returns the names — so the form says so under the inputs instead of
+    // after a save has already discarded something.
+    let owHeaderRows = $state<HeaderRow[]>([]);
+    let owHeaderErrors = $state<HeaderRowError[]>([]);
     function recheckOwHeaders() {
-        const p = parseHeaderLines(owHeaderText);
+        const p = validateHeaderRows(owHeaderRows);
         owHeaderErrors = p.errors;
-        owHeaderIgnored = p.ignored;
         return p;
+    }
+    function owHeaderRowChanged() {
+        // Re-validate on every input: the fix for a flagged row should clear
+        // its message immediately, and unlike the old free-text box a row
+        // can't be "half a line" — a field is either named or blank.
+        owHeaderErrors = validateHeaderRows(owHeaderRows).errors;
+    }
+    function addOwHeaderRow() {
+        if (owHeaderRows.length < MAX_HEADERS) owHeaderRows = [...owHeaderRows, { name: '', value: '' }];
+    }
+    function removeOwHeaderRow(i: number) {
+        owHeaderRows = owHeaderRows.filter((_, j) => j !== i);
+        owHeaderRowChanged();
     }
     // The signing secret comes back exactly once, on creation. Hold it so the
     // user can copy it — the server never lists it again.
@@ -721,25 +723,46 @@
 
     // Per-webhook header editing.
     //
-    // The stored list cannot be edited in place for credentials — the
-    // server returns `{ Authorization: '•••' }` and keeps the real value
-    // forever — so editing a stored webhook is necessarily "retype the
-    // values you want to keep, the rest are dropped on save". That is a
-    // contract, not a limitation of this UI, and the editor says so while
-    // it is open instead of after the save has already discarded something.
+    // A PATCH carrying `headers` replaces the WHOLE map, and stored values
+    // can never be read back — so the editor is seeded with the stored NAMES
+    // and empty values, and "untouched" is tracked as a flag:
+    //   - save with the rows untouched          → PATCH omits `headers`
+    //     entirely, the stored map is kept as-is;
+    //   - any edit/add/remove, then save         → the rows become the new
+    //     map (empty values are refused, so keeping a header means retyping
+    //     its value);
+    //   - delete every row, then save            → `headers: {}` clears all.
     let owEditId = $state<string | null>(null);
-    let owEditText = $state('');
-    let owEditErrors = $state<HeaderLineError[]>([]);
+    let owEditRows = $state<HeaderRow[]>([]);
+    let owEditTouched = $state(false);
+    let owEditErrors = $state<HeaderRowError[]>([]);
     let owEditSaving = $state(false);
     function openOwHeaderEditor(w: OutboundWebhook) {
         owEditId = w.id;
-        owEditText = formatHeaderLines(w.headers);
+        owEditRows = (w.headerNames ?? []).map((name) => ({ name, value: '' }));
+        owEditTouched = false;
         owEditErrors = [];
     }
     function closeOwHeaderEditor() {
         owEditId = null;
-        owEditText = '';
+        owEditRows = [];
+        owEditTouched = false;
         owEditErrors = [];
+    }
+    function owEditRowChanged() {
+        owEditTouched = true;
+        owEditErrors = validateHeaderRows(owEditRows).errors;
+    }
+    function addOwEditRow() {
+        if (owEditRows.length < MAX_HEADERS) {
+            owEditRows = [...owEditRows, { name: '', value: '' }];
+            owEditTouched = true;
+        }
+    }
+    function removeOwEditRow(i: number) {
+        owEditRows = owEditRows.filter((_, j) => j !== i);
+        owEditTouched = true;
+        owEditErrors = validateHeaderRows(owEditRows).errors;
     }
     // Per-webhook state for the panel below. With a 100-webhook limit a flat
     // list is unusable, so the list is filterable and the result of the last
@@ -972,29 +995,21 @@
     async function doCreateOutboundWebhook() {
         const url = owUrl.trim();
         if (!url) { showToast('error', 'Webhook URL is required'); return; }
-        // Parse BEFORE saving, and refuse on a bad line.
+        // Validate BEFORE saving, and refuse on a bad row.
         //
         // The server would reject the same thing with a 400 naming one
         // header, but by then the user has been told nothing about WHICH
-        // line of ten is wrong. Here the message list is per line and the
-        // box keeps the text, so the fix is an edit rather than a retype.
+        // row is wrong. Here the message list is per row and the rows keep
+        // their text, so the fix is an edit rather than a retype.
         const parsed = recheckOwHeaders();
         if (parsed.errors.length) {
-            showToast('error', `${parsed.errors.length} header line${parsed.errors.length === 1 ? '' : 's'} can't be sent — see below the box`);
-            return;
-        }
-        // Nothing parsed at all but the box has text: the user pasted a
-        // block we could not read. Sending the webhook with no headers
-        // would deliver unauthenticated POSTs to a receiver that expects
-        // an Authorization header, so stop and say so instead.
-        if (parsed.ignored.length && parsed.empty) {
-            showToast('error', 'No header lines found — each line needs "Name: value"');
+            showToast('error', `${parsed.errors.length} header${parsed.errors.length === 1 ? '' : 's'} can't be sent — see below the rows`);
             return;
         }
         owSaving = true;
         try {
-            // Text lines → map at the last possible moment. An empty map is
-            // passed as undefined so the field stays absent server-side.
+            // Rows → map at the last possible moment. An empty map is passed
+            // as undefined so the field stays absent server-side.
             const headers: Record<string, string> = parsed.headers;
             const w = await createOutboundWebhook({
                 url,
@@ -1006,14 +1021,11 @@
             outboundHooks = [...outboundHooks, w];
             owNewSecret = w.secret ? { id: w.id, secret: w.secret } : null;
             owUrl = ''; owLabel = ''; owPrepend = '';
-            // Reset to blank, not to a seeded Authorization row: the old
-            // repeater's seed existed so a half-filled row had a name in
-            // it, and a paste box has no equivalent. Leaving the previous
-            // webhook's bearer token sitting in the form was the one thing
-            // that must not survive a successful create.
-            owHeaderText = '';
+            // Reset to no rows: the previous webhook's bearer token is the
+            // one thing that must not survive a successful create and sit
+            // in the form for the next one.
+            owHeaderRows = [];
             owHeaderErrors = [];
-            owHeaderIgnored = [];
             if (!ruleActionWebhookId) ruleActionWebhookId = w.id;
             showToast('success', 'Webhook added');
         } catch (err) {
@@ -1035,28 +1047,33 @@
     }
 
     async function doSaveOwHeaders(w: OutboundWebhook) {
-        // `masked: 'reject'` — this save REPLACES the stored map wholesale
-        // (the server's update treats any provided map as a full replace),
-        // so a `•••` that got through would overwrite a working credential
-        // with a literal bullet string and the receiver would start
-        // rejecting every delivery. Refuse it in the box instead, where
-        // the line is visible, rather than after the write.
-        const parsed = parseHeaderLines(owEditText, { masked: 'reject' });
+        // Untouched rows → send NO headers field at all. `headers` on a
+        // PATCH is a full replace, so "the user opened the editor, looked,
+        // and pressed save" must not turn into "user replaced everything
+        // with empty strings". Omitting the field leaves the stored map —
+        // which the UI can name but never read — exactly as it was.
+        if (!owEditTouched) {
+            showToast('info', 'Headers unchanged — nothing was edited');
+            closeOwHeaderEditor();
+            return;
+        }
+        const parsed = validateHeaderRows(owEditRows);
         owEditErrors = parsed.errors;
         if (parsed.errors.length) return;
         owEditSaving = true;
         try {
             await doUpdateOutboundWebhook(w, {
-                // null clears; the API distinguishes "unchanged" from
-                // "empty", and an empty box means the user wants the
-                // headers gone, not left as they are.
-                headers: Object.keys(parsed.headers).length ? parsed.headers : {}
+                // The API distinguishes "unchanged" (absent — handled above)
+                // from "empty": zero surviving rows means the user deleted
+                // them all, so `{}` clears every stored header.
+                headers: parsed.headers
             });
             closeOwHeaderEditor();
         } finally {
             owEditSaving = false;
         }
     }
+
 
     async function doDeleteOutboundWebhook(w: OutboundWebhook) {
         if (!confirm(`Remove webhook "${w.label}"? Rules pointing at it will stop delivering.`)) return;
@@ -4248,49 +4265,79 @@
                     <!-- The header editor, shared by the create form and the per-webhook
                          editor below.
 
-                         One implementation, not two, because the two boxes have to agree:
-                         they share a parser, they share the exact same failure mode (a
-                         line that cannot go on the wire), and a user who learns the
-                         create box has to unlearn nothing to use the other one. The
-                         `id` parameter is what makes the <label> real rather than
-                         decorative — a placeholder is not an accessible name, and it
-                         disappears the moment the box has content, which is always. -->
-                    {#snippet owHeaderBox(id: string, value: string, onInput: (v: string) => void, errors: HeaderLineError[], ignored: HeaderLineError[], helpId: string)}
-                        <label class="ow-headers-label" for={`${id}-headers`}>Request headers, one per line</label>
-                        <textarea
-                            id={`${id}-headers`}
-                            class="ow-headers-input"
-                            rows="4"
-                            spellcheck="false"
-                            autocomplete="off"
-                            autocapitalize="off"
-                            placeholder={'Authorization: Bearer …\nX-Api-Key: …'}
-                            aria-describedby={helpId}
-                            aria-invalid={errors.length ? 'true' : undefined}
-                            {value}
-                            oninput={(e) => onInput((e.currentTarget as HTMLTextAreaElement).value)}
-                            data-testid={`${id}-headers`}
-                        ></textarea>
+                         One implementation, not two, because the two have to agree:
+                         they share validateHeaderRows, they share the exact same
+                         failure mode (a row that cannot go on the wire), and a user
+                         who learns the create editor has to unlearn nothing to use
+                         the other one. It is a name/value row list rather than a
+                         paste box because the API stopped returning stored values:
+                         the editor's job is now "build a fresh map", and a row per
+                         header is the honest shape for that. Each input gets a real
+                         aria-label — a placeholder is not an accessible name, and it
+                         disappears the moment the field has content. -->
+                    {#snippet owHeaderRowsEditor(id: string, rows: HeaderRow[], errors: HeaderRowError[], onInput: (i: number, field: 'name' | 'value', v: string) => void, onAdd: () => void, onRemove: (i: number) => void, helpId: string)}
+                        <span class="ow-headers-label" id={`${id}-headers-label`}>Request headers</span>
+                        {#each rows as row, i (i)}
+                            {@const bad = errors.some((e) => e.row === i)}
+                            <div class="ow-header-row">
+                                <input
+                                    type="text"
+                                    class="ow-header-name"
+                                    placeholder="Authorization"
+                                    spellcheck="false"
+                                    autocomplete="off"
+                                    autocapitalize="off"
+                                    aria-label={`Header ${i + 1} name`}
+                                    aria-invalid={bad ? 'true' : undefined}
+                                    value={row.name}
+                                    oninput={(e) => onInput(i, 'name', (e.currentTarget as HTMLInputElement).value)}
+                                    data-testid={`${id}-header-name-${i}`}
+                                />
+                                <input
+                                    type="text"
+                                    class="ow-header-value"
+                                    placeholder="Bearer …"
+                                    spellcheck="false"
+                                    autocomplete="off"
+                                    autocapitalize="off"
+                                    aria-label={`Header ${i + 1} value`}
+                                    aria-invalid={bad ? 'true' : undefined}
+                                    value={row.value}
+                                    oninput={(e) => onInput(i, 'value', (e.currentTarget as HTMLInputElement).value)}
+                                    data-testid={`${id}-header-value-${i}`}
+                                />
+                                <button
+                                    type="button"
+                                    class="rule-remove"
+                                    aria-label={`Remove header ${i + 1}`}
+                                    title="Remove header"
+                                    onclick={() => onRemove(i)}
+                                    data-testid={`${id}-header-remove-${i}`}
+                                ><Icon name="trash" size={12} /></button>
+                            </div>
+                        {/each}
+                        <button
+                            type="button"
+                            class="btn btn-ghost ow-headers-add"
+                            disabled={rows.length >= MAX_HEADERS}
+                            onclick={onAdd}
+                            data-testid={`${id}-header-add`}
+                        ><Icon name="plus" size={12} /> Add header</button>
                         <p class="muted small" id={helpId}>
-                            Paste the header lines as they are — <code>Authorization: Bearer …</code>.
-                            One per line; blank lines and <code>#</code> comments are ignored.
-                            Values are stored encrypted and never shown again.
+                            Name and value pairs like <code>Authorization</code> / <code>Bearer …</code> —
+                            at most {MAX_HEADERS}. Stored encrypted: values can't be viewed again,
+                            only replaced.
                         </p>
-                        <!-- Per line, addressed by its number in the box, so a bad line
-                             is a thing you can find rather than a form that failed.
+                        <!-- Per row, addressed by its position, so a bad row is a
+                             thing you can find rather than a form that failed.
                              role="alert" so a screen reader announces it when the
-                             validation runs on save. -->
+                             validation runs. -->
                         {#if errors.length}
                             <ul class="ow-headers-errors" role="alert" data-testid={`${id}-header-errors`}>
-                                {#each errors as e (e.line + e.message)}
-                                    <li><strong>Line {e.line}:</strong> {e.message}</li>
+                                {#each errors as e (e.row + e.message)}
+                                    <li><strong>Row {e.row + 1}:</strong> {e.message}</li>
                                 {/each}
                             </ul>
-                        {/if}
-                        {#if ignored.length}
-                            <p class="muted small" data-testid={`${id}-header-ignored`}>
-                                Ignored: {ignored.map((e) => `line ${e.line} (${e.message})`).join('; ')}
-                            </p>
                         {/if}
                     {/snippet}
                     {#if owNewSecret}
@@ -4397,12 +4444,12 @@
                                     <span class="muted small"><input type="checkbox" bind:checked={owKeep} data-testid="ow-keep" /> keep the message in the mailbox after sending</span>
                                 </label>
                                 <!-- Stacked rather than a plain .rule-row: the header editor is
-                                     a multi-line box, and .rule-row is a two-column grid
-                                     whose second track is sized for a single control. -->
+                                     a list of rows, and .rule-row is a two-column grid whose
+                                     second track is sized for a single control. -->
                                 <div class="rule-row rule-row-stack">
                                     <span class="rule-label">Headers</span>
                                     <div class="ow-headers">
-                                        {@render owHeaderBox('ow', owHeaderText, (v) => { owHeaderText = v; recheckOwHeaders(); }, owHeaderErrors, owHeaderIgnored, 'ow-headers-help')}
+                                        {@render owHeaderRowsEditor('ow', owHeaderRows, owHeaderErrors, (i, f, v) => { const r = owHeaderRows[i]; if (r) r[f] = v; owHeaderRowChanged(); }, addOwHeaderRow, removeOwHeaderRow, 'ow-headers-help')}
                                     </div>
                                 </div>
                                 <div class="rule-actions">
@@ -4445,20 +4492,18 @@
                                                 {#if owEditId === w.id}
                                                     <!-- Editing a stored webhook's headers.
 
-                                                         The box is seeded by formatHeaderLines from
-                                                         the server's response, which is names with
-                                                         '•••' values and nothing else. Saving is a
-                                                         FULL REPLACE, so a save that left the
-                                                         bullets in place would replace a working
-                                                         bearer token with the literal string '•••'
-                                                         and the receiver would 401 every delivery
-                                                         with nothing on screen to explain it. So:
-                                                         the mask is spelled out as a mask, the
-                                                         parser refuses to send it, and the note
-                                                         says plainly that a value nobody can read
-                                                         back has to be retyped. -->
+                                                         The server never returns stored VALUES —
+                                                         only `headerNames` — so the editor is
+                                                         seeded with the names and blank values,
+                                                         and saving is a FULL REPLACE: a header
+                                                         whose value isn't retyped is dropped.
+                                                         That is said out loud while the editor
+                                                         is open, not after the save has already
+                                                         discarded the credential. Untouched
+                                                         rows send no `headers` field at all, so
+                                                         an open-and-save can't wipe anything. -->
                                                     <div class="ow-headers ow-headers-edit" data-testid={`ow-headers-editor-${w.id}`}>
-                                                        {@render owHeaderBox(`ow-${w.id}`, owEditText, (v) => { owEditText = v; owEditErrors = parseHeaderLines(v, { masked: 'reject' }).errors; }, owEditErrors, [], `ow-${w.id}-headers-help`)}
+                                                        {@render owHeaderRowsEditor(`ow-${w.id}`, owEditRows, owEditErrors, (i, f, v) => { const r = owEditRows[i]; if (r) r[f] = v; owEditRowChanged(); }, addOwEditRow, removeOwEditRow, `ow-${w.id}-headers-help`)}
                                                         <p class="ow-headers-mask-note">
                                                             <Icon name="alertCircle" size={12} />
                                                             <!-- One <span> for the whole sentence.
@@ -4469,13 +4514,12 @@
                                                                  prose flowed as three ragged columns
                                                                  instead of one paragraph. -->
                                                             <span>
-                                                                Saved values are write-only: the server keeps them
-                                                                encrypted and can never show them again, so a stored
-                                                                header comes back as <code>{MASKED_VALUE}</code>. A
-                                                                line still showing <code>{MASKED_VALUE}</code> is the
-                                                                real stored secret, not an empty field — to change it,
-                                                                type a fresh value over the whole line; to drop the
-                                                                header, delete the line.
+                                                                Stored values can't be shown — only the names.
+                                                                Saving replaces them all: retype a value for
+                                                                every header you want to keep, and delete any
+                                                                row you want to drop. Delete all the rows to
+                                                                clear every header; leave them untouched and
+                                                                saving changes nothing.
                                                             </span>
                                                         </p>
                                                         <div class="ow-headers-edit-actions">
@@ -4494,15 +4538,15 @@
                                                             >Cancel</button>
                                                         </div>
                                                     </div>
-                                                {:else if w.headers && Object.keys(w.headers).length}
-                                                    <!-- Values are masked server-side ('•••'); only the
-                                                         names are meaningful. The editor below is the
-                                                         honest way to change them: the values have to
-                                                         be retyped because the server will not give
-                                                         them back, and the editor says so while it is
-                                                         still open. -->
+                                                {:else if w.headerNames && w.headerNames.length}
+                                                    <!-- Only the names ever come back (the values
+                                                         stay encrypted server-side), so that is
+                                                         all the card shows. The editor below is
+                                                         the honest way to change them: a PATCH
+                                                         replaces the whole map, so any value to
+                                                         keep has to be retyped. -->
                                                     <div class="rule-clause muted small" data-testid={`ow-headers-${w.id}`}>
-                                                        Headers: {Object.keys(w.headers).join(', ')}
+                                                        Headers: {w.headerNames.join(', ')}
                                                         <button
                                                             type="button"
                                                             class="btn btn-ghost"
@@ -6002,39 +6046,49 @@
         align-items: start;
         grid-template-columns: 100px 1fr;
     }
-    /* The paste box. One block: a real <label> above a monospaced textarea,
-     * the format hint under it, and the per-line error list below that.
-     * min-width: 0 so the monospaced textarea can shrink inside the
-     * 1fr grid track instead of forcing the dialog wider. */
+    /* The header row editor: a label, then one name/value row per header,
+     * an add button, the format hint, and the per-row error list below.
+     * min-width: 0 so the inputs can shrink inside the 1fr grid track
+     * instead of forcing the dialog wider. */
     .ow-headers { min-width: 0; }
     .ow-headers-label {
         font-size: 11px;
         font-weight: 600;
         color: var(--text-tertiary);
     }
-    .ow-headers-input {
-        width: 100%;
+    .ow-header-row {
+        display: flex;
+        gap: 6px;
+        margin-top: 5px;
+        align-items: center;
+    }
+    .ow-header-row input {
         /* Monospaced because the content IS a wire format: a bearer token
          * read in a proportional face hides the characters that matter,
-         * and these lines are compared by eye against a provider's docs. */
+         * and these strings are compared by eye against a provider's docs. */
         font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
         font-size: 12px;
-        line-height: 1.5;
-        padding: 7px 9px;
+        padding: 5px 8px;
         background: var(--bg-base);
         color: var(--text-primary);
         border: 1px solid var(--border-subtle);
-        border-radius: var(--radius-sm);
-        /* resize: vertical only — a horizontally resizable textarea
-         * fights the two-column .rule-row grid instead of helping. */
-        resize: vertical;
-        white-space: pre;
-        overflow-wrap: normal;
-        overflow-x: auto;
+        border-radius: var(--radius-xs);
+        min-width: 0;
     }
-    .ow-headers-input:focus-visible {
+    /* The name column is narrower — header names are short; the value is
+     * the credential and gets the remaining space. */
+    .ow-header-row .ow-header-name { flex: 0 0 40%; }
+    .ow-header-row .ow-header-value { flex: 1; }
+    .ow-header-row input:focus-visible {
         outline: 2px solid var(--accent);
         outline-offset: 1px;
+    }
+    .ow-header-row input[aria-invalid="true"] {
+        border-color: var(--danger);
+    }
+    .ow-headers-add {
+        align-self: flex-start;
+        margin-top: 5px;
     }
     .ow-headers p code {
         font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);

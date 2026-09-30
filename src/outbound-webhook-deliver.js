@@ -3,6 +3,7 @@
 const crypto = require('node:crypto');
 const { request } = require('undici');
 const { createPinnedDispatcher } = require('./utils/ssrf-guard');
+const { setHeader } = require('./utils/webhook-headers');
 
 // The POST half of an outbound webhook delivery, shared by the real
 // forwarder and the test-send route.
@@ -32,17 +33,22 @@ function sign(secret, signedContent) {
 // The exact header set a delivery carries.
 //
 // Order matters and is part of the contract: user-supplied headers merge
-// AFTER our defaults and BEFORE the signature block, so the reserved names
-// were already rejected at creation and nothing here can clobber the
-// signature or the framing. `now` is injected rather than read from the clock
-// so the timestamp (and therefore the signature) is deterministic in tests.
+// AFTER our defaults — so Content-Type/User-Agent can be overridden — and
+// BEFORE the signature block, which is applied on top of everything.
+// setHeader replaces case-insensitively, so a custom `Content-Type` renames
+// the default rather than duplicating it, and a forged signature header
+// that survived to here is overwritten by the real one. `now` is injected
+// rather than read from the clock so the timestamp (and therefore the
+// signature) is deterministic in tests.
 function deliveryHeaders(webhook, payload, { secret, now }) {
     const body = JSON.stringify(payload);
     const headers = {
         'content-type': 'application/json',
-        'user-agent': 'mailcow-rest-api/outbound-webhook',
-        ...(webhook.headers || {})
+        'user-agent': 'mailcow-rest-api/outbound-webhook'
     };
+    for (const [name, value] of Object.entries(webhook.headers || {})) {
+        setHeader(headers, name, value);
+    }
     if (secret) {
         // Timestamp inside the signed content so a captured request cannot be
         // replayed forever — the receiver can reject anything outside its
@@ -50,8 +56,8 @@ function deliveryHeaders(webhook, payload, { secret, now }) {
         // signature alongside it would hand an attacker the replay back,
         // since stripping the V2 headers would still validate.
         const timestamp = String(Math.floor(now() / 1000));
-        headers['x-webhook-timestamp'] = timestamp;
-        headers['x-webhook-signature-v2'] = sign(secret, `${timestamp}.${body}`);
+        setHeader(headers, 'x-webhook-timestamp', timestamp);
+        setHeader(headers, 'x-webhook-signature-v2', sign(secret, `${timestamp}.${body}`));
     }
     return { body, headers };
 }

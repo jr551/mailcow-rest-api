@@ -163,7 +163,7 @@ function makeFakeImap({ uids, onDelete, opts }) {
 }
 
 async function runForwarder(opts) {
-    const { status, uids, maxAttempts = 14 } = opts;
+    const { status, uids, maxAttempts = 14, accountHeaders } = opts;
     const http = require('node:http');
     const received = [];
     const deleted = [];
@@ -174,6 +174,7 @@ async function runForwarder(opts) {
             received.push({
                 body: JSON.parse(body),
                 rawBody: body,
+                headers: req.headers,
                 timestamp: req.headers['x-webhook-timestamp'],
                 signature: req.headers['x-webhook-signature-v2'],
                 legacySignature: req.headers['x-webhook-signature']
@@ -188,7 +189,7 @@ async function runForwarder(opts) {
     const cfg = {
         imap: { host: 'x', port: 993, secure: true, rejectUnauthorized: false, tlsServername: '', connectTimeoutMs: 5000 },
         webhooks: {
-            accounts: [{ address: 'f@x.com', password: 'p', url, mailbox: 'INBOX', secret: 'shh' }],
+            accounts: [{ address: 'f@x.com', password: 'p', url, mailbox: 'INBOX', secret: 'shh', headers: accountHeaders }],
             pollIntervalMs: 60_000, timeoutMs: 5000, maxAttempts, maxMessageBytes: 1024 * 1024,
             includeAttachments: opts.includeAttachments !== false,
             maxAttachmentBytes: opts.maxAttachmentBytes ?? 1024 * 1024,
@@ -324,5 +325,31 @@ test('attachments can be turned off entirely', async () => {
         assert.equal(att.included, false);
         assert.equal(att.content, null);
         assert.match(att.omittedReason, /disabled/);
+    } finally { store.close(); }
+});
+
+test('webhook: account headers ride on the POST and the signature still wins', async () => {
+    const { received, store } = await runForwarder({
+        status: 200, uids: [31],
+        accountHeaders: {
+            'Authorization': 'Bearer env-token',
+            'Content-Type': 'application/vnd.hook+json',
+            // Delivered last and via setHeader: even if a forged signature
+            // reached this point it is overwritten by the real one.
+            'x-webhook-signature-v2': 'forged'
+        }
+    });
+    try {
+        assert.equal(received.length, 1);
+        const sent = received[0].headers;
+        assert.equal(sent.authorization, 'Bearer env-token');
+        // The override replaced the default content-type outright.
+        assert.equal(sent['content-type'], 'application/vnd.hook+json');
+        const expected = require('node:crypto')
+            .createHmac('sha256', 'shh')
+            .update(`${received[0].timestamp}.${received[0].rawBody}`)
+            .digest('hex');
+        assert.equal(sent['x-webhook-signature-v2'], expected,
+            'a forged signature header cannot out-vote the computed one');
     } finally { store.close(); }
 });
