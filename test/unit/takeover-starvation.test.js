@@ -115,6 +115,11 @@ function makeEnv({ messages, config = {} } = {}) {
 
     const store = createTakeoverStore({ filePath: ':memory:', secretBox: fakeBox });
     store.set(USER, { enabled: true });
+    // The worker only looks at mail from a sender a rule covers. Alice has
+    // one; the automated sender deliberately does not — it is skipped at
+    // the header scan without ever being settled, and must still not starve
+    // the covered sender.
+    store.addSender(USER, { pattern: 'alice@vendor.example' });
 
     const worker = createTakeoverWorker({
         config: {

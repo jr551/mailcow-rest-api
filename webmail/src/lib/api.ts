@@ -994,12 +994,12 @@ export async function getDriveQuota(): Promise<DriveQuota | null> {
 
 // ---------- AI assistant takeover ----------
 // Server-side assistant that watches unread INBOX threads and drafts
-// replies to messages that seem to need one. With autoSend on (the
-// default) a confident draft is SENT directly; when unsure it stops for
-// approval, and with autoSend off every draft stops. A confident send is
-// the only exit that bypasses the approval-gated /v1/messages/send path.
-// The knobs here are SERVER-enforced limits; this UI only displays and
-// edits them.
+// replies to messages that seem to need one. A confident draft is SENT
+// directly; when unsure it stops for approval. A confident send is the
+// only exit that bypasses the approval-gated /v1/messages/send path.
+// The global knobs here are SERVER-enforced limits; this UI only
+// displays and edits them. WHOSE mail the assistant touches is decided
+// per-sender by the rules below — an empty rule list means it idles.
 
 export interface TakeoverSettings {
     enabled: boolean;
@@ -1009,21 +1009,45 @@ export interface TakeoverSettings {
     minDelayMinutes: number;
     lookbackHours: number;
     considerAttachments: boolean;
-    /** Standing instructions applied to every draft — tone, what to handle,
-     *  what to leave alone. Stored encrypted server-side, max 2000 chars. */
-    instructions: string;
-    /** True (default): a confident draft is sent directly. False: every
-     *  draft waits for approval. */
-    autoSend: boolean;
-    /** True (default): replies the assistant sends carry the
-     *  "This reply came from my AI assistant." sign-off. */
-    signReplies: boolean;
 }
 
 export interface TakeoverStatus extends TakeoverSettings {
     counts: { processed: number; needsInput: number };
     /** True while the assistant has stopped on something that needs input. */
     blocked: boolean;
+}
+
+/** One per-sender "AI replies" rule. A full address or an @domain
+ *  (exact address wins over its domain); ≤200 chars, ≤50 per user,
+ *  duplicates rejected. Draft behaviour comes from the MATCHING rule:
+ *  its instructions, its autoSend, its sign-off. */
+export interface TakeoverSender {
+    id: string;
+    /** Full address (`alice@example.com`) or whole domain (`@example.com`). */
+    pattern: string;
+    /** This rule's standing instructions for the assistant — tone, what
+     *  to handle, what to leave alone. Max 2000 chars, encrypted at rest. */
+    instructions: string;
+    /** True (default): a confident draft for this sender is sent directly.
+     *  False: every draft for this sender waits for approval. */
+    autoSend: boolean;
+    /** True (default): replies to this sender carry the
+     *  "This reply came from my AI assistant." sign-off. */
+    signReplies: boolean;
+    createdAt: number | string | null;
+}
+
+export interface TakeoverSenderInput {
+    pattern: string;
+    instructions?: string;
+    autoSend?: boolean;
+    signReplies?: boolean;
+}
+
+export interface TakeoverSenderPatch {
+    instructions?: string;
+    autoSend?: boolean;
+    signReplies?: boolean;
 }
 
 export interface TakeoverNeedsInputItem {
@@ -1048,6 +1072,41 @@ export async function getTakeover(): Promise<TakeoverStatus> {
 
 export async function updateTakeover(patch: Partial<TakeoverSettings>): Promise<TakeoverSettings> {
     return request<TakeoverSettings>('PUT', '/v1/me/takeover', { body: patch });
+}
+
+// ---------- Per-sender AI rules ----------
+// The assistant answers ONLY senders listed here (exact address, or
+// @domain — exact wins). Behaviour comes from the matching rule; the
+// global rate/delay/lookback governors above stay global. Max 50 rules
+// per user; duplicate patterns are rejected.
+
+/** List this user's per-sender AI rules. */
+export async function listTakeoverSenders(): Promise<TakeoverSender[]> {
+    const r = await request<{ senders: TakeoverSender[] }>('GET', '/v1/me/takeover/senders');
+    return r.senders || [];
+}
+
+/** Add a rule. The server validates the pattern (full address or
+ *  @domain, ≤200 chars), enforces the 50-rule cap and rejects duplicates. */
+export async function addTakeoverSender(input: TakeoverSenderInput): Promise<TakeoverSender> {
+    const r = await request<{ sender: TakeoverSender }>('POST', '/v1/me/takeover/senders', { body: input });
+    return r.sender;
+}
+
+/** Change a rule's behaviour — its instructions, autoSend or sign-off.
+ *  The pattern itself is fixed; remove and re-add to change it. */
+export async function updateTakeoverSender(id: string, patch: TakeoverSenderPatch): Promise<TakeoverSender> {
+    const r = await request<{ sender: TakeoverSender }>(
+        'PATCH',
+        `/v1/me/takeover/senders/${encodeURIComponent(id)}`,
+        { body: patch }
+    );
+    return r.sender;
+}
+
+/** Remove a rule. The assistant immediately stops handling that sender. */
+export async function deleteTakeoverSender(id: string): Promise<void> {
+    return request('DELETE', `/v1/me/takeover/senders/${encodeURIComponent(id)}`);
 }
 
 export async function listTakeoverNeedsInput(): Promise<TakeoverNeedsInputItem[]> {

@@ -3,8 +3,9 @@
 // The assistant itself runs SERVER-SIDE (src/takeover-worker.js): it drafts
 // replies to mail that looks like it needs one and stops for approval. This
 // module is only the browser's view of it — the status, the blocked ("needs
-// input") queue, and the notice-dismissal memory. The knobs (replies per
-// hour, minimum delay) are enforced by the server; nothing here sends.
+// input") queue, the per-sender rules, and the notice-dismissal memory. The
+// knobs (replies per hour, minimum delay) are enforced by the server; nothing
+// here sends.
 //
 // The notice appears once per inbox open and remembers a dismissal across
 // opens in localStorage, so a blocked item John closed yesterday does not
@@ -18,10 +19,17 @@ import {
     answerTakeoverNeedsInput,
     dismissTakeoverNeedsInput,
     stopTakeover,
+    listTakeoverSenders,
+    addTakeoverSender as apiAddTakeoverSender,
+    updateTakeoverSender as apiUpdateTakeoverSender,
+    deleteTakeoverSender as apiDeleteTakeoverSender,
     ApiError,
     type TakeoverSettings,
     type TakeoverStatus,
-    type TakeoverNeedsInputItem
+    type TakeoverNeedsInputItem,
+    type TakeoverSender,
+    type TakeoverSenderInput,
+    type TakeoverSenderPatch
 } from './api';
 
 const DISMISS_KEY = 'webmail.takeover-dismissed.v1';
@@ -47,8 +55,15 @@ function readDismissed(): Record<string, number> {
 const state = $state({
     status: null as TakeoverStatus | null,
     items: [] as TakeoverNeedsInputItem[],
+    /** Per-sender "AI replies" rules. The assistant only ever answers
+     *  mail from a sender listed here; behaviour comes from the rule. */
+    senders: [] as TakeoverSender[],
     /** A load completed (success or handled failure) — gates first paint. */
     loaded: false,
+    /** The per-sender rules have been fetched at least once. */
+    sendersLoaded: false,
+    /** A rule add/save/remove is in flight (does not block the global knobs). */
+    sendersBusy: false,
     /** The server has no takeover feature at all (404): hide every affordance. */
     unavailable: false,
     error: null as string | null,
@@ -79,9 +94,15 @@ export function takeoverActive(): boolean {
 // mirrors exactly what the server reports (the server clamps the knobs and
 // returns the effective values).
 async function refresh(): Promise<void> {
-    const [status, items] = await Promise.all([getTakeover(), listTakeoverNeedsInput()]);
+    const [status, items, senders] = await Promise.all([
+        getTakeover(),
+        listTakeoverNeedsInput(),
+        listTakeoverSenders()
+    ]);
     state.status = status;
     state.items = items;
+    state.senders = senders;
+    state.sendersLoaded = true;
 }
 
 export async function loadTakeover(): Promise<void> {
@@ -117,6 +138,45 @@ export async function setTakeoverKnobs(patch: Partial<TakeoverSettings>): Promis
         await refresh();
     } finally {
         state.busy = false;
+    }
+}
+
+// Per-sender rules ("AI replies" under Settings → Rules). Each mutation
+// re-syncs through refresh() so the list always mirrors the server — same
+// lockstep as the global knobs. Errors propagate to the caller so the
+// Rules card can show them next to the form that caused them.
+
+/** Add a sender rule. The server validates the pattern (full address or
+ *  @domain, ≤200 chars), caps at 50 rules and rejects duplicates. */
+export async function addSenderRule(input: TakeoverSenderInput): Promise<void> {
+    state.sendersBusy = true;
+    try {
+        await apiAddTakeoverSender(input);
+        await refresh();
+    } finally {
+        state.sendersBusy = false;
+    }
+}
+
+/** Change a rule's instructions, autoSend or signReplies. */
+export async function saveSenderRule(id: string, patch: TakeoverSenderPatch): Promise<void> {
+    state.sendersBusy = true;
+    try {
+        await apiUpdateTakeoverSender(id, patch);
+        await refresh();
+    } finally {
+        state.sendersBusy = false;
+    }
+}
+
+/** Remove a rule — the assistant immediately stops handling that sender. */
+export async function removeSenderRule(id: string): Promise<void> {
+    state.sendersBusy = true;
+    try {
+        await apiDeleteTakeoverSender(id);
+        await refresh();
+    } finally {
+        state.sendersBusy = false;
     }
 }
 

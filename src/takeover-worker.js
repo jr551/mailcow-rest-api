@@ -22,10 +22,11 @@ const { chat: defaultChat, resolveProvider: defaultResolveProvider } = require('
 //   * `send` — the direct path (src/server.js createTakeoverSendNow): the
 //     same in-process sendMessage the send route uses, plus the Sent-folder
 //     copy. It runs ONLY for a draft the model marked REPLY: (confident)
-//     while the owner has autoSend switched on, and ONLY when the wiring
-//     injected it. A draft the model marked UNSURE: never takes this exit,
-//     and neither does anything at all when `send` is absent — that is what
-//     keeps old deployments and tests on the approval gate.
+//     while the matching sender rule has autoSend switched on, and ONLY
+//     when the wiring injected it. A draft the model marked UNSURE: never
+//     takes this exit, and neither does anything at all when `send` is
+//     absent — that is what keeps old deployments and tests on the approval
+//     gate.
 //
 // The rate limit and the delay below are enforced here, in code, before any
 // model is asked to write anything — never as a request in a prompt. The
@@ -34,24 +35,30 @@ const { chat: defaultChat, resolveProvider: defaultResolveProvider } = require('
 //
 // Order of work per candidate, and why:
 //
-//   1. already processed? already waiting on the owner? → skip (idempotent
+//   1. no sender rule covers the address? → skip silently: nothing is
+//      decided, nothing is recorded — not a processed row, not a decision —
+//      so a rule added later still picks the existing unread mail up inside
+//      the lookback window. An empty rule list means the assistant idles.
+//   2. already processed? already waiting on the owner? → skip (idempotent
 //      across restarts and repeat polls)
-//   2. deterministic automated-sender check → skip (no model needed, and it
+//   3. deterministic automated-sender check → skip (no model needed, and it
 //      must hold even if the model is wrong)
-//   3. outside the lookback window → skip, terminally
-//   4. minimum delay → defer (nothing has been drafted yet, so deferring is
+//   4. outside the lookback window → skip, terminally
+//   5. minimum delay → defer (nothing has been drafted yet, so deferring is
 //      free and the message is picked up by a later poll)
-//   5. hourly rate limit → defer
-//   6. model classification: does a human await a reply? → skip if not
-//   7. model draft → REPLY: (confident), UNSURE: (right-shaped but would not
+//   6. hourly rate limit → defer
+//   7. model classification: does a human await a reply? → skip if not
+//   8. model draft → REPLY: (confident), UNSURE: (right-shaped but would not
 //      bet on it), or an explicit NEEDS INPUT listing what the assistant
 //      refuses to guess at — NEEDS INPUT always wins
-//   8. confident + autoSend + send wired → send directly; anything else →
-//      deliver → the approval gate
+//   9. confident + the rule's autoSend + send wired → send directly;
+//      anything else → deliver → the approval gate
 //
-// Steps 4 and 5 deliberately run before the model is called: a message
+// Steps 5 and 6 deliberately run before the model is called: a message
 // waiting out its delay or the hourly slot costs zero model calls, and a
-// message that gets skipped as automated never costs one at all.
+// message that gets skipped as automated never costs one at all. The draft
+// follows the MATCHING RULE's instructions, autoSend and signReplies; the
+// rate limit, the delay and the lookback window stay global governors.
 
 const HOUR_MS = 60 * 60 * 1000;
 const MINUTE_MS = 60 * 1000;
@@ -539,8 +546,9 @@ function createTakeoverWorker(options = {}) {
     //     checks, up to two model calls each.
     //
     // A message the ledger has settled — processed, or parked in needs-input
-    // — is skipped inside the window instead of consuming a candidate slot.
-    // Those messages stay UNSEEN in IMAP: read state is the human's, and
+    // — or one from a sender no rule covers is skipped inside the window
+    // instead of consuming a candidate slot. Those messages stay UNSEEN in
+    // IMAP: read state is the human's, and
     // this worker holds the mailbox read-only, so nothing here may set
     // \Seen. Without the skip, a growing pile of settled messages sits at
     // the head of the oldest-first window forever and stops newer mail from
@@ -556,7 +564,7 @@ function createTakeoverWorker(options = {}) {
     // message identity: identity is always the ledger key, because the uid
     // is not usable for it (it is reassigned after an expunge).
 
-    async function collectCandidates(client, { now, user, isSettled }) {
+    async function collectCandidates(client, { now, user, skip }) {
         const uids = (await client.search({ unseen: true }, { uid: true })) || [];
         // Oldest first: a message that has been waiting longest gets the
         // first reply slot.
@@ -575,8 +583,8 @@ function createTakeoverWorker(options = {}) {
                 continue;
             }
             if (!candidate) continue;
-            // Settled messages free their window slot: see above.
-            if (isSettled && isSettled(candidate.key)) continue;
+            // A skipped message frees its window slot: see below.
+            if (skip && skip(candidate)) continue;
             out.push(candidate);
         }
         if (out.length === 0) {
@@ -684,6 +692,13 @@ function createTakeoverWorker(options = {}) {
         const { session, settings, open, now } = ctx;
         const key = message.key;
 
+        // The per-sender gate, before anything is recorded: a message from
+        // an address no rule covers is not the assistant's business at all.
+        // No processed row, no decision — so a rule added later still picks
+        // the existing unread mail up inside the lookback window.
+        const rule = store.findSenderRule(user, message.from);
+        if (!rule) return null;
+
         if (store.wasProcessed(user, key)) {
             return { decision: 'already-processed', reason: 'The assistant has already handled this message.' };
         }
@@ -772,7 +787,7 @@ function createTakeoverWorker(options = {}) {
         );
         message.snippet = clip(body, 2000);
 
-        const classification = await classify(provider, thread, settings.instructions);
+        const classification = await classify(provider, thread, rule.instructions);
         if (classification.error) {
             return stopAndAsk(user, message, {
                 missing: [],
@@ -796,7 +811,7 @@ function createTakeoverWorker(options = {}) {
 
         const advice = store.adviceFor(user, key);
         const instruction = advice ? advice.advice : '';
-        const drafted = await draft(provider, thread, instruction, settings.instructions);
+        const drafted = await draft(provider, thread, instruction, rule.instructions);
         if (drafted.error) {
             return stopAndAsk(user, message, {
                 missing: [],
@@ -834,9 +849,9 @@ function createTakeoverWorker(options = {}) {
             });
         }
 
-        // The sign-off knob: the owner decides whether outgoing replies
-        // carry the one-line AI disclosure.
-        const text = finalizeReply(drafted.body, settings.signReplies !== false);
+        // The sign-off knob: the matching rule decides whether outgoing
+        // replies to this sender carry the one-line AI disclosure.
+        const text = finalizeReply(drafted.body, rule.signReplies !== false);
         const outgoing = {
             to: [message.replyTo].filter(Boolean),
             cc: [],
@@ -854,13 +869,13 @@ function createTakeoverWorker(options = {}) {
             });
         }
 
-        // Confident draft + auto-send on + a wired send path → the reply
-        // leaves directly. Everything else — an UNSURE draft, autoSend off,
-        // or a deployment that injected no send function — goes to the
-        // approval gate below. A send failure blocks rather than falls back
-        // to deliver: the owner must choose between "sent" and "not sent",
-        // never get both.
-        if (drafted.needsApproval !== true && settings.autoSend !== false && typeof send === 'function') {
+        // Confident draft + the rule's auto-send on + a wired send path →
+        // the reply leaves directly. Everything else — an UNSURE draft, a
+        // rule with autoSend off, or a deployment that injected no send
+        // function — goes to the approval gate below. A send failure blocks
+        // rather than falls back to deliver: the owner must choose between
+        // "sent" and "not sent", never get both.
+        if (drafted.needsApproval !== true && rule.autoSend !== false && typeof send === 'function') {
             let sent;
             try {
                 sent = await send({
@@ -979,10 +994,18 @@ function createTakeoverWorker(options = {}) {
                     const candidates = await collectCandidates(client, {
                         now,
                         user,
-                        // A settled message must not occupy a candidate
-                        // slot: processed ones never come back, and a
-                        // needs-input one waits there until the owner acts.
-                        isSettled: (key) => store.wasProcessed(user, key) || open.has(key)
+                        // A skipped message must not occupy a candidate
+                        // slot: processed ones never come back, a
+                        // needs-input one waits there until the owner
+                        // acts, and a sender no rule covers is invisible
+                        // until a rule is added (nothing is recorded for
+                        // it, so it is re-checked each scan — header
+                        // fetches only). Freeing those slots keeps a
+                        // backlog of rule-less senders from starving the
+                        // senders that do have rules.
+                        skip: (candidate) => !store.findSenderRule(user, candidate.from)
+                            || store.wasProcessed(user, candidate.key)
+                            || open.has(candidate.key)
                     });
                     for (const message of candidates) {
                         try {

@@ -89,8 +89,11 @@ function humanMessage(overrides = {}) {
 
 // Build a worker wired to fakes. `drafts` is the queue of draft answers the
 // model gives; classification is controlled separately so a test can say
-// "this one needs a reply" without also writing a reply.
-function makeEnv({ messages = [], classify, drafts = [], storePath = ':memory:', store = null, maxPerHour } = {}) {
+// "this one needs a reply" without also writing a reply. `rules` lists the
+// per-sender patterns the store starts with — the assistant only looks at
+// mail from a sender a rule covers, and the human sender below is the one
+// most tests exercise.
+function makeEnv({ messages = [], classify, drafts = [], storePath = ':memory:', store = null, maxPerHour, rules = ['alice@vendor.example'], config = {} } = {}) {
     const calls = { llm: [], deliver: [], send: [] };
     const state = { now: T0 };
     const imap = makeImap(messages);
@@ -101,6 +104,13 @@ function makeEnv({ messages = [], classify, drafts = [], storePath = ':memory:',
         defaults: maxPerHour === undefined ? {} : { maxRepliesPerHour: maxPerHour }
     });
     liveStore.set(USER, { enabled: true });
+    for (const pattern of rules) {
+        // Idempotent: the restart tests build a second worker on the same
+        // database, where the first worker's rules already exist.
+        if (!liveStore.findSenderRule(USER, pattern)) {
+            liveStore.addSender(USER, { pattern });
+        }
+    }
 
     const draftQueue = Array.isArray(drafts) ? [...drafts] : [drafts];
 
@@ -110,7 +120,8 @@ function makeEnv({ messages = [], classify, drafts = [], storePath = ':memory:',
                 enabled: true,
                 pollIntervalMs: 60 * MINUTE,
                 maxCandidatesPerTick: 20,
-                maxThreadChars: 12_000
+                maxThreadChars: 12_000,
+                ...config
             },
             ai: {}
         },
@@ -139,8 +150,8 @@ function makeEnv({ messages = [], classify, drafts = [], storePath = ':memory:',
         },
         // The direct-send seam. Present here so the default environment
         // exercises the auto-send path a wired deployment gets; tests that
-        // want the approval gate either turn autoSend off in the store or
-        // build a worker without this dep.
+        // want the approval gate either turn the sender rule's autoSend off
+        // or build a worker without this dep.
         send: async (payload) => {
             calls.send.push(payload);
             return { sent: true, messageId: `<sent-${calls.send.length}@test.example>` };
@@ -169,6 +180,7 @@ function makeEnv({ messages = [], classify, drafts = [], storePath = ':memory:',
 
 test('rate limit: the second reply in an hour is held back, and released when the hour passes', async () => {
     const env = makeEnv({
+        rules: ['alice@vendor.example', 'bob@vendor.example'],
         messages: [
             humanMessage({ uid: 1, msg: { ...humanMessage().msg, envelope: { ...humanMessage().msg.envelope, messageId: '<m1@x>' } } }),
             humanMessage({ uid: 2, body: 'What colour would you like?', msg: {
@@ -364,6 +376,7 @@ test('automated senders are skipped outright, with no model call at all', async 
 
     for (const [from, subject, headers] of cases) {
         const env = makeEnv({
+            rules: [from],
             messages: [{
                 uid: 1,
                 body: 'body',
@@ -636,12 +649,13 @@ test('a confident REPLY with autoSend on is sent directly and never queued for a
     assert.match(decision.reason, /sent it directly/i);
 });
 
-test('autoSend off routes every draft to the approval gate, even a confident one', async () => {
+test('autoSend off on the rule routes every draft to the approval gate, even a confident one', async () => {
     const env = makeEnv({
         messages: [humanMessage()],
         drafts: 'REPLY:\nIt arrives on 14 October.\n'
     });
-    env.store.set(USER, { autoSend: false });
+    const rule = env.store.listSenders(USER)[0];
+    env.store.updateSender(USER, rule.id, { autoSend: false });
     await env.worker.tick();
 
     assert.strictEqual(env.calls.send.length, 0, 'nothing leaves directly');
@@ -730,12 +744,13 @@ test('a direct send that throws becomes a blocked record, never a fallback appro
 // The sign-off knob.
 // --------------------------------------------------------------------------
 
-test('signReplies off drops the disclosure entirely, even when the model writes one', async () => {
+test('signReplies off on the rule drops the disclosure entirely, even when the model writes one', async () => {
     const env = makeEnv({
         messages: [humanMessage()],
         drafts: 'REPLY:\nIt arrives on 14 October.\n\n-- \nThis reply came from my AI assistant.'
     });
-    env.store.set(USER, { signReplies: false });
+    const rule = env.store.listSenders(USER)[0];
+    env.store.updateSender(USER, rule.id, { signReplies: false });
     await env.worker.tick();
 
     const text = env.sends()[0].text;
@@ -748,12 +763,13 @@ test('signReplies off drops the disclosure entirely, even when the model writes 
 // Standing instructions reach both prompts.
 // --------------------------------------------------------------------------
 
-test('standing instructions reach the draft prompt and the classifier prompt', async () => {
+test('the matching rule\'s instructions reach the draft prompt and the classifier prompt', async () => {
     const env = makeEnv({
         messages: [humanMessage()],
         drafts: 'REPLY:\nIt arrives on 14 October.\n'
     });
-    env.store.set(USER, { instructions: 'Never promise delivery dates. Keep replies under three sentences.' });
+    const rule = env.store.listSenders(USER)[0];
+    env.store.updateSender(USER, rule.id, { instructions: 'Never promise delivery dates. Keep replies under three sentences.' });
     await env.worker.tick();
 
     const draftPrompt = env.calls.llm.filter((c) => c.system === TAKEOVER_REPLY_SYSTEM).pop().userPrompt;
@@ -762,6 +778,111 @@ test('standing instructions reach the draft prompt and the classifier prompt', a
     const classifyPrompt = env.calls.llm.filter((c) => c.system === TAKEOVER_CLASSIFY_SYSTEM).pop().userPrompt;
     assert.match(classifyPrompt, /The owner's standing instructions for this assistant/);
     assert.match(classifyPrompt, /Keep replies under three sentences\./);
+});
+
+// --------------------------------------------------------------------------
+// Per-sender rules govern everything about a draft.
+// --------------------------------------------------------------------------
+
+test('a sender no rule covers is invisible: no draft, no decision, nothing processed', async () => {
+    const env = makeEnv({ messages: [humanMessage()], drafts: 'REPLY:\nYes.\n' });
+    for (const rule of env.store.listSenders(USER)) env.store.deleteSender(USER, rule.id);
+
+    await env.worker.tick();
+
+    assert.strictEqual(env.calls.llm.length, 0, 'the model is never asked');
+    assert.strictEqual(env.calls.deliver.length, 0);
+    assert.strictEqual(env.calls.send.length, 0);
+    assert.deepStrictEqual(env.store.recentDecisions(USER, 50), [], 'nothing reaches the audit trail');
+    assert.deepStrictEqual(env.store.listNeedsInput(USER), [], 'and nothing is parked as needing input');
+    assert.ok(!env.store.wasProcessed(USER, 'm1@vendor.example'), 'nor is the message marked processed');
+});
+
+test('adding the rule later picks up the mail that was invisible before it', async () => {
+    const env = makeEnv({ messages: [humanMessage()], drafts: 'REPLY:\nIt arrives on 14 October.\n' });
+    for (const rule of env.store.listSenders(USER)) env.store.deleteSender(USER, rule.id);
+    await env.worker.tick();
+    assert.strictEqual(env.calls.send.length, 0);
+
+    env.store.addSender(USER, { pattern: 'alice@vendor.example' });
+    await env.worker.tick();
+
+    assert.strictEqual(env.calls.send.length, 1, 'the already-unread message is drafted once a rule covers its sender');
+});
+
+test('routing follows the matching rule: one sender auto-sends while another waits for approval', async () => {
+    const bob = humanMessage({
+        uid: 2,
+        msg: {
+            uid: 2,
+            envelope: {
+                from: [{ name: 'Bob', address: 'bob@vendor.example' }],
+                replyTo: [{ address: 'bob@vendor.example' }],
+                to: [{ address: USER }],
+                subject: 'Second opinion',
+                date: new Date(T0 - 10 * MINUTE),
+                messageId: '<b1@vendor.example>',
+                inReplyTo: null
+            },
+            headers: '',
+            bodyStructure: textPartOf('x')
+        }
+    });
+    const env = makeEnv({
+        messages: [humanMessage(), bob],
+        rules: ['alice@vendor.example', 'bob@vendor.example'],
+        maxPerHour: 2,
+        drafts: 'REPLY:\nIt arrives on 14 October.\n'
+    });
+    const bobRule = env.store.listSenders(USER).find((r) => r.pattern === 'bob@vendor.example');
+    env.store.updateSender(USER, bobRule.id, { autoSend: false });
+
+    await env.worker.tick();
+
+    assert.strictEqual(env.calls.send.length, 1, 'alice\'s rule (autoSend on) sent directly');
+    assert.strictEqual(env.calls.send[0].message.to[0], 'alice@vendor.example');
+    assert.strictEqual(env.calls.deliver.length, 1, 'bob\'s rule (autoSend off) held the same-shaped draft for approval');
+    assert.strictEqual(env.calls.deliver[0].message.to[0], 'bob@vendor.example');
+});
+
+test('a backlog of senders without rules cannot starve a covered sender', async () => {
+    // 60 rule-less senders ahead of one covered sender, with a 20-header
+    // scan window. The rule-less messages are skipped at the scan — they
+    // free their slots instead of eating them — so the covered message is
+    // reached within a few rotations.
+    const messages = Array.from({ length: 60 }, (_, i) => humanMessage({
+        uid: i + 1,
+        msg: {
+            uid: i + 1,
+            envelope: {
+                from: [{ address: 'news@shop.example' }],
+                replyTo: [{ address: 'news@shop.example' }],
+                to: [{ address: USER }],
+                subject: `Spring sale number ${i + 1}`,
+                date: new Date(T0 - 10 * MINUTE),
+                messageId: `<news-${i + 1}@shop.example>`,
+                inReplyTo: null
+            },
+            headers: '',
+            bodyStructure: textPartOf('x')
+        }
+    }));
+    messages.push(humanMessage({ uid: 61 }));
+    const env = makeEnv({
+        messages,
+        drafts: 'REPLY:\nIt arrives on 14 October.\n',
+        config: { maxHeaderScanPerTick: 20 }
+    });
+
+    for (let i = 0; i < 12 && env.calls.send.length === 0; i++) await env.worker.tick();
+
+    assert.strictEqual(env.calls.send.length, 1, 'the covered sender is reached behind the rule-less backlog');
+    assert.strictEqual(env.calls.deliver.length, 0);
+    assert.ok(
+        env.store.recentDecisions(USER, 50).length >= 1
+            && env.store.recentDecisions(USER, 50).every((d) => d.messageId === 'm1@vendor.example'),
+        'only the covered message left a trail — the rule-less ones were skipped silently'
+    );
 });
 
 test('figures are only flagged when they are the kind of fact that matters', () => {
