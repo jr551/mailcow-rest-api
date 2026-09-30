@@ -22,7 +22,7 @@
     "homepage": "https://github.com/jr551/mailcow-rest-api-webmail#readme",
     "license": "MIT",
     "dependencies": {
-        "@lucide/svelte": "^1.14.0",
+        "@lucide/svelte": "^1.47.0",
         "@melt-ui/svelte": "^0.86.6",
         "@tiptap/core": "^3.31.3",
         "@tiptap/extension-image": "^3.31.3",
@@ -39,9 +39,9 @@
         "pdfjs-dist": "^6.3.289",
         "react": "^19.2.5",
         "react-dom": "^19.2.5",
-        "svelte": "^5.0.0",
+        "svelte": "^5.57.1",
         "tesseract.js": "^7.0.0",
-        "tldraw": "^4.5.10"
+        "tldraw": "^5.4.2"
     },
     "devDependencies": {
         "@playwright/test": "^1.48.0",
