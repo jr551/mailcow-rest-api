@@ -165,7 +165,7 @@
                 { id: 'privacy', label: 'Images & privacy', icon: 'shield', keywords: 'remote image proxy ip tracking' },
                 { id: 'compose', label: 'Compose', icon: 'pencil', keywords: 'write send tracker display name from address' },
                 { id: 'smart-suggestions', label: 'Smart suggestions', icon: 'sparkles', keywords: 'subject proofread history summary pre-send' },
-                { id: 'mail-rules', label: 'Rules', icon: 'filter', keywords: 'sieve block redirect forward copy fileinto move folder stop' },
+                { id: 'mail-rules', label: 'Rules', icon: 'filter', keywords: 'sieve block redirect forward copy fileinto move folder stop ai assistant takeover ai replies answer sender auto-send sign-off' },
                 { id: 'sweep', label: 'Sweep', icon: 'filter', keywords: 'spam trash batch bulk classify' },
                 { id: 'junk', label: 'Junk email', icon: 'shieldAlert', keywords: 'scam phishing ocr trusted spam quarantine' },
                 { id: 'filters', label: 'Message handling', icon: 'filter', keywords: 'block allow sender recipient catchall' },
