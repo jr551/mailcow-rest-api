@@ -4,6 +4,13 @@
 // delivery module compares against this exact reference to decide whether to
 // skip SSRF pinning, so it must be this binding, not a local re-require.
 const { request } = require('undici');
+// `connect()` opens its own ImapFlow rather than borrowing from the shared
+// pool: each webhook authenticates as its own mailbox, and the pool is keyed
+// by credential hash, so there is nothing to borrow. This import was missing
+// entirely, so every connect threw `ReferenceError: ImapFlow is not defined`
+// and the forwarder retried forever without ever delivering a message. The
+// delivery tests inject a fake IMAP, which is why the suite stayed green.
+const { ImapFlow } = require('imapflow');
 const { walkStructure, downloadPartText, streamToBuffer } = require('./imap');
 const {
     headersFromSource,
