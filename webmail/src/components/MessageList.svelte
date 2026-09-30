@@ -627,18 +627,35 @@
     );
 
     // When AI-sorted is active, re-order threads by category bucket then
-    // by LLM relevance level. Bucket order: human → important → info →
-    // marketing. Inside each bucket the LLM's level (5→1) wins.
-    const CAT_RANK: Record<string, number> = { family: 0, human: 1, important: 2, info: 3, marketing: 4 };
+    // by LLM relevance level. Bucket order: family → human → important →
+    // purchase → notification → info → marketing. Inside each bucket the
+    // LLM's level (5→1) wins. Unranked threads sink below every ranked one.
+    const CAT_RANK: Record<string, number> = { family: 0, human: 1, important: 2, purchase: 3, notification: 4, info: 5, marketing: 6 };
     const threads = $derived.by(() => {
         if (settings.listFilter !== 'ai-sorted' || aiRankings.length === 0) return baseThreads;
         const indexFor = new Map<number, number>();
         aiRankings.forEach((r, i) => indexFor.set(r.uid, i));
+        const bucketOf = (r: InboxSortRanking | null): string | null => {
+            if (!r) return null;
+            // Family keeps its bucket even when the model also sets
+            // human:true — a family email is family first. Promote to
+            // human only when the category is missing or a non-person
+            // bucket the model forgot to upgrade.
+            if (r.category === 'family') return 'family';
+            if (r.human) return 'human';
+            return r.category ?? null;
+        };
         return [...baseThreads].sort((a, b) => {
             const ra = rankingFor(a.latest.uid);
             const rb = rankingFor(b.latest.uid);
-            const catA = (ra?.human ? 'human' : ra?.category) || 'info';
-            const catB = (rb?.human ? 'human' : rb?.category) || 'info';
+            const catA = bucketOf(ra);
+            const catB = bucketOf(rb);
+            // Unranked threads sink below every ranked one (stable,
+            // original order among themselves) instead of masquerading
+            // as 'info' after a partial sort.
+            if (!catA && !catB) return 0;
+            if (!catA) return 1;
+            if (!catB) return -1;
             const cdiff = (CAT_RANK[catA] ?? 9) - (CAT_RANK[catB] ?? 9);
             if (cdiff !== 0) return cdiff;
             // Higher level first within bucket.
@@ -715,6 +732,10 @@
     // changed (new mail arrives, message marked read, etc.) which burned
     // the user's daily LLM budget without their consent. Filter switches
     // alone now show the *cached* ranking — no automatic re-run.
+    // Stale-run guard: a re-rank aborts the previous run so its late
+    // resolution cannot overwrite newer rankings or stick the spinner.
+    let aiSortAbort: AbortController | null = null;
+    let aiSortGen = 0;
     function runAiSort() {
         // Defence in depth: the button that calls this is hidden when AI
         // is off, but nothing should reach a paid model call through a
@@ -725,6 +746,10 @@
             aiRankings = [];
             return;
         }
+        aiSortAbort?.abort();
+        const ctrl = new AbortController();
+        aiSortAbort = ctrl;
+        const gen = ++aiSortGen;
         aiSortLoading = true;
         aiSortError = null;
         aiSortProgress = { done: 0, total: 0 };
@@ -738,14 +763,24 @@
                 date: m.envelope.date || m.internalDate || undefined
             })),
             {
+                signal: ctrl.signal,
                 onProgress: (done, total) => {
-                    aiSortProgress = { done, total };
+                    if (gen === aiSortGen) aiSortProgress = { done, total };
                 }
             }
         )
-            .then((res) => { aiRankings = res.rankings; playSortDone(); })
-            .catch((err) => { aiSortError = err instanceof Error ? err.message : 'AI sort failed'; })
+            .then((res) => {
+                if (gen !== aiSortGen) return;
+                aiRankings = res.rankings;
+                playSortDone();
+            })
+            .catch((err) => {
+                if (gen !== aiSortGen) return;
+                if (err instanceof DOMException && err.name === 'AbortError') return;
+                aiSortError = err instanceof Error ? err.message : 'AI sort failed';
+            })
             .finally(() => {
+                if (gen !== aiSortGen) return;
                 aiSortLoading = false;
                 // Hold the "done" state briefly so the user gets visual confirmation.
                 setTimeout(() => { aiSortProgress = null; }, 800);
@@ -1096,31 +1131,33 @@
     </header>
 
     <nav class="filter-chips" aria-label="Filter messages" data-testid="filter-chips">
-        <!-- AI action group: collapsed to compact icon buttons so the three
-             AI affordances (briefing, sort, calendar scan) sit tight at the
-             head of the chip row. Tooltips carry the labels that the
-             previous spans showed inline. Hidden wholesale when AI is
-             hard-off — these three are the only way into the AI sort,
-             briefing and calendar scan. -->
+        <!-- AI action group: labelled segmented control so the three AI
+             affordances (briefing, sort, calendar scan) read as words, not
+             mystery icons. Sort is the only toggle segment; briefing and
+             calendar are one-shot actions. Hidden wholesale when AI is
+             hard-off. -->
         {#if settings.aiFeatures}
-        <div class="ai-action-group">
+        <div class="ai-action-group" role="group" aria-label="AI inbox actions">
             <button
                 type="button"
-                class="ai-icon-btn ai-summary-btn"
+                class="ai-seg"
                 title="Generate an AI inbox briefing — operational vs marketing split, action list, auto-replies"
                 aria-label="AI inbox briefing"
                 onclick={onSummariseAndMarkRead}
                 data-testid="mark-folder-read"
             >
                 <Icon name="table" size={14} />
+                <span class="ai-seg-label">Briefing</span>
             </button>
             <button
                 type="button"
-                class="ai-icon-btn magic-btn"
+                class="ai-seg ai-seg-sort"
                 class:active={settings.listFilter === 'ai-sorted'}
                 class:loading={aiSortLoading}
                 title="AI sort — humans on top, then important, info, marketing"
                 aria-label="AI sort"
+                aria-pressed={settings.listFilter === 'ai-sorted'}
+                disabled={aiSortLoading}
                 onclick={() => {
                     if (settings.listFilter === 'ai-sorted') {
                         // Second click while active → re-run the sort. Useful
@@ -1136,18 +1173,24 @@
                 }}
                 data-testid="filter-ai-sorted"
             >
-                <Icon name="arrowUpDown" size={14} />
+                {#if aiSortLoading}
+                    <span class="spinner" style="width:13px;height:13px" aria-hidden="true"></span>
+                    <span class="ai-seg-label">Sorting…</span>
+                {:else}
+                    <Icon name="sparkles" size={14} />
+                    <span class="ai-seg-label">Sort</span>
+                {/if}
             </button>
             <button
                 type="button"
-                class="ai-icon-btn calendar-scan-btn"
+                class="ai-seg"
                 title="AI calendar scan — find events to add to your calendar"
                 aria-label="AI calendar scan"
                 onclick={() => (eventsScanOpen = true)}
                 data-testid="ai-calendar-scan"
             >
                 <Icon name="calendar" size={14} />
-                <span class="cal-spark" aria-hidden="true"></span>
+                <span class="ai-seg-label">Calendar</span>
             </button>
         </div>
         {/if}
@@ -2167,7 +2210,8 @@
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        width: 26px;
+        width: 28px;
+        min-height: 28px;
         padding: 0;
         border: 0;
         border-left: 1px solid color-mix(in srgb, currentColor 18%, transparent);
@@ -2202,144 +2246,49 @@
         color: var(--text-on-accent, #fff);
     }
 
-    /* Compact AI icon-button group sitting at the start of the chip row.
-       Each child keeps its own per-button accent (magic gradient / glow)
-       but shares the same square footprint so the trio reads as one cluster. */
+    /* AI action group: one labelled segmented pill at the start of the
+       chip row. Icon + word per segment, no idle animations — the active
+       Sort segment is the only coloured one. */
     .ai-action-group {
         display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        margin-right: 4px;
-    }
-    .ai-icon-btn {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 28px;
-        height: 28px;
-        padding: 0;
-        border-radius: 8px;
-        border: 1px solid var(--border-subtle);
-        background: var(--bg-surface);
-        color: var(--text-secondary);
-        cursor: pointer;
-        flex-shrink: 0;
-        transition: background var(--transition-fast), color var(--transition-fast), filter 120ms ease, transform 80ms ease;
-    }
-    .ai-icon-btn:hover {
-        background: var(--bg-hover);
-        color: var(--text-primary);
-        transform: translateY(-0.5px);
-    }
-    .ai-icon-btn.ai-summary-btn {
-        color: white;
-        background: linear-gradient(135deg,
-            color-mix(in srgb, var(--accent) 80%, transparent),
-            color-mix(in srgb, var(--accent) 55%, transparent));
-        border-color: color-mix(in srgb, var(--accent) 50%, transparent);
-        box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent);
-    }
-    .ai-icon-btn.ai-summary-btn:hover {
-        filter: brightness(1.08);
-        color: white;
-    }
-    /* Calendar scan — same brightness as briefing/sort, plus a subtle
-     * sparkle pip that orbits the icon so it reads as the "extra magic"
-     * affordance in the trio. */
-    .ai-icon-btn.calendar-scan-btn {
-        position: relative;
-        color: white;
-        background: linear-gradient(135deg,
-            color-mix(in srgb, var(--accent) 80%, transparent),
-            color-mix(in srgb, #d268f4 55%, transparent));
-        border-color: color-mix(in srgb, var(--accent) 50%, transparent);
-        box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent);
-        overflow: hidden;
-    }
-    .ai-icon-btn.calendar-scan-btn:hover {
-        filter: brightness(1.08);
-        color: white;
-    }
-    .ai-icon-btn.calendar-scan-btn::before {
-        /* Diagonal shimmer band — matches the briefing button's animation
-         * tone but slightly slower so the trio reads as varied. */
-        content: '';
-        position: absolute;
-        inset: 0;
-        background: linear-gradient(120deg,
-            transparent 30%,
-            color-mix(in srgb, white 42%, transparent) 50%,
-            transparent 70%);
-        transform: translateX(-100%);
-        animation: cal-spark-sweep 5.2s ease-in-out infinite;
-        pointer-events: none;
-    }
-    .ai-icon-btn.calendar-scan-btn .cal-spark {
-        position: absolute;
-        top: 4px;
-        right: 4px;
-        width: 4px;
-        height: 4px;
-        border-radius: 50%;
-        background: white;
-        box-shadow: 0 0 6px 2px rgba(255, 255, 255, 0.85);
-        animation: cal-spark-twinkle 1.8s ease-in-out infinite;
-        pointer-events: none;
-    }
-    @keyframes cal-spark-sweep {
-        0%, 60% { transform: translateX(-100%); }
-        100%    { transform: translateX(220%); }
-    }
-    @keyframes cal-spark-twinkle {
-        0%, 100% { opacity: 0.35; transform: scale(0.85); }
-        50%      { opacity: 1;    transform: scale(1.25); }
-    }
-    @media (prefers-reduced-motion: reduce) {
-        .ai-icon-btn.calendar-scan-btn::before { display: none; }
-        .ai-icon-btn.calendar-scan-btn .cal-spark { animation: none; opacity: 0.7; }
-    }
-    /* Magic-btn / ai-summary-btn keep their gradient + animations, but we
-       square them off and shrink them to match the icon group. Rules below
-       override the wider defaults further down the file. */
-    .ai-action-group .magic-btn,
-    .ai-action-group .ai-summary-btn {
-        width: 28px;
-        height: 28px;
-        padding: 0;
+        align-items: stretch;
         gap: 0;
-        border-radius: 8px;
-        font-size: 12px;
+        margin-right: 4px;
+        border: 1px solid var(--border-subtle);
+        border-radius: 999px;
+        background: var(--bg-surface);
+        overflow: hidden;
+        flex-shrink: 0;
     }
-
-    /* Magic-style AI sort button — visually distinct from the regular chips
-       so it reads as "this is something special the AI does for you". */
-    .magic-btn {
+    .ai-seg {
         display: inline-flex;
         align-items: center;
-        gap: 5px;
-        padding: 4px 11px;
+        gap: 6px;
+        padding: 5px 12px;
         font-size: 12px;
         font-weight: 600;
-        color: white;
-        border-radius: 999px;
-        background: linear-gradient(135deg, var(--accent), #d268f4);
-        border: 1px solid color-mix(in srgb, var(--accent) 60%, transparent);
-        box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 30%, transparent);
+        color: var(--text-secondary);
+        background: transparent;
+        border: 0;
+        border-right: 1px solid var(--border-subtle);
         cursor: pointer;
-        flex-shrink: 0;
-        transition: filter 120ms ease, transform 80ms ease;
+        white-space: nowrap;
+        transition: background var(--transition-fast), color var(--transition-fast);
     }
-    .magic-btn:hover { filter: brightness(1.08); transform: translateY(-0.5px); }
-    .magic-btn:active { transform: translateY(0); }
-    .magic-btn.active {
-        box-shadow:
-            0 2px 8px color-mix(in srgb, var(--accent) 50%, transparent),
-            0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
+    .ai-seg:last-child { border-right: 0; }
+    .ai-seg:hover {
+        background: var(--bg-hover);
+        color: var(--text-primary);
     }
-    .magic-btn.loading { animation: magic-pulse 1.4s ease-in-out infinite; }
-    @keyframes magic-pulse {
-        0%, 100% { filter: brightness(1); }
-        50%      { filter: brightness(1.15) saturate(1.2); }
+    .ai-seg .ai-seg-label { line-height: 1; }
+    .ai-seg-sort.active {
+        color: white;
+        background: linear-gradient(135deg, var(--accent), #d268f4);
+    }
+    .ai-seg-sort.active:hover { filter: brightness(1.08); color: white; }
+    .ai-seg:disabled { opacity: 0.75; cursor: wait; }
+    @media (prefers-reduced-motion: reduce) {
+        .ai-seg, .ai-seg-sort.active { transition: none; }
     }
 
     /* Glass-morph progress card for AI sort. Sticks until the run
@@ -2365,7 +2314,7 @@
         overflow: hidden;
     }
     .ai-sort-glass::before {
-        /* Slow rainbow shimmer — ties the visual tone to the magic-btn
+        /* Slow rainbow shimmer — ties the visual tone to the active Sort segment
          * gradient without being noisy. */
         content: '';
         position: absolute;

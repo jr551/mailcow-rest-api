@@ -281,6 +281,7 @@ async function sortChunk(
     }
 }
 
+
 export async function sortInboxClient(
     messages: InboxSortMessage[],
     opts: { signal?: AbortSignal; onProgress?: (done: number, total: number) => void } = {}
@@ -302,13 +303,29 @@ export async function sortInboxClient(
 
     let done = 0;
     opts.onProgress?.(0, chunks.length);
-    const all = await Promise.all(
+    // One bad chunk must not throw away the rest of the inbox. allSettled
+    // keeps every successful ranking; only a total failure (every chunk
+    // rejected) surfaces an error. Aborts are not "partial success" — if
+    // the caller cancelled, rethrow so a newer run is not overwritten.
+    const settled = await Promise.allSettled(
         chunks.map((c) => sortChunk(cfg, c, { signal: opts.signal }).then((r) => {
             done++;
             opts.onProgress?.(done, chunks.length);
             return r;
         }))
     );
+    const aborted = opts.signal?.aborted || settled.some((s) => {
+        if (s.status !== 'rejected') return false;
+        const reason: unknown = s.reason;
+        return !!reason && typeof reason === 'object' && 'name' in reason && reason.name === 'AbortError';
+    });
+    if (aborted) throw new DOMException('Aborted', 'AbortError');
+    const fulfilled = settled.filter((s): s is PromiseFulfilledResult<InboxSortRanking[]> => s.status === 'fulfilled');
+    if (fulfilled.length === 0) {
+        const first = settled.find((s): s is PromiseRejectedResult => s.status === 'rejected');
+        throw first ? first.reason : new Error('AI sort failed');
+    }
+    const all = fulfilled.map((s) => s.value);
 
     // Dedup by uid, last-write-wins (rare with chunked input but cheap).
     const merged = new Map<number, InboxSortRanking>();
