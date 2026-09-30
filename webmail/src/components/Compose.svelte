@@ -577,6 +577,46 @@
         replySuggestError = null;
     }
 
+    // On-demand drafting: the reply-suggestion strip only exists in reply
+    // mode and only when aiSuggestReply is on, which leaves new messages
+    // and opted-out users with no way to ask for a draft at all. This is
+    // the always-visible entry point — same endpoint, same insert path,
+    // but it only ever runs on a click, so it needs no abort/effect
+    // machinery: closing the window mid-request just discards the result.
+    let aiDrafting = $state(false);
+    async function draftWithAi() {
+        if (aiDrafting) return;
+        if (!settings.aiFeatures || !aiAvailable()) return;
+        aiDrafting = true;
+        const written = htmlToPlainText(body).trim();
+        // Replies have a real thread for the model; a fresh compose only
+        // has what the user has typed, which still steers the draft.
+        const thread = threadForAi()
+            || [subject.trim() ? `Subject: ${subject.trim()}` : '', written]
+                .filter(Boolean).join('\n\n');
+        try {
+            const r = await draftReply(thread, written || undefined);
+            const text = (r.content || '').trim();
+            if (!text) {
+                showToast('error', 'Couldn\'t draft a reply — carry on.');
+                return;
+            }
+            const para = text.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean)
+                .map((p) => `<p>${p.replace(/\n/g, '<br>')}</p>`).join('');
+            if (editorApi.insertHtml) {
+                trimTrailingEmptyParagraphs();
+                editorApi.insertHtml(para);
+            } else {
+                body = `${body.replace(/(<p>(\s|&nbsp;|<br>)*<\/p>)+$/i, '')}<p></p>${para}`;
+            }
+            flashDraftSparkle();
+        } catch {
+            showToast('error', 'Couldn\'t draft a reply — carry on.');
+        } finally {
+            aiDrafting = false;
+        }
+    }
+
     // The hard-off can be flipped while this window is open. Abort, hide,
     // and never re-fire: the master switch is the privacy control and a
     // feature added after it was written must not become a way around it.
@@ -1522,6 +1562,25 @@
                             </div>
                         {/if}
                     </div>
+                {/if}
+
+                {#if settings.aiFeatures && aiAvailable()}
+                    <button
+                        type="button"
+                        class="bar-btn"
+                        title="Draft a message with AI and insert it at the caret"
+                        onclick={() => void draftWithAi()}
+                        disabled={aiDrafting}
+                        data-testid="compose-draft-ai"
+                    >
+                        {#if aiDrafting}
+                            <span class="spinner small"></span>
+                            <span>Drafting…</span>
+                        {:else}
+                            <Icon name="sparkles" size={15} />
+                            <span>Draft with AI</span>
+                        {/if}
+                    </button>
                 {/if}
 
                 {#if !smtpAvailable()}

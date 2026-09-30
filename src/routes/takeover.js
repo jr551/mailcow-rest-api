@@ -13,7 +13,7 @@
 // takeover-worker.js; the state lives in takeover-store.js. There is
 // deliberately no send capability anywhere in this file.
 
-const { badRequest, notFound, unauthorized } = require('../errors');
+const { badRequest, notFound, unauthorized, problem, fromImapError } = require('../errors');
 const { problemSchema } = require('../schemas');
 
 // Only used for the status `counts.processed` readout: the store keeps a
@@ -307,5 +307,76 @@ module.exports = async function takeoverRoutes(app, { store, worker = null } = {
         syncWorker();
         req.log.info({ user, cleared: items.length }, 'takeover stopped');
         return { enabled: state.enabled, cleared: items.length };
+    });
+
+    // Draft a reply to ONE message on demand — the webmail's right-click
+    // "Draft a reply with AI" lands here. Unlike the poll, this runs only
+    // because the owner asked for this specific message, so it skips the
+    // minimum-delay wait but still goes through the normal approval gate
+    // (the worker's draft exits via /v1/messages/send over Basic auth —
+    // nothing sends without approval).
+    app.post('/v1/me/takeover/draft', {
+        schema: {
+            tags: ['takeover'],
+            summary: 'Draft a reply to one message with the AI assistant',
+            body: {
+                type: 'object',
+                required: ['uid'],
+                properties: {
+                    mailbox: { type: 'string', maxLength: 200 },
+                    uid: { type: 'integer', minimum: 1 }
+                },
+                additionalProperties: false
+            },
+            response: {
+                200: {
+                    type: 'object',
+                    properties: {
+                        ok: { type: 'boolean' },
+                        queued: { type: 'boolean' },
+                        decision: { type: 'string' },
+                        reason: { type: 'string' }
+                    }
+                },
+                202: {
+                    type: 'object',
+                    properties: {
+                        ok: { type: 'boolean' },
+                        queued: { type: 'boolean' },
+                        decision: { type: 'string' },
+                        reason: { type: 'string' }
+                    }
+                },
+                400: problemSchema,
+                401: problemSchema,
+                404: problemSchema,
+                502: problemSchema
+            }
+        }
+    }, async (req, reply) => {
+        const user = requireUser(req);
+        if (!worker || typeof worker.draftNow !== 'function') {
+            throw notFound('The assistant is not running');
+        }
+        const uid = Number(req.body && req.body.uid);
+        if (!Number.isInteger(uid) || uid < 1) throw badRequest('uid must be a positive integer');
+        const mailbox = String(req.body.mailbox || 'INBOX');
+
+        let outcome;
+        try {
+            outcome = await worker.draftNow(user, { mailbox, uid, creds: req.creds });
+        } catch (err) {
+            // An IMAP failure surfaces as a gateway error, not a 500.
+            throw fromImapError(err);
+        }
+        if (!outcome || outcome.ok === false) {
+            const status = outcome && outcome.status;
+            if (status === 404) throw notFound(outcome.message || 'Not found');
+            if (status === 400) throw badRequest(outcome.message || 'Could not draft');
+            throw problem(status || 500, 'Takeover', outcome && outcome.message || 'Draft failed');
+        }
+        reply.code(outcome.queued ? 200 : 202);
+        req.log.info({ user, mailbox, uid, decision: outcome.decision }, 'takeover: on-demand draft');
+        return outcome;
     });
 };
