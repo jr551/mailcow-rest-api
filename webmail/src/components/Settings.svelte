@@ -4867,8 +4867,9 @@
 
         <footer class="foot">
             <p class="muted">
-                Tip — these settings live only in your browser. They sync nowhere; clear your
-                browser data and they'll vanish.
+                Tip — these settings follow you between devices: they're kept in a hidden
+                <code>.storage_webmailsettings</code> folder in your mailbox, so clearing your
+                browser data won't lose them.
             </p>
             <button type="button" class="btn btn-primary" onclick={close} data-testid="settings-done">Done</button>
         </footer>
