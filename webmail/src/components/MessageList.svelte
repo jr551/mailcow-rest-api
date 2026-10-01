@@ -2136,14 +2136,12 @@
         flex: 0 0 auto;
         display: flex;
         align-items: center;
+        flex-wrap: wrap;
         gap: 4px;
         padding: 6px 14px;
         background: var(--bg-surface);
         border-bottom: 1px solid var(--border-subtle);
-        overflow-x: auto;
-        scrollbar-width: none;
     }
-    .filter-chips::-webkit-scrollbar { display: none; }
 
     /* Background-crawl progress strip — sits under the chip row while the
      * crawler is paging through the rest of the mailbox to satisfy a
