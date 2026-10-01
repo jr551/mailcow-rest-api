@@ -42,6 +42,11 @@
         appendingMore?: boolean;
         scanState?: ScanState | null;
         onMove?: (uid: number, dest: string) => void;
+        /** Re-fetch the current folder. Rendered as a Retry button on the
+         *  error state — without it a failed load left the user with the
+         *  raw error text and no action, while the mobile inbox has always
+         *  offered Retry in the same spot. */
+        onRetry?: () => void;
         /** Block a sender pattern. `pattern` defaults to the message's exact
          *  From address; the Block domain / Block root domain items pass a
          *  pre-computed `*@host` pattern instead. Widening this one prop is
@@ -55,7 +60,7 @@
         onPageChange, onMarkFolderRead, onSummariseAndMarkRead, onLoadMore,
         effectivePageSize = 25, appendingMore = false,
         scanState = null,
-        onMove, onBlockSender
+        onMove, onBlockSender, onRetry
     }: Props = $props();
 
     // Right-click context menu on a row.
@@ -1422,7 +1427,12 @@
     {/if}
 
     {#if ui.messagesError}
-        <div class="state error" role="alert">{ui.messagesError}</div>
+        <div class="state error" role="alert">
+            <p>{ui.messagesError}</p>
+            {#if onRetry}
+                <button type="button" class="btn btn-secondary" onclick={onRetry} data-testid="list-retry">Retry</button>
+            {/if}
+        </div>
     {:else if !ui.messagesLoading && ui.messages.length === 0}
         <div class="state empty muted">
             <Icon name="inbox" size={32} />
@@ -3323,6 +3333,8 @@
         margin: 16px;
         border-radius: var(--radius-md);
     }
+    /* The flex gap is the spacing; the paragraph's own margins would double it. */
+    .state.error p { margin: 0; }
     .list-footer {
         flex: 0 0 auto;
         display: flex;
