@@ -310,7 +310,7 @@
                                     aria-label={expanded ? 'Collapse' : 'Expand'}
                                     onclick={(e) => { e.stopPropagation(); toggle(node.path); }}
                                 >
-                                    <Icon name={expanded ? 'chevronRight' : 'chevronRight'} size={11} />
+                                    <Icon name="chevronRight" size={11} />
                                 </button>
                             {:else}
                                 <span class="caret-spacer" aria-hidden="true"></span>
@@ -678,13 +678,17 @@
         width: 18px;
         height: 24px;
         color: var(--text-tertiary);
-        transition: transform 160ms ease-out, color var(--transition-fast);
+        transition: color var(--transition-fast);
     }
     .caret:hover { color: var(--text-primary); }
-    .folder-row:has(.folder.expanded) .caret { transform: rotate(0deg); }
-    /* Rotate caret when the folder's expanded. The caret button PRECEDES the
-     * .folder button in the DOM, so a sibling combinator can never reach it —
-     * the :has() form above is the one that matches. */
+    /* The chevron is a lucide <svg> rendered inside <Icon>, so a scoped
+     * selector can never reach it — :global() is required. Rotate the svg
+     * rather than the 18x24 button box so the glyph stays centred. */
+    .caret :global(svg) { transition: transform 160ms ease-out; }
+    .folder-row:has(.folder.expanded) .caret :global(svg) { transform: rotate(90deg); }
+    /* The caret button PRECEDES the .folder button in the DOM, so a sibling
+     * combinator can never reach it — the :has() form above is the one that
+     * matches. */
     .caret-spacer { flex: 0 0 auto; width: 18px; height: 1px; }
     .folder {
         flex: 1;
