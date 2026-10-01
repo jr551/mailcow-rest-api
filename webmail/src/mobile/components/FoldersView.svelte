@@ -170,23 +170,42 @@
                     {@const mb = node.mailbox}
                     {@const isLast = i === flatTree.length - 1}
                     {@const hasChildren = node.children.length > 0}
-                    <button
-                        type="button"
+                    <div
                         class="ios-row"
                         class:active={mobileState.selectedPath === mb.path}
                         class:last={isLast}
                         style="padding-left: calc(16px + {node.depth * 20}px)"
-                        onclick={() => {
-                            if (hasChildren) {
-                                toggleExpand(mb.path);
+                        role="button"
+                        tabindex="0"
+                        onclick={() => selectFolder(mb.path)}
+                        onkeydown={(e) => {
+                            // The disclosure button bubbles its keydown up here;
+                            // only the row itself should navigate.
+                            if (e.target !== e.currentTarget) return;
+                            if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault();
+                                selectFolder(mb.path);
                             }
-                            selectFolder(mb.path);
                         }}
                     >
                         {#if hasChildren}
-                            <span class="expand-icon" class:expanded={expanded.has(mb.path)}>
-                                <Icon name="chevronRight" size={14} />
-                            </span>
+                            <button
+                                type="button"
+                                class="expand-toggle"
+                                aria-expanded={expanded.has(mb.path)}
+                                aria-label={expanded.has(mb.path)
+                                    ? `Collapse ${mb.name || mb.path}`
+                                    : `Expand ${mb.name || mb.path}`}
+                                onclick={(e) => {
+                                    // Expanding must not also navigate into the folder.
+                                    e.stopPropagation();
+                                    toggleExpand(mb.path);
+                                }}
+                            >
+                                <span class="expand-icon" class:expanded={expanded.has(mb.path)}>
+                                    <Icon name="chevronRight" size={14} />
+                                </span>
+                            </button>
                         {:else}
                             <span class="spacer"></span>
                         {/if}
@@ -197,10 +216,12 @@
                         {#if typeof mb.unseen === 'number' && mb.unseen > 0}
                             <span class="folder-badge">{mb.unseen}</span>
                         {/if}
-                        <span class="chevron">
-                            <Icon name="chevronRight" size={14} />
-                        </span>
-                    </button>
+                        {#if !hasChildren}
+                            <span class="chevron">
+                                <Icon name="chevronRight" size={14} />
+                            </span>
+                        {/if}
+                    </div>
                 {/each}
             </div>
         {/if}
@@ -308,6 +329,26 @@
     }
     .expand-icon.expanded {
         transform: rotate(90deg);
+    }
+    /* The row navigates, so the disclosure needs its own hit target. Keep the
+       16px chevron slot (and therefore the row's indentation) untouched and
+       grow the tap area to 40x40 with a pseudo-element. */
+    .expand-toggle {
+        position: relative;
+        flex-shrink: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 16px;
+        height: 16px;
+    }
+    .expand-toggle::before {
+        content: '';
+        position: absolute;
+        top: -12px;
+        bottom: -12px;
+        left: -16px;
+        right: -8px;
     }
     .spacer {
         width: 16px;

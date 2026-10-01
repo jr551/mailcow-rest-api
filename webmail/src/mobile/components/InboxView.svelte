@@ -509,7 +509,10 @@
 <div class="inbox-view">
     <header class="mheader">
         <div class="header-left">
-            <button type="button" class="mbtn mbtn-ghost" aria-label="Refresh" onclick={() => { mobileState.selectedPath = 'INBOX'; refreshMessages(true); }}>
+            <!-- Refresh must not navigate: it used to force selectedPath to
+                 INBOX, so tapping it while reading Sent/Archive silently
+                 teleported the user back to the inbox. -->
+            <button type="button" class="mbtn mbtn-ghost" aria-label="Refresh" onclick={() => refreshMessages(true)}>
                 <Icon name="refresh" size={18} />
             </button>
             <LatencyChip />
@@ -533,6 +536,7 @@
         <input
             type="search"
             placeholder="Search"
+            aria-label="Search mail"
             value={searchInput}
             oninput={(e) => onSearch((e.currentTarget as HTMLInputElement).value)}
         />
@@ -635,14 +639,14 @@
                 >
                     {@const isFresh = (() => { const t = Date.parse(msg.internalDate || msg.envelope.date || ''); return !Number.isNaN(t) && (Date.now() - t < 10 * 60 * 1000); })()}
                     <div class="msg-row" class:unread={isUnread} class:fresh={isFresh} class:spy-tracked={isTracked} class:danger-1={dlevel === 1} class:danger-2={dlevel === 2} class:danger-3={dlevel === 3} class:danger-4={dlevel === 4} class:rule-running={ruleAnimUids.has(msg.uid)} class:rule-popping={ruleDoneUids.has(msg.uid)}>
-                        <Avatar {email} {name} size={40} />
+                        {#if isUnread}<span class="dot"></span>{/if}
+                        <Avatar {email} {name} size={40} decorative />
                         <div class="msg-body">
                             <div class="msg-top">
                                 <span class="msg-from truncate" class:bold={isUnread}>{sender}</span>
                                 <span class="msg-date">{formatDate(msg.internalDate || msg.envelope.date)}</span>
                             </div>
                             <div class="msg-subject truncate" class:bold={isUnread}>
-                                {#if isUnread}<span class="dot"></span>{/if}
                                 {#if isTracked}
                                     <span class="spy-mark" title="Open-tracking notification" aria-label="Tracking notification"><Icon name="spy" size={12} /></span>
                                 {/if}
@@ -722,6 +726,17 @@
         overscroll-behavior-y: contain;
         touch-action: pan-y;
     }
+    /* AI-sort failures rendered through the shared .mempty shell looked
+       identical to "This folder is empty". Give the failure its own
+       danger tone, mirroring the desktop .state.error treatment. */
+    .mempty.error {
+        color: var(--danger);
+        background: var(--danger-soft);
+        margin: 16px;
+        border-radius: var(--radius-md);
+    }
+    /* The flex gap is the spacing; the paragraph's own margins would double it. */
+    .mempty.error p { margin: 0; }
     .pull-indicator {
         overflow: hidden;
         display: flex;
@@ -782,6 +797,9 @@
         border-bottom: 0.5px solid var(--border-subtle);
         transition: background-color 80ms;
         min-height: 68px;
+        /* Containing block for the unread dot, which is parked in the
+           row's left gutter instead of inline in the subject. */
+        position: relative;
     }
     .msg-row.danger-4 { animation: danger-pulse-4 2.2s ease-in-out infinite; }
     .msg-row.danger-3 { animation: danger-pulse-3 2.6s ease-in-out infinite; }
@@ -883,14 +901,19 @@
         line-height: 1.35;
     }
     .msg-subject.bold { font-weight: 500; color: var(--text-primary); }
+    /* Unread dot lives in the row's left gutter (centred in the 16px
+       padding), not inline in .msg-subject: inline it pushed unread
+       subjects 13px right, so read and unread rows had different text
+       edges. Absolute so it costs no layout width. */
     .dot {
-        display: inline-block;
+        position: absolute;
+        left: 4px;
+        top: 50%;
+        transform: translateY(-50%);
         width: 8px;
         height: 8px;
         border-radius: 50%;
         background: var(--unread-dot);
-        margin-right: 5px;
-        vertical-align: middle;
     }
     .star-mark {
         color: var(--star);
