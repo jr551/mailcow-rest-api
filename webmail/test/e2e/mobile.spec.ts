@@ -304,6 +304,33 @@ test.describe('mobile webmail', () => {
         await expect(overlay).not.toBeVisible();
     });
 
+    test('scan badges stack instead of overlapping', async ({ page }) => {
+        await page.goto('/webmail/mobile/');
+        await page.fill('input[type="email"]', MOCK_USER);
+        await page.fill('input[type="password"]', 'hunter2');
+        await page.click('button:has-text("Sign in")');
+
+        // The welcome message, with the default settings, runs both the scam
+        // and the spam scan — so two badges are live at once.
+        await page.locator('.msg-row').first().click();
+        await expect(page.locator('.message-view')).toBeVisible();
+
+        const scam = page.getByTestId('mobile-scam-scanned-badge');
+        const spam = page.getByTestId('mobile-spam-scanned-badge');
+        await expect(scam).toBeVisible({ timeout: 5000 });
+        await expect(spam).toBeVisible({ timeout: 5000 });
+
+        // Geometry, not presence. Both badges used to be absolutely positioned
+        // siblings pinned to the same top-right corner, so they rendered
+        // exactly on top of each other and every presence assertion still
+        // passed — only the last one in DOM order was readable.
+        const a = (await scam.boundingBox())!;
+        const b = (await spam.boundingBox())!;
+        const overlaps =
+            a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+        expect(overlaps, 'scan badges must not overlap').toBe(false);
+    });
+
     test('safe email does not show phishing warning', async ({ page }) => {
         await page.goto('/webmail/mobile/');
         await page.fill('input[type="email"]', MOCK_USER);
