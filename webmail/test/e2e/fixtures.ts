@@ -858,7 +858,12 @@ export async function applyMocks(page: Page) {
             contentType: 'application/json',
             body: JSON.stringify({
                 isPhishing,
-                confidence: isPhishing ? 87 : 12,
+                // The server contract is 0.0–1.0 (src/routes/ai.js). This
+                // fixture used to send 87/12, which the client clamps to
+                // 1.0 — so every mocked scan looked maximally confident and
+                // a clean email rendered as a "Near miss" instead of the
+                // clean tick prod actually shows.
+                confidence: isPhishing ? 0.87 : 0.12,
                 reasoning: isPhishing ? (hasHeaders ? 'Headers confirm suspicious sender patterns.' : 'This invoice email contains suspicious urgency tactics.') : 'No phishing indicators detected.',
                 indicators: isPhishing ? ['Urgency tactic: payment due by specific date', 'Requests money transfer'] : [],
                 model: 'stepfun/step-3.5-flash'
