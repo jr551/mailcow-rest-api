@@ -109,7 +109,7 @@
         {:else}
             <div class="sheet-header">
                 <h3>{msg.envelope.subject || '(no subject)'}</h3>
-                <button type="button" class="close-btn" onclick={onClose}>
+                <button type="button" class="close-btn" onclick={onClose} aria-label="Close">
                     <Icon name="close" size={18} />
                 </button>
             </div>

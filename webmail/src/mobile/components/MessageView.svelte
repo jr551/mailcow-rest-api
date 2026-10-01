@@ -336,10 +336,15 @@
             <span>Back</span>
         </button>
         <div class="actions">
-            <button type="button" class="mbtn mbtn-ghost action-icon" onclick={toggleStar}>
+            <button
+                type="button"
+                class="mbtn mbtn-ghost action-icon"
+                onclick={toggleStar}
+                aria-label={msg?.flags.includes('\\Flagged') ? 'Unstar' : 'Star'}
+            >
                 <Icon name={msg?.flags.includes('\\Flagged') ? 'starFilled' : 'star'} size={18} />
             </button>
-            <button type="button" class="mbtn mbtn-ghost action-icon" onclick={() => reply('reply')}>
+            <button type="button" class="mbtn mbtn-ghost action-icon" onclick={() => reply('reply')} aria-label="Reply">
                 <Icon name="reply" size={18} />
             </button>
         </div>
@@ -517,13 +522,13 @@
             <button type="button" class="toolbar-btn" onclick={() => reply('forward')}>
                 <Icon name="send" size={16} /> Forward
             </button>
-            <button type="button" class="toolbar-btn icon-only" onclick={archive}>
+            <button type="button" class="toolbar-btn icon-only" onclick={archive} title="Archive" aria-label="Archive">
                 <Icon name="archive" size={16} />
             </button>
             <button type="button" class="toolbar-btn icon-only" onclick={viewHeaders} title="View headers" aria-label="View headers">
                 <Icon name="fileText" size={16} />
             </button>
-            <button type="button" class="toolbar-btn icon-only danger" onclick={trash}>
+            <button type="button" class="toolbar-btn icon-only danger" onclick={trash} title="Move to Trash" aria-label="Move to Trash">
                 <Icon name="trash" size={16} />
             </button>
         </div>

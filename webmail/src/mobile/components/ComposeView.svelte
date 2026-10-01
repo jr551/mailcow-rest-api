@@ -371,7 +371,7 @@
                     <div class="attach-chip">
                         <Icon name="paperclip" size={12} />
                         <span class="truncate">{att.filename}</span>
-                        <button type="button" class="attach-remove" onclick={() => removeAttachment(i)}>
+                        <button type="button" class="attach-remove" onclick={() => removeAttachment(i)} aria-label="Remove attachment">
                             <Icon name="close" size={12} />
                         </button>
                     </div>
@@ -408,7 +408,7 @@
     <div class="picker-sheet slide-up">
         <div class="picker-header">
             <h2>From</h2>
-            <button type="button" class="mbtn mbtn-ghost" onclick={() => showFromPicker = false}>
+            <button type="button" class="mbtn mbtn-ghost" onclick={() => showFromPicker = false} aria-label="Close">
                 <Icon name="close" size={18} />
             </button>
         </div>

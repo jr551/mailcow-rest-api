@@ -509,7 +509,7 @@
 <div class="inbox-view">
     <header class="mheader">
         <div class="header-left">
-            <button type="button" class="mbtn mbtn-ghost" onclick={() => { mobileState.selectedPath = 'INBOX'; refreshMessages(true); }}>
+            <button type="button" class="mbtn mbtn-ghost" aria-label="Refresh" onclick={() => { mobileState.selectedPath = 'INBOX'; refreshMessages(true); }}>
                 <Icon name="refresh" size={18} />
             </button>
             <LatencyChip />
@@ -520,7 +520,7 @@
                 <span class="badge">{unreadCount}</span>
             {/if}
         </h1>
-        <button type="button" class="mbtn mbtn-ghost" data-testid="compose-btn" onclick={() => {
+        <button type="button" class="mbtn mbtn-ghost" data-testid="compose-btn" aria-label="Compose" onclick={() => {
             mobileState.composeReplyTo = null;
             mobileState.composeMode = 'new';
             navigate('compose');

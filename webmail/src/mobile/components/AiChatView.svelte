@@ -446,7 +446,7 @@
 
 <div class="ai-view">
     <header class="mheader">
-        <button type="button" class="mbtn mbtn-ghost" onclick={() => showThreads = true}>
+        <button type="button" class="mbtn mbtn-ghost" onclick={() => showThreads = true} title="Chat history" aria-label="Chat history">
             <Icon name="inbox" size={18} />
         </button>
         <h1 class="truncate">{active?.title || 'AI Chat'}</h1>
@@ -456,10 +456,10 @@
                     <Icon name="mic" size={18} />
                 </button>
             {/if}
-            <button type="button" class="mbtn mbtn-ghost" onclick={startNewThread}>
+            <button type="button" class="mbtn mbtn-ghost" onclick={startNewThread} title="New chat" aria-label="New chat">
                 <Icon name="plus" size={18} />
             </button>
-            <button type="button" class="mbtn mbtn-ghost" onclick={() => showSettings = true}>
+            <button type="button" class="mbtn mbtn-ghost" onclick={() => showSettings = true} title="AI settings" aria-label="AI settings">
                 <Icon name="settings" size={18} />
             </button>
         </div>
@@ -646,7 +646,7 @@
                 {#each pendingImages as img, i}
                     <div class="pending-img-wrap">
                         <img src={img} alt="Pending" />
-                        <button type="button" class="pending-remove" onclick={() => removePendingImage(i)}>
+                        <button type="button" class="pending-remove" onclick={() => removePendingImage(i)} aria-label="Remove image">
                             <Icon name="close" size={12} />
                         </button>
                     </div>
@@ -672,6 +672,7 @@
                 class="mbtn mbtn-primary send-btn"
                 disabled={(!input.trim() && !pendingImages.length) || sending}
                 onclick={handleSend}
+                aria-label="Send message"
             >
                 <Icon name="send" size={18} />
             </button>
@@ -684,7 +685,7 @@
     <div class="threads-sheet slide-up">
         <div class="sheet-header">
             <h2>Chats</h2>
-            <button type="button" class="mbtn mbtn-ghost" onclick={() => showThreads = false}>
+            <button type="button" class="mbtn mbtn-ghost" onclick={() => showThreads = false} aria-label="Close">
                 <Icon name="close" size={18} />
             </button>
         </div>
@@ -716,7 +717,7 @@
     <div class="threads-sheet slide-up">
         <div class="sheet-header">
             <h2>Chat settings</h2>
-            <button type="button" class="mbtn mbtn-ghost" onclick={() => showSettings = false}>
+            <button type="button" class="mbtn mbtn-ghost" onclick={() => showSettings = false} aria-label="Close">
                 <Icon name="close" size={18} />
             </button>
         </div>

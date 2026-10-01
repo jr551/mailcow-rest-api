@@ -140,6 +140,7 @@
             type="button"
             class="back-btn"
             disabled={!driveState.currentPath}
+            aria-label="Up one folder"
             onclick={() => {
                 const parts = driveState.currentPath.split('/');
                 parts.pop();
@@ -159,6 +160,7 @@
             type="button"
             class="refresh-btn"
             disabled={driveState.itemsLoading}
+            aria-label="Refresh"
             onclick={() => {
                 loadPath(driveState.currentPath || '');
                 showToast('info', 'Refreshing…');
@@ -241,7 +243,7 @@
     {#if driveState.selected.size > 0}
         <div class="selection-bar">
             <span>{driveState.selected.size} selected</span>
-            <button type="button" class="delete-btn" onclick={deleteSelected}>
+            <button type="button" class="delete-btn" onclick={deleteSelected} aria-label="Delete selected">
                 <Icon name="trash" size={18} />
             </button>
         </div>
@@ -272,10 +274,10 @@
                     </button>
                 </div>
             {/if}
-            <button type="button" class="fab" data-testid="mobile-drive-new-folder" onclick={() => showNewFolder = !showNewFolder}>
+            <button type="button" class="fab" data-testid="mobile-drive-new-folder" onclick={() => showNewFolder = !showNewFolder} aria-label="New folder">
                 <Icon name="plus" size={24} />
             </button>
-            <button type="button" class="fab" data-testid="mobile-drive-upload" onclick={onUpload}>
+            <button type="button" class="fab" data-testid="mobile-drive-upload" onclick={onUpload} aria-label="Upload file">
                 <Icon name="upload" size={24} />
             </button>
         </div>
