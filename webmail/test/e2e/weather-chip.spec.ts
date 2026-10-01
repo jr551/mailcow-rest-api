@@ -118,6 +118,20 @@ test.describe('Weather chip', () => {
         await expect(page.getByTestId('weather-chip')).toBeVisible();
     });
 
+    test('never renders when the master switch is off, on any skin', async ({ page }) => {
+        await applyMocks(page);
+        await stubWeather(page);
+        // Gmail is the skin that shows the chip with no per-skin opt-in, so it
+        // is the one where "off" has to win outright. The per-skin opt-in is
+        // deliberately also set: it is subordinate to the master switch, and a
+        // future refactor that let it override would show up here.
+        await seed(page, { skinId: 'gmail', weatherChip: false, weatherChipOutlook: true });
+        await login(page);
+        await expect(page.locator('html')).toHaveClass(/skin-gmail/);
+        await expect(page.getByTestId('weather-chip')).toHaveCount(0);
+        await expect(page.locator('.weather-menu')).toHaveCount(0);
+    });
+
     // Default state for the placement tests below. Gmail renders the chip
     // with no per-skin opt-in, so this is the plain, un-overridden path.
     const chipMounts = { skinId: 'gmail', weatherChip: true } as const;
