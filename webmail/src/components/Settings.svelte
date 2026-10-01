@@ -60,7 +60,7 @@
         setSpamSuggest, setSpamSuggestConfidenceFloor, setSpamSweepBatchSize, setAiSortSweepSpam,
         setVipAddresses, setPreSendCheck, setComposeHistorySummary, setAiSuggestReply,
         aiAvailable,
-        setCalendarTicker, setCalendarTickerTitles, setWeatherChipOutlook, setLinkSafetyCheck
+        setCalendarTicker, setCalendarTickerTitles, setWeatherChip, setWeatherChipOutlook, setLinkSafetyCheck
     } from '../lib/settings.svelte';
     import { warmupTesseract, teardownTesseract } from '../lib/tesseract-ocr';
     import { linkCheckConfigured } from '../lib/virustotal';
@@ -1686,23 +1686,6 @@
                     {/if}
 
                     <div class="card">
-                        <h4><Icon name="send" size={13} /> Default From address</h4>
-                        <p class="muted small">
-                            Used as the From for new messages. When you reply, the From auto-matches
-                            whichever of your addresses received the original — this is just the
-                            fallback when no match applies.
-                        </p>
-                        <input
-                            type="email"
-                            class="default-from"
-                            placeholder={authState.activeUser || 'you@example.com'}
-                            value={settings.defaultFromAddress}
-                            oninput={(e) => setDefaultFromAddress((e.currentTarget as HTMLInputElement).value)}
-                            data-testid="settings-default-from"
-                        />
-                    </div>
-
-                    <div class="card">
                         <h4><Icon name="at" size={13} /> Disposable &amp; permanent aliases</h4>
                         <p class="muted small">
                             Spawn a fresh address that forwards to your inbox. Useful for one-shot signups
@@ -3096,12 +3079,30 @@
 
                 <div class="form-row">
                     <div class="row-text">
+                        <strong>Weather chip</strong>
+                        <span class="muted">
+                            Master switch for the weather chip in the top bar. When this is
+                            off the chip never renders, on any skin.
+                        </span>
+                    </div>
+                    <label class="toggle compact">
+                        <input
+                            type="checkbox"
+                            checked={settings.weatherChip}
+                            onchange={(e) => setWeatherChip((e.currentTarget as HTMLInputElement).checked)}
+                            data-testid="settings-weather-chip"
+                        />
+                        <span>{settings.weatherChip ? 'On' : 'Off'}</span>
+                    </label>
+                </div>
+
+                <div class="form-row">
+                    <div class="row-text">
                         <strong>Weather chip in the top bar</strong>
                         <span class="muted">
-                            The Outlook skin leaves the top bar clear to match the real
-                            client's chrome, so the weather chip is hidden there by
-                            default. Turn this on to keep it anyway. Other skins always
-                            follow the general weather setting.
+                            Only applies when the weather chip above is on. The Outlook skin
+                            leaves the top bar clear to match the real client's chrome, so the
+                            chip is hidden there by default. Turn this on to keep it anyway.
                         </span>
                     </div>
                     <label class="toggle compact">
