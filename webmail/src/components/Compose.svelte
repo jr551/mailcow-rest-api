@@ -519,7 +519,12 @@
         // AI hard-off: the panel is not rendered, so don't spend a model
         // call building a summary nobody can see. Reset the same way an
         // unrecognised recipient does, and abort anything in flight.
-        if (!settings.aiFeatures) {
+        //
+        // Same rule for the history-summary switch itself: it hides the
+        // panel, so the two IMAP searches and the model call behind it must
+        // not run either. Gating only the render left the work happening
+        // invisibly — the switch said "off" while the tokens were spent.
+        if (!settings.aiFeatures || !settings.composeHistorySummary) {
             historyAddr = null;
             historySummary = null;
             historyLoading = false;
