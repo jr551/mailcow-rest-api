@@ -6,9 +6,9 @@
     import { pwa, promptInstall, subscribePush, unsubscribePush, pushSubscriptionStatus } from '../../lib/pwa.svelte';
     import {
         settings, capabilities, setProxyImages, setDefaultFromAddress,
-        setDensity, setGroupThreads, setPageSize, setAccountChipDisplay,
-        setLlm, setUseCustomLlm, setAiFeatures,
-        setPhishingScan, setTrackOpensDefault, setAiSuggestSubjectOnBlur, setDisplayName,
+        setLlm, setUseCustomLlm, setAiFeatures, setAiSystemPrompt,
+        setPhishingScan, setTrackOpensDefault, setDisplayName,
+        setSpamSuggest, setAiSuggestReply, setPermanentSignIn,
         setPhishingScanTimeoutSec, setPhishingScanPromptAddendum, setPhishingScanConfidenceFloor,
         setTesseractOcrInstalled, setPhishingScanOcrInline
     } from '../../lib/settings.svelte';
@@ -369,38 +369,6 @@
         <div class="ios-list">
             <div class="ios-row toggle-row">
                 <div class="toggle-info">
-                    <span class="row-label">Compact density</span>
-                    <span class="muted small">Pack more rows into the message list</span>
-                </div>
-                <button
-                    type="button"
-                    class="toggle-switch"
-                    aria-label="Compact density"
-                    class:on={settings.density === 'compact'}
-                    class:off={settings.density !== 'compact'}
-                    onclick={() => setDensity(settings.density === 'compact' ? 'comfortable' : 'compact')}
-                >
-                    <span class="toggle-knob"></span>
-                </button>
-            </div>
-            <div class="ios-row toggle-row">
-                <div class="toggle-info">
-                    <span class="row-label">Group threads</span>
-                    <span class="muted small">Collapse conversations into one row</span>
-                </div>
-                <button
-                    type="button"
-                    class="toggle-switch"
-                    aria-label="Group threads"
-                    class:on={settings.groupThreads}
-                    class:off={!settings.groupThreads}
-                    onclick={() => setGroupThreads(!settings.groupThreads)}
-                >
-                    <span class="toggle-knob"></span>
-                </button>
-            </div>
-            <div class="ios-row toggle-row">
-                <div class="toggle-info">
                     <span class="row-label">Sounds</span>
                     <span class="muted small">Chime on new mail, swoosh on send</span>
                 </div>
@@ -559,6 +527,23 @@
                     <span class="toggle-knob"></span>
                 </button>
             </div>
+            <div class="ios-row toggle-row">
+                <div class="toggle-info">
+                    <span class="row-label">Suggest moving spam</span>
+                    <span class="muted small">When the scan flags a message as spam, offer to move it to Spam</span>
+                </div>
+                <button
+                    type="button"
+                    class="toggle-switch"
+                    aria-label="Suggest moving spam"
+                    class:on={settings.spamSuggest}
+                    class:off={!settings.spamSuggest}
+                    onclick={() => setSpamSuggest(!settings.spamSuggest)}
+                    data-testid="settings-spam-suggest"
+                >
+                    <span class="toggle-knob"></span>
+                </button>
+            </div>
         </div>
 
         <p class="ios-section-title"><Icon name="shield" size={13} /> Trusted senders</p>
@@ -638,16 +623,17 @@
             </div>
             <div class="ios-row toggle-row">
                 <div class="toggle-info">
-                    <span class="row-label">AI subject on blur</span>
-                    <span class="muted small">Suggest a subject the moment you leave the body</span>
+                    <span class="row-label">Suggest replies</span>
+                    <span class="muted small">Offer an AI-drafted reply when you open a reply; nothing reaches the body until you accept</span>
                 </div>
                 <button
                     type="button"
                     class="toggle-switch"
-                    aria-label="AI subject on blur"
-                    class:on={settings.aiSuggestSubjectOnBlur}
-                    class:off={!settings.aiSuggestSubjectOnBlur}
-                    onclick={() => setAiSuggestSubjectOnBlur(!settings.aiSuggestSubjectOnBlur)}
+                    aria-label="Suggest replies"
+                    class:on={settings.aiSuggestReply}
+                    class:off={!settings.aiSuggestReply}
+                    onclick={() => setAiSuggestReply(!settings.aiSuggestReply)}
+                    data-testid="settings-ai-suggest-reply"
                 >
                     <span class="toggle-knob"></span>
                 </button>
@@ -760,6 +746,18 @@
                         <span class="muted small">Server has no LLM configured. Set your own provider below to use AI chat.</span>
                     </div>
                 {/if}
+                <div class="ios-row" style="flex-direction:column;align-items:stretch;gap:6px;">
+                    <span class="row-label">Custom AI instructions</span>
+                    <span class="muted small">Extra system-prompt text prepended to every AI request. Leave blank to use the built-in default.</span>
+                    <textarea
+                        rows="3"
+                        placeholder="e.g. Keep replies under 200 words; cite sources when you use the web."
+                        value={settings.aiSystemPrompt}
+                        oninput={(e) => setAiSystemPrompt((e.currentTarget as HTMLTextAreaElement).value)}
+                        style="font: inherit; padding: 8px 10px; background: var(--bg-base); border: 1px solid var(--border-soft); border-radius: var(--radius-sm); color: var(--text-primary); resize: vertical;"
+                        data-testid="settings-ai-system-prompt"
+                    ></textarea>
+                </div>
                 <div class="ios-row toggle-row">
                     <div class="toggle-info">
                         <span class="row-label">Use my own provider</span>
@@ -885,6 +883,23 @@
                     <Icon name="check" size={16} />
                 </div>
             {/if}
+            <div class="ios-row toggle-row">
+                <div class="toggle-info">
+                    <span class="row-label">Stay signed in</span>
+                    <span class="muted small">Keep the session across browser restarts (mobile defaults this on)</span>
+                </div>
+                <button
+                    type="button"
+                    class="toggle-switch"
+                    aria-label="Stay signed in"
+                    class:on={settings.permanentSignIn}
+                    class:off={!settings.permanentSignIn}
+                    onclick={() => setPermanentSignIn(!settings.permanentSignIn)}
+                    data-testid="settings-permanent-signin"
+                >
+                    <span class="toggle-knob"></span>
+                </button>
+            </div>
         </div>
 
         <div class="logout-wrap">
