@@ -128,6 +128,15 @@ Because the ingest path needs the mailbox password to APPEND, webhook inboxes sh
 </details>
 
 <details>
+<summary><b>🔄 Settings that follow you between devices</b></summary>
+
+Preferences sync through the mailbox itself: after sign-in the webmail writes one JSON snapshot into a hidden `.storage_webmailsettings` IMAP folder and pulls the newest snapshot on each sign-in, last write wins by timestamp. No extra schema, no per-tenant rows — it inherits IMAP's auth, replication and quota, and the folder is filtered out of the folder tree.
+
+The **LLM API key is deliberately excluded** from the snapshot. It is device-local: a key typed on one device is never written to the mailbox (where it would sit in plaintext, readable by anything holding IMAP access to the account) and never reaches another device. A snapshot written before that rule is replaced with a clean one and deleted on the next pull.
+
+</details>
+
+<details>
 <summary><b>🛠️ Admin API</b></summary>
 
 Setting `ADMIN_TOKEN` enables `/v1/admin/*`. Without it the routes are never registered. The token is operator credentials, not a mailbox login, and is sent as `Authorization: Bearer <ADMIN_TOKEN>`.

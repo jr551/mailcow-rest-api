@@ -784,6 +784,7 @@
                     <div class="ios-row" style="padding: 6px 16px;flex-direction:column;align-items:stretch;gap:6px;">
                         <span class="row-label">API key</span>
                         <input type="password" class="ai-input" placeholder="sk-…" autocomplete="off" spellcheck="false" value={settings.llm.apiKey} oninput={(e) => setLlm({ apiKey: (e.currentTarget as HTMLInputElement).value })} />
+                        <span class="muted small">Stays on this device — never synced to your other devices or written to your mailbox.</span>
                     </div>
                     <div class="ios-row" style="padding: 6px 16px;flex-direction:column;align-items:stretch;gap:6px;">
                         <span class="row-label">Base URL</span>

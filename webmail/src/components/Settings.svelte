@@ -3638,6 +3638,10 @@
                                     data-testid="settings-key"
                                 />
                             </div>
+                            <div class="hint" data-testid="settings-key-local">
+                                Stays on this device. The key is never written to the settings-sync
+                                folder in your mailbox, so it doesn't follow you to your other devices.
+                            </div>
 
                             <div class="row">
                                 <span class="lbl">Base URL</span>
@@ -4869,7 +4873,8 @@
             <p class="muted">
                 Tip — these settings follow you between devices: they're kept in a hidden
                 <code>.storage_webmailsettings</code> folder in your mailbox, so clearing your
-                browser data won't lose them.
+                browser data won't lose them. Your LLM API key is the exception: it stays on
+                this device and is never written to that folder.
             </p>
             <button type="button" class="btn btn-primary" onclick={close} data-testid="settings-done">Done</button>
         </footer>

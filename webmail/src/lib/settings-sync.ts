@@ -17,6 +17,13 @@
 //   Content-Type: application/json
 //   Body: { v:1, ts, settings, spamFeedback }
 //
+// The LLM API key is NOT part of the snapshot. It is device-local: a key
+// typed on one device must never land in the mailbox (where it would sit
+// in plaintext, readable by anything with IMAP access to the account) and
+// must never reach another device. So the push strips it, the apply keeps
+// whatever key this device already holds, and snapshots written before
+// that rule are scrubbed from the folder on the next pull.
+//
 // Conflict policy: last-write-wins by `ts`. Settings are user-edited
 // (low frequency, single-author per device) so we don't bother with
 // per-field merging. The user always sees their most recent change
@@ -27,7 +34,7 @@
 import {
     listMessages, getRawMessage, appendRawMessage, createMailbox, deleteMessage
 } from './api';
-import { settings, type Settings } from './settings.svelte';
+import { settings, type Settings, type LlmConfig } from './settings.svelte';
 import { spamFeedback, type SpamFeedback } from './spam-feedback.svelte';
 import { getSession } from './auth.svelte';
 
@@ -38,24 +45,39 @@ const PUSH_DEBOUNCE_MS = 5000;
 // with a push that's mid-write, the previous snapshot is still readable.
 const KEEP_HISTORY = 3;
 
+/** Settings as they travel in a snapshot. `llm.apiKey` is excluded by
+ *  type: the key is device-local and must never be serialised into the
+ *  mailbox. See the module header. */
+export type SyncedSettings = Omit<Partial<Settings>, 'llm'> & { llm?: Omit<LlmConfig, 'apiKey'> };
+
 export interface SettingsSnapshot {
     v: 1;
     ts: number;
-    settings: Partial<Settings>;
+    settings: SyncedSettings;
     spamFeedback?: SpamFeedback;
 }
 
 let lastPullTs = 0;
 let lastPushTs = 0;
 let pushTimer: ReturnType<typeof setTimeout> | null = null;
-let inflightPush: Promise<void> | null = null;
+let inflightPush: Promise<boolean> | null = null;
 let pulledOnce = false;
+
+/** Copy `settings` for the wire, dropping the device-local LLM API key.
+ *  The copy matters: the live `settings.llm` object must not be touched. */
+function stripDeviceLocalSecrets(s: Partial<Settings>): SyncedSettings {
+    const { llm, ...rest } = s;
+    if (!llm) return rest;
+    const llmRest = { ...llm };
+    delete (llmRest as Partial<LlmConfig>).apiKey;
+    return { ...rest, llm: llmRest };
+}
 
 function snapshotNow(): SettingsSnapshot {
     return {
         v: 1,
         ts: Date.now(),
-        settings: { ...settings },
+        settings: stripDeviceLocalSecrets({ ...settings }),
         spamFeedback: {
             trustedDomains: [...spamFeedback.trustedDomains],
             trustedAddresses: [...spamFeedback.trustedAddresses],
@@ -116,32 +138,56 @@ async function ensureFolder(): Promise<boolean> {
     }
 }
 
+interface PullResult {
+    snap: SettingsSnapshot | null;
+    /** UIDs of snapshots that still carry the device-local LLM API key.
+     *  They were written before the key was excluded from the envelope;
+     *  startSync() scrubs them once a clean snapshot is safely pushed. */
+    secretUids: number[];
+}
+
+/** Does this snapshot carry an LLM API key? Snapshots written before the
+ *  key became device-local still do. The snapshot body is untrusted JSON,
+ *  so the shape is narrowed rather than asserted. */
+function carriesApiKey(snap: SettingsSnapshot): boolean {
+    const settingsPart: unknown = snap.settings;
+    if (!settingsPart || typeof settingsPart !== 'object' || !('llm' in settingsPart)) return false;
+    const llm: unknown = settingsPart.llm;
+    if (!llm || typeof llm !== 'object' || !('apiKey' in llm)) return false;
+    return typeof llm.apiKey === 'string' && llm.apiKey.length > 0;
+}
+
 /** Fetch the newest snapshot from the sync folder. Returns null when
  *  the folder is empty or doesn't exist. */
-async function pullSettings(): Promise<SettingsSnapshot | null> {
+async function pullSettings(): Promise<PullResult> {
+    const empty: PullResult = { snap: null, secretUids: [] };
     try {
         const list = await listMessages(SYNC_FOLDER, { page: 0, pageSize: 50 });
-        if (!list?.messages?.length) return null;
+        if (!list?.messages?.length) return empty;
         // Sort newest first by INTERNALDATE / envelope date / UID.
         const sorted = [...list.messages].sort((a, b) => {
             const ta = Date.parse(a.internalDate || a.envelope?.date || '') || a.uid;
             const tb = Date.parse(b.internalDate || b.envelope?.date || '') || b.uid;
             return tb - ta;
         });
+        const secretUids: number[] = [];
+        let snap: SettingsSnapshot | null = null;
         for (const m of sorted) {
             try {
                 const raw = await getRawMessage(SYNC_FOLDER, m.uid);
-                const snap = parseSnapshotFromRfc822(raw);
-                if (snap) return snap;
+                const parsed = parseSnapshotFromRfc822(raw);
+                if (!parsed) continue;
+                if (carriesApiKey(parsed)) secretUids.push(m.uid);
+                if (!snap) snap = parsed;
             } catch { /* unreadable, try the next one */ }
         }
-        return null;
+        return { snap, secretUids };
     } catch (err) {
         // Folder missing → nothing to merge. Caller should still allow
         // the local snapshot to be the source of truth and call push.
         const status = (err as { status?: number })?.status;
-        if (status === 404) return null;
-        return null;
+        if (status === 404) return empty;
+        return empty;
     }
 }
 
@@ -161,7 +207,21 @@ function applySnapshot(remote: SettingsSnapshot): boolean {
     // field-by-field merge below would happily stamp it back onto state.
     // Drop it before the loop so an upgrading device pulls a clean snapshot.
     if ('clientRules' in incoming) delete (incoming as Record<string, unknown>).clientRules;
+    // `llm` is merged, never replaced. The snapshot does not carry the
+    // device-local API key, and the key this device holds must survive the
+    // merge — a legacy snapshot that still has one must not win either.
+    // Every other LLM field follows the remote.
+    if (incoming.llm) {
+        const local = settings.llm;
+        const merged: LlmConfig = { ...local, ...incoming.llm, apiKey: local.apiKey };
+        if (merged.kind !== local.kind || merged.preset !== local.preset
+            || merged.baseUrl !== local.baseUrl || merged.model !== local.model) {
+            settings.llm = merged;
+            changed = true;
+        }
+    }
     for (const k of Object.keys(incoming) as (keyof Settings)[]) {
+        if (k === 'llm') continue;
         const cur = (settings as unknown as Record<string, unknown>)[k as string];
         const next = (incoming as unknown as Record<string, unknown>)[k as string];
         if (cur !== next && next !== undefined) {
@@ -192,15 +252,17 @@ function applySnapshot(remote: SettingsSnapshot): boolean {
 
 /** Append a fresh snapshot to the sync folder, then prune older ones
  *  past KEEP_HISTORY. Coalesces concurrent calls so a burst of edits
- *  results in one push. */
-async function pushSettings(): Promise<void> {
+ *  results in one push. Resolves true when a snapshot was actually
+ *  written — the legacy-secret scrub only deletes old snapshots after a
+ *  clean replacement is safely in the folder. */
+async function pushSettings(): Promise<boolean> {
     if (inflightPush) return inflightPush;
     inflightPush = (async () => {
         try {
             const session = getSession();
-            if (!session) return;
+            if (!session) return false;
             const ok = await ensureFolder();
-            if (!ok) return;
+            if (!ok) return false;
             const snap = snapshotNow();
             const rfc822 = buildRfc822(snap);
             await appendRawMessage(SYNC_FOLDER, rfc822, { internalDate: new Date(snap.ts) });
@@ -220,6 +282,7 @@ async function pushSettings(): Promise<void> {
                     }
                 }
             } catch { /* prune is best-effort */ }
+            return true;
         } finally {
             inflightPush = null;
         }
@@ -253,7 +316,7 @@ export async function startSync(): Promise<void> {
         installWatchers();
     }
     try {
-        const remote = await pullSettings();
+        const { snap: remote, secretUids } = await pullSettings();
         if (remote) {
             applySnapshot(remote);
             // Honour the remote's ts as our floor so we don't immediately
@@ -263,6 +326,20 @@ export async function startSync(): Promise<void> {
             // by applySnapshot's writes — those writes are remote in
             // origin, not user-driven.
             if (pushTimer) { clearTimeout(pushTimer); pushTimer = null; }
+        }
+        if (secretUids.length) {
+            // Snapshots written before the API key became device-local
+            // still carry it in the mailbox. Write a clean replacement
+            // FIRST, then delete the ones holding the secret — if the
+            // push fails (offline, folder gone) the old snapshots stay,
+            // so a device that has not synced yet cannot lose its
+            // settings to a scrub it never saw.
+            const pushed = await pushSettings();
+            if (pushed) {
+                for (const uid of secretUids) {
+                    try { await deleteMessage(SYNC_FOLDER, uid); } catch { /* best-effort */ }
+                }
+            }
         }
     } catch { /* offline first-pull is fine; we'll push the local one */ }
     // Push the local snapshot if we've never pushed before — guarantees

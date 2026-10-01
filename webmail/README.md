@@ -42,6 +42,8 @@ The two skins differ in one deliberate way: Outlook's header is a sparse blue co
 
 Every preference lives in one searchable modal. The left rail groups 20 sections under five headings — **Account**, **General**, **Email**, **Calendar**, **People** — the search box filters across all of them at once, and the panel reopens on whichever section you used last. The two sections that were only ever empty placeholders are gone rather than shown as dead ends.
 
+Preferences follow the user between devices: after sign-in the webmail writes one JSON snapshot into a hidden `.storage_webmailsettings` IMAP folder in the mailbox itself, and pulls the newest snapshot on each sign-in (last write wins by timestamp). The **LLM API key is deliberately excluded** — it is device-local, so a key typed on one device is never written to the mailbox and never reaches another device. A snapshot that still carries one (written before that rule) is replaced with a clean one and deleted on the next pull.
+
 ![Settings](docs/screenshots/settings-groups.png)
 
 ## Context menu
@@ -82,7 +84,7 @@ The lookup is a server call to `GET /v1/link-check?url=…` (VirusTotal, with th
 
 The browser never receives a provider API key. AI requests go to `POST /v1/ai/llm/chat/completions` on the API, authenticated with the session token the client already holds; the server attaches the provider key and forwards the request. `GET /v1/ai/config` reports `proxied: true` and a same-origin base URL, so the client treats it like any other OpenAI-compatible endpoint.
 
-This replaces an earlier design that brokered per-user scoped keys through LiteLLM and shipped them to the browser — handing a key to a public static frontend means anyone who can read the page can use it. Browser-local user keys still work for personal use (Settings → AI), but they are not a safe way to distribute one shared key to all users.
+This replaces an earlier design that brokered per-user scoped keys through LiteLLM and shipped them to the browser — handing a key to a public static frontend means anyone who can read the page can use it. Browser-local user keys still work for personal use (Settings → AI), but they are not a safe way to distribute one shared key to all users. A key entered there is device-local: it is never included in the cross-device settings snapshot, so it stays in this browser's storage and is never written to the mailbox.
 
 ## Development
 
