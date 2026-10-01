@@ -36,11 +36,11 @@ The accent colour is a *layer*, not a third palette: it re-derives the accent fa
 
 One deliberate carry-over: Outlook's search field stays white with dark text in *both* light and dark, because Outlook-on-the-web does the same. It is not themed like the rest of the surface — see the comment in `skins.svelte.ts` for why swapping it onto the dark input token is a trap.
 
-The two skins differ in one deliberate way: Outlook's header is a sparse blue command bar, so the weather chip and calendar ticker are hidden there by default (**Settings → Appearance → "Weather chip on Outlook themes"** brings the weather chip back). Gmail shows both.
+The two skins differ in one deliberate way: Outlook's header is a sparse blue command bar, so the weather chip and calendar ticker are hidden there by default (**Settings → Appearance → "Weather chip on Outlook themes"** brings the weather chip back). Gmail shows both. The chip itself is off until you turn it on — **Settings → Appearance → "Weather chip"** is the master switch, and the Outlook row only applies when it is on.
 
 ## Settings
 
-Every preference lives in one searchable modal. The left rail groups 19 sections under five headings — **Account**, **General**, **Email**, **Calendar**, **People** — the search box filters across all of them at once, and the panel reopens on whichever section you used last. The two sections that were only ever empty placeholders are gone rather than shown as dead ends.
+Every preference lives in one searchable modal. The left rail groups 20 sections under five headings — **Account**, **General**, **Email**, **Calendar**, **People** — the search box filters across all of them at once, and the panel reopens on whichever section you used last. The two sections that were only ever empty placeholders are gone rather than shown as dead ends.
 
 ![Settings](docs/screenshots/settings-groups.png)
 
