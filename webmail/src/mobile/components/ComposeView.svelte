@@ -7,6 +7,7 @@
     import { settings, pickFromName, setDisplayName, deriveNameFromAddress, aiAvailable } from '../../lib/settings.svelte';
     import { ReplySuggest, DraftSparkle, htmlToPlainText } from '../../lib/reply-suggest.svelte';
     import { addressBook } from '../../lib/address-book.svelte';
+    import { formatFullDate } from '../../lib/format';
     import Icon from '../../components/Icon.svelte';
 
     let to = $state('');
@@ -87,9 +88,14 @@
             const sourceText = replyTo.text || htmlToPlainText(replyTo.html || '');
             if (mode === 'forward') {
                 nextSubject = nextSubject.toLowerCase().startsWith('fwd:') ? nextSubject : 'Fwd: ' + nextSubject;
-                body = `\n\n--- Forwarded message ---\nFrom: ${replyTo.envelope.from?.map((a) => a.name || a.address).join(', ')}\nDate: ${replyTo.envelope.date}\nSubject: ${replyTo.envelope.subject}\n\n${sourceText}`;
+                // envelope.date is the raw RFC-2822 header; format it the same
+                // way desktop compose does so the forwarded block reads like a
+                // mail client.
+                body = `\n\n--- Forwarded message ---\nFrom: ${replyTo.envelope.from?.map((a) => a.name || a.address).join(', ')}\nDate: ${formatFullDate(replyTo.internalDate || replyTo.envelope.date)}\nSubject: ${replyTo.envelope.subject}\n\n${sourceText}`;
             } else {
-                body = `\n\nOn ${replyTo.envelope.date}, ${replyTo.envelope.from?.[0]?.name || replyTo.envelope.from?.[0]?.address} wrote:\n\n${sourceText}`;
+                // envelope.date is the raw RFC-2822 header; format it the same
+                // way desktop compose does so the quote reads like a mail client.
+                body = `\n\nOn ${formatFullDate(replyTo.internalDate || replyTo.envelope.date)}, ${replyTo.envelope.from?.[0]?.name || replyTo.envelope.from?.[0]?.address} wrote:\n\n${sourceText}`;
             }
             if (mode === 'reply' || mode === 'replyAll') {
                 to = replyTo.envelope.from?.map((a) => a.address).filter(Boolean).join(', ') || '';
@@ -107,7 +113,9 @@
     });
 
     async function handleSend() {
-        if (!to.trim() || !subject.trim()) return;
+        // Recipient is required; an empty subject is fine (matches desktop
+        // compose, and the server accepts it).
+        if (!to.trim()) return;
         sending = true;
         try {
             const fromName = pickFromName(from || authState.activeUser || '');
@@ -239,7 +247,7 @@
             <Icon name="close" size={20} />
         </button>
         <h1>{mode === 'new' ? 'New Message' : mode === 'reply' ? 'Reply' : mode === 'replyAll' ? 'Reply All' : 'Forward'}</h1>
-        <button type="button" class="mbtn mbtn-primary" disabled={sending || !to.trim() || !subject.trim()} onclick={handleSend}>
+        <button type="button" class="mbtn mbtn-primary" disabled={sending || !to.trim()} onclick={handleSend}>
             {#if sending}<span class="spinner" style="width:16px;height:16px"></span>{/if}
             {sending ? 'Sending…' : 'Send'}
         </button>
@@ -380,10 +388,10 @@
         {/if}
 
         <div class="compose-actions">
-            <button type="button" class="action-btn" onclick={() => pickImage('camera')} title="Take photo">
+            <button type="button" class="action-btn" onclick={() => pickImage('camera')} title="Take photo" aria-label="Take photo">
                 <Icon name="camera" size={18} />
             </button>
-            <button type="button" class="action-btn" onclick={() => pickImage('gallery')} title="Add photo">
+            <button type="button" class="action-btn" onclick={() => pickImage('gallery')} title="Add photo" aria-label="Add photo">
                 <Icon name="image" size={18} />
             </button>
             <button
