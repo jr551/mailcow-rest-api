@@ -93,6 +93,17 @@ body {
     -webkit-user-select: none;
 }
 .mbtn:active { transform: scale(0.96); opacity: 0.85; }
+/* A disabled .mbtn used to look identical to an enabled one — the compose
+   Send button sat there in full accent blue while `disabled` (empty To or
+   Subject), so the only feedback was that tapping it did nothing. Match the
+   desktop .btn:disabled treatment (same 0.55) and kill the press animation,
+   which a disabled button can still match in some browsers. */
+.mbtn:disabled,
+.mbtn:disabled:active {
+    opacity: 0.55;
+    cursor: not-allowed;
+    transform: none;
+}
 .mbtn-primary {
     background: var(--accent);
     color: var(--text-on-accent);
