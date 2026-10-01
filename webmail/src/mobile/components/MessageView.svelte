@@ -412,39 +412,48 @@
                 {:else}
                     <p class="muted">(no body)</p>
                 {/if}
-                {#if proxyActive}
-                    <div class="proxy-badge">
-                        <span class="proxy-dot"></span>
-                        <span class="proxy-text">Proxy protection on</span>
+                {#if proxyActive || (settings.phishingScan && phishingResult && !phishingScanning)}
+                    <!-- One rail for the scan/proxy pills. They used to be
+                         absolutely positioned siblings each pinned to the same
+                         top-right corner, so whenever two were live (scam +
+                         spam scan is the default) they landed exactly on top
+                         of each other and only the last one was readable. -->
+                    <div class="badge-rail">
+                        {#if proxyActive}
+                            <div class="proxy-badge">
+                                <span class="proxy-dot"></span>
+                                <span class="proxy-text">Proxy protection on</span>
+                            </div>
+                        {/if}
+                        {#if settings.phishingScan && phishingResult && !phishingScanning}
+                            {@const flagged = phishingResult.isPhishing && phishingResult.confidence >= settings.phishingScanConfidenceFloor}
+                            <div
+                                class="proxy-badge scam-badge"
+                                class:warn={flagged}
+                                title={flagged
+                                    ? `Scam scan: phishing indicators detected (${Math.round(phishingResult.confidence * 100)}%).`
+                                    : 'Scam scan: clean.'}
+                                data-testid="mobile-scam-scanned-badge"
+                            >
+                                <Icon name={flagged ? 'shieldAlert' : 'shield'} size={11} />
+                                <span class="proxy-text">{flagged ? 'Phishing risk' : 'Scam-scanned'}</span>
+                            </div>
+                            {#if settings.spamSuggest}
+                                {@const spamFlagged = phishingResult.isSpam && phishingResult.spamConfidence >= settings.spamSuggestConfidenceFloor}
+                                <div
+                                    class="proxy-badge spam-badge"
+                                    class:warn={spamFlagged}
+                                    title={spamFlagged
+                                        ? `Spam scan: looks like spam (${Math.round(phishingResult.spamConfidence * 100)}%).`
+                                        : 'Spam scan: clean.'}
+                                    data-testid="mobile-spam-scanned-badge"
+                                >
+                                    <Icon name={spamFlagged ? 'shieldAlert' : 'shield'} size={11} />
+                                    <span class="proxy-text">{spamFlagged ? 'Looks like spam' : 'Spam-scanned'}</span>
+                                </div>
+                            {/if}
+                        {/if}
                     </div>
-                {/if}
-                {#if settings.phishingScan && phishingResult && !phishingScanning}
-                    {@const flagged = phishingResult.isPhishing && phishingResult.confidence >= settings.phishingScanConfidenceFloor}
-                    <div
-                        class="proxy-badge scam-badge"
-                        class:warn={flagged}
-                        title={flagged
-                            ? `Scam scan: phishing indicators detected (${Math.round(phishingResult.confidence * 100)}%).`
-                            : 'Scam scan: clean.'}
-                        data-testid="mobile-scam-scanned-badge"
-                    >
-                        <Icon name={flagged ? 'shieldAlert' : 'shield'} size={11} />
-                        <span class="proxy-text">{flagged ? 'Phishing risk' : 'Scam-scanned'}</span>
-                    </div>
-                    {#if settings.spamSuggest}
-                        {@const spamFlagged = phishingResult.isSpam && phishingResult.spamConfidence >= settings.spamSuggestConfidenceFloor}
-                        <div
-                            class="proxy-badge spam-badge"
-                            class:warn={spamFlagged}
-                            title={spamFlagged
-                                ? `Spam scan: looks like spam (${Math.round(phishingResult.spamConfidence * 100)}%).`
-                                : 'Spam scan: clean.'}
-                            data-testid="mobile-spam-scanned-badge"
-                        >
-                            <Icon name={spamFlagged ? 'shieldAlert' : 'shield'} size={11} />
-                            <span class="proxy-text">{spamFlagged ? 'Looks like spam' : 'Spam-scanned'}</span>
-                        </div>
-                    {/if}
                 {/if}
                 {#if phishingResult?.isPhishing && !phishingDismissed}
                     <div class="phishing-overlay" data-testid="phishing-overlay">
@@ -650,33 +659,77 @@
         line-height: 1.5;
         max-width: 760px;
     }
-    .proxy-badge {
+    /* Floating rail for the proxy/scan pills, pinned to the top-right of the
+       body. Column, not row: the pills are wide and the body is narrow. */
+    .badge-rail {
         position: absolute;
         top: 8px;
         right: 8px;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 4px;
+        pointer-events: none;
+        z-index: 4;
+    }
+    /* Tones mirror the desktop toolbar's badges (MessageDetail.svelte): the
+       base pill is the "all clear" success tone, the scam scan wears the
+       accent, the spam scan wears amber, and a flagged verdict re-asserts
+       its own tone over the base. This block used to be one hardcoded green
+       for every state, so "Phishing risk" rendered in the same green as
+       "Proxy protection on" and none of it followed the user's semantic
+       colours or the dark palette. */
+    .proxy-badge {
         display: inline-flex;
         align-items: center;
         gap: 6px;
         padding: 4px 10px;
         border-radius: 999px;
-        background: rgba(34, 197, 94, 0.12);
-        border: 0.5px solid rgba(34, 197, 94, 0.35);
+        color: var(--success);
+        background: var(--success-soft);
+        border: 0.5px solid color-mix(in srgb, var(--success) 35%, transparent);
         font-size: 12px;
         font-weight: 600;
-        color: #16a34a;
         pointer-events: none;
         animation: proxyGlow 2s ease-in-out infinite;
     }
+    /* Glow follows the pill's own ink, so a flagged verdict pulses in its
+       danger/warning tone instead of the all-clear green. */
     @keyframes proxyGlow {
-        0%, 100% { box-shadow: 0 0 4px rgba(34, 197, 94, 0.2); }
-        50% { box-shadow: 0 0 12px rgba(34, 197, 94, 0.5); }
+        0%, 100% { box-shadow: 0 0 4px color-mix(in srgb, currentColor 20%, transparent); }
+        50% { box-shadow: 0 0 12px color-mix(in srgb, currentColor 50%, transparent); }
+    }
+    .proxy-badge.scam-badge {
+        color: var(--accent-text);
+        background: var(--accent-soft);
+        border-color: color-mix(in srgb, var(--accent) 38%, transparent);
+    }
+    .proxy-badge.spam-badge {
+        color: var(--warning);
+        background: var(--warning-soft);
+        border-color: color-mix(in srgb, var(--warning) 38%, transparent);
+    }
+    .proxy-badge.warn {
+        color: var(--warning);
+        background: var(--warning-soft);
+        border-color: color-mix(in srgb, var(--warning) 35%, transparent);
+    }
+    .proxy-badge.scam-badge.warn {
+        color: var(--danger);
+        background: var(--danger-soft);
+        border-color: color-mix(in srgb, var(--danger) 55%, transparent);
+    }
+    .proxy-badge.spam-badge.warn {
+        color: var(--warning);
+        background: var(--warning-soft);
+        border-color: color-mix(in srgb, var(--warning) 55%, transparent);
     }
     .proxy-dot {
         width: 6px;
         height: 6px;
         border-radius: 50%;
-        background: #22c55e;
-        box-shadow: 0 0 4px #22c55e;
+        background: var(--success);
+        box-shadow: 0 0 4px var(--success);
     }
     .attachments {
         flex: 0 0 auto;
