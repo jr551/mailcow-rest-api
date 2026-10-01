@@ -62,15 +62,16 @@ const DEFAULT_SKIN_ID = 'outlook';
 const DEFAULT_ACCENT = '#0078d4';
 
 // Rules BOTH shipped skins carry, verbatim. These are not styling choices so
-// much as structural agreements: neither Outlook-on-the-web nor Gmail marks an
-// unread row with a dot (they use an edge bar and a bold sender respectively),
-// and neither client has a counterpart for the push-to-talk mic FAB. Copy-
-// pasting them into each skin's extras is how two entries end up disagreeing
-// about the same selector, so they are declared once here and appended to
-// every skin's CSS.
+// much as structural agreements: neither Outlook-on-the-web nor Gmail has a
+// counterpart for the push-to-talk mic FAB. Copy-pasting them into each skin's
+// extras is how two entries end up disagreeing about the same selector, so
+// they are declared once here and appended to every skin's CSS.
+//
+// The unread dot used to be suppressed here too; the row now paints an edge
+// bar (`.row.unread` in MessageList.svelte) and the dot element is gone, so
+// the rule was dead.
 const SHARED_EXTRAS = `
     .voice-fab { display: none !important; }
-    .row .unread-dot { display: none !important; }
 `;
 
 export const SKINS: Skin[] = [

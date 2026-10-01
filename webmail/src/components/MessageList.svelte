@@ -1557,7 +1557,6 @@
                         oncontextmenu={(e) => openCtx(e, headMsg.uid)}
                         data-testid={`msg-row-${headMsg.uid}`}
                     >
-                        <span class="unread-dot" aria-hidden="true"></span>
                         <button
                             type="button"
                             class={`avatar-slot ${headSelected ? 'is-checked' : ''}`}
@@ -1572,7 +1571,7 @@
                                     <Icon name="phone" size={18} />
                                 </span>
                             {:else}
-                                <Avatar email={headEmail} name={headName} size={32} title={headSender} />
+                                <Avatar email={headEmail} name={headName} size={32} title={headSender} decorative />
                             {/if}
                             {#if headVipFrom}
                                 <VipBadge match={headVipFrom} direction="from" />
@@ -1709,7 +1708,7 @@
                                         data-testid={`msg-row-child-${childMsg.uid}`}
                                     >
                                         <span class="thread-spine" aria-hidden="true"></span>
-                                        <Avatar email={childEmail} name={childName} size={26} title={childSender} />
+                                        <Avatar email={childEmail} name={childName} size={26} title={childSender} decorative />
                                         <span class="row-main">
                                             <span class="row-top">
                                                 <span class="from truncate">{childSender}</span>
@@ -2608,7 +2607,14 @@
         background: var(--bg-selected);
         box-shadow: inset 3px 0 0 var(--accent);
     }
-    .row.unread { background: var(--bg-surface); }
+    /* Unread rows carry the same left accent bar as selected/notice rows —
+       Outlook's unread affordance. Replaces the old floating dot, which read
+       as a separate widget floating in the gutter instead of part of the row.
+       --unread-dot (not --accent) so the skin/accent picker still retints it. */
+    .row.unread {
+        background: var(--bg-surface);
+        box-shadow: inset 3px 0 0 var(--unread-dot);
+    }
     /* "Fresh": arrived in the last 10 minutes. Soft sparkly halo so the
        user instantly spots brand-new mail without any extra UI element. */
     .row.fresh {
@@ -2663,20 +2669,6 @@
     }
     .row:not(.unread):not(.selected) .preview {
         color: var(--text-tertiary);
-    }
-    .unread-dot {
-        position: absolute;
-        left: 6px;
-        top: 50%;
-        transform: translateY(-50%);
-        width: 6px;
-        height: 6px;
-        border-radius: 50%;
-        background: transparent;
-    }
-    .row.unread .unread-dot {
-        background: var(--unread-dot);
-        box-shadow: 0 0 0 3px color-mix(in srgb, var(--unread-dot) 22%, transparent);
     }
     .avatar-slot {
         position: relative;

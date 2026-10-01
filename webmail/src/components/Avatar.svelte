@@ -12,8 +12,12 @@
         name?: string | null;
         size?: number;
         title?: string;
+        // Rows that already render the sender as text pass `decorative` so
+        // the avatar's aria-label doesn't repeat the name in the enclosing
+        // button's accessible name (e.g. "infra@x infra@x Wed …").
+        decorative?: boolean;
     }
-    let { email, name = null, size = 32, title }: Props = $props();
+    let { email, name = null, size = 32, title, decorative = false }: Props = $props();
 
     // Seed for first paint only — the $effect below re-resolves on any
     // email/name change, so this deliberately captures the initial props.
@@ -61,7 +65,8 @@
     class={`avatar ${isMasked ? 'brand' : ''}`}
     {style}
     title={title || (email || undefined)}
-    aria-label={name || email || 'avatar'}
+    aria-label={decorative ? undefined : (name || email || 'avatar')}
+    aria-hidden={decorative ? 'true' : undefined}
 >
     {#if isMasked}
         <!-- Preload the image so the cache is warm + onerror still fires
