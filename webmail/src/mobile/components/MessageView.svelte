@@ -50,7 +50,12 @@
     $effect(() => {
         const m = msg;
         const path = mobileState.selectedPath;
-        if (!m || !path) {
+        // The master switch gates the scan itself, not just the badges:
+        // with it off nothing is sent to the LLM and no warning bubble or
+        // overlay can appear. Desktop has always done this
+        // (MessageDetail.svelte); mobile only hid the rail badges, so the
+        // bubble still fired with the setting off.
+        if (!m || !path || !settings.phishingScan) {
             phishingResult = null;
             phishingDismissed = false;
             phishingScanning = false;

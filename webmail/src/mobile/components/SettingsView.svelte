@@ -8,7 +8,7 @@
         settings, capabilities, setProxyImages, setDefaultFromAddress,
         setLlm, setUseCustomLlm, setAiFeatures, setAiSystemPrompt,
         setPhishingScan, setTrackOpensDefault, setDisplayName,
-        setSpamSuggest, setAiSuggestReply, setPermanentSignIn,
+        setSpamSuggest, setAiSuggestReply,
         setPhishingScanTimeoutSec, setPhishingScanPromptAddendum, setPhishingScanConfidenceFloor,
         setTesseractOcrInstalled, setPhishingScanOcrInline
     } from '../../lib/settings.svelte';
@@ -884,23 +884,6 @@
                     <Icon name="check" size={16} />
                 </div>
             {/if}
-            <div class="ios-row toggle-row">
-                <div class="toggle-info">
-                    <span class="row-label">Stay signed in</span>
-                    <span class="muted small">Keep the session across browser restarts (mobile defaults this on)</span>
-                </div>
-                <button
-                    type="button"
-                    class="toggle-switch"
-                    aria-label="Stay signed in"
-                    class:on={settings.permanentSignIn}
-                    class:off={!settings.permanentSignIn}
-                    onclick={() => setPermanentSignIn(!settings.permanentSignIn)}
-                    data-testid="settings-permanent-signin"
-                >
-                    <span class="toggle-knob"></span>
-                </button>
-            </div>
         </div>
 
         <div class="logout-wrap">

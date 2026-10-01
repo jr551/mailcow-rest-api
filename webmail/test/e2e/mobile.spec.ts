@@ -304,6 +304,35 @@ test.describe('mobile webmail', () => {
         await expect(overlay).not.toBeVisible();
     });
 
+    test('phishing scan master switch off: no scan request, no warning', async ({ page }) => {
+        // The setting is read at module init, so it has to be seeded before
+        // any script runs.
+        await page.addInitScript(() => {
+            localStorage.setItem('webmail.settings.v1', JSON.stringify({ phishingScan: false }));
+        });
+        const scans: string[] = [];
+        page.on('request', (req) => {
+            if (req.url().includes('/v1/ai/phishing-scan')) scans.push(req.url());
+        });
+
+        await page.goto('/webmail/mobile/');
+        await page.fill('input[type="email"]', MOCK_USER);
+        await page.fill('input[type="password"]', 'hunter2');
+        await page.click('button:has-text("Sign in")');
+
+        // The invoice message is the one the mocked scan flags as phishing.
+        await page.locator('.msg-row').nth(1).click();
+        await expect(page.locator('.message-view')).toBeVisible();
+        // The scan is a fetch fired from an effect; give it room to happen
+        // if it were going to. This is the assertion that fails on the old
+        // code, where only the rail badges were gated.
+        await page.waitForTimeout(1500);
+
+        expect(scans, 'no scan request may leave the device with the switch off').toEqual([]);
+        await expect(page.getByTestId('phishing-overlay')).not.toBeVisible();
+        await expect(page.getByTestId('mobile-scam-scanned-badge')).not.toBeVisible();
+    });
+
     test('scan badges stack instead of overlapping', async ({ page }) => {
         await page.goto('/webmail/mobile/');
         await page.fill('input[type="email"]', MOCK_USER);
