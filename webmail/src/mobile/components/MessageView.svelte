@@ -653,6 +653,10 @@
         line-height: 1.45;
         color: var(--text-primary);
         position: relative;
+        /* Column so the badge rail can take its own row above the body
+           instead of floating over it (see .badge-rail). */
+        display: flex;
+        flex-direction: column;
     }
     .msg-content iframe {
         width: 100%;
@@ -669,12 +673,17 @@
         line-height: 1.5;
         max-width: 760px;
     }
-    /* Floating rail for the proxy/scan pills, pinned to the top-right of the
-       body. Column, not row: the pills are wide and the body is narrow. */
+    /* Rail for the proxy/scan pills, laid out above the body. It used to be
+       absolutely positioned in the top-right corner of .msg-content, which
+       put it on top of the first lines of the email (the body starts at the
+       very top of .msg-content). As a flex item with order:-1 it occupies
+       its own row instead. Column, not row: the pills are wide and the body
+       is narrow. */
     .badge-rail {
-        position: absolute;
-        top: 8px;
-        right: 8px;
+        order: -1;
+        align-self: flex-end;
+        position: static;
+        margin-bottom: 8px;
         display: flex;
         flex-direction: column;
         align-items: flex-end;
@@ -792,8 +801,8 @@
         flex: 0 0 auto;
         display: flex;
         align-items: center;
-        gap: 6px;
-        padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+        gap: 4px;
+        padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
         background: var(--bg-surface);
         border-top: 0.5px solid var(--border-subtle);
         overflow-x: auto;
@@ -802,9 +811,9 @@
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        gap: 4px;
-        padding: 7px 12px;
-        font-size: 13px;
+        gap: 3px;
+        padding: 6px 7px;
+        font-size: 12px;
         font-weight: 500;
         border-radius: 8px;
         border: none;
@@ -813,14 +822,20 @@
         cursor: pointer;
         white-space: nowrap;
         transition: background-color 120ms;
-        flex-shrink: 0;
+        /* Six buttons have to fit a 360px phone with no horizontal scroll.
+           The text buttons may give up a little width (labels stay nowrap
+           and readable); the icon-only ones below keep their size so they
+           stay round. */
+        flex: 0 1 auto;
+        min-width: 0;
     }
     .toolbar-btn:active { background: var(--bg-active); }
     .toolbar-btn.icon-only {
-        width: 34px;
-        height: 34px;
+        width: 30px;
+        height: 30px;
         padding: 0;
         border-radius: 50%;
+        flex-shrink: 0;
     }
     .toolbar-btn.danger {
         color: var(--danger);

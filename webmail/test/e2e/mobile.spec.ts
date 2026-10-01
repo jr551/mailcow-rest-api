@@ -50,6 +50,27 @@ test.describe('mobile webmail', () => {
         await expect(page.locator('.inbox-view')).toBeVisible();
     });
 
+    test('message toolbar fits without horizontal scroll', async ({ page }) => {
+        await page.goto('/webmail/mobile/');
+        await page.fill('input[type="email"]', MOCK_USER);
+        await page.fill('input[type="password"]', 'hunter2');
+        await page.click('button:has-text("Sign in")');
+
+        await page.locator('.msg-row').first().click();
+        await expect(page.locator('.message-view')).toBeVisible();
+
+        // Six buttons used to overflow the toolbar (scrollWidth 420 at a
+        // 390px viewport), clipping the trash button at the right edge.
+        for (const width of [390, 360]) {
+            await page.setViewportSize({ width, height: width === 390 ? 844 : 800 });
+            const { scrollWidth, clientWidth } = await page.locator('.msg-toolbar').evaluate((el) => ({
+                scrollWidth: el.scrollWidth,
+                clientWidth: el.clientWidth
+            }));
+            expect(scrollWidth, `toolbar must not scroll at ${width}px`).toBeLessThanOrEqual(clientWidth + 1);
+        }
+    });
+
     test('long press on message opens action sheet with AI summarize', async ({ page }) => {
         await page.goto('/webmail/mobile/');
         await page.fill('input[type="email"]', MOCK_USER);
@@ -358,6 +379,33 @@ test.describe('mobile webmail', () => {
         const overlaps =
             a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
         expect(overlaps, 'scan badges must not overlap').toBe(false);
+    });
+
+    test('scan badges do not cover the message body', async ({ page }) => {
+        await page.goto('/webmail/mobile/');
+        await page.fill('input[type="email"]', MOCK_USER);
+        await page.fill('input[type="password"]', 'hunter2');
+        await page.click('button:has-text("Sign in")');
+
+        // The welcome message, with the default settings, runs both scans, so
+        // the rail is populated.
+        await page.locator('.msg-row').first().click();
+        await expect(page.locator('.message-view')).toBeVisible();
+        await expect(page.getByTestId('mobile-scam-scanned-badge')).toBeVisible({ timeout: 5000 });
+
+        // The rail used to be absolutely positioned in the top-right corner of
+        // .msg-content, so it rendered on top of the first lines of the email.
+        // Geometry, not presence: the body must start below the rail.
+        for (const width of [390, 360]) {
+            await page.setViewportSize({ width, height: width === 390 ? 844 : 800 });
+            const rail = (await page.locator('.badge-rail').boundingBox())!;
+            const body = (await page.locator('.msg-content iframe, .msg-content pre').first().boundingBox())!;
+            const overlaps =
+                rail.x < body.x + body.width && body.x < rail.x + rail.width &&
+                rail.y < body.y + body.height && body.y < rail.y + rail.height;
+            expect(overlaps, `scan badges must not cover the body at ${width}px`).toBe(false);
+            expect(rail.y + rail.height, `badge rail must end above the body at ${width}px`).toBeLessThanOrEqual(body.y);
+        }
     });
 
     test('safe email does not show phishing warning', async ({ page }) => {
