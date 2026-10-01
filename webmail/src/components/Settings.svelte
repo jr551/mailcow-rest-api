@@ -4465,7 +4465,7 @@
                     {/if}
 
                     {#if !outboundUnavailable}
-                        <div class="filter-block" data-testid="ow-list-block">
+                        <div class="filter-block" data-testid="ow-cards-block">
                             {#if owVisibleHooks.length}
                                 <ul class="rule-cards" data-testid="ow-list">
                                     {#each owVisibleHooks as w (w.id)}
