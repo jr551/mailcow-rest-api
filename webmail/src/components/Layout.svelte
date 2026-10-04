@@ -871,9 +871,7 @@
         ui.app === 'mail' ? 'Search mail' : 'Search mail (switches to Mail)'
     );
     const searchPlaceholder = $derived(
-        ui.app === 'mail'
-            ? 'Search — try from:alice or has:attachment…'
-            : 'Search mail — from:alice, has:attachment…'
+        ui.app === 'mail' ? 'Search' : 'Search mail'
     );
 
     function onSearchChange(value: string) {

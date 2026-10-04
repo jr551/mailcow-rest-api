@@ -270,6 +270,9 @@
                          the accents at all. -->
                     {#each ACCENT_SWATCHES as s, i (s.id)}
                         {@const selected = (skinState.accentOverride ?? '').toLowerCase() === s.hex.toLowerCase()}
+                        {@const defaultOf = s.isDefaultFor
+                            ? (SKINS.find((sk) => sk.id === s.isDefaultFor)?.label ?? '')
+                            : ''}
                         <button
                             type="button"
                             role="radio"
@@ -285,7 +288,7 @@
                             <span class="swatch-chip" style={`background:${s.hex}`} aria-hidden="true"></span>
                             <span class="swatch-name" aria-hidden="true">{s.label}</span>
                             <span class="sr-only">
-                                {s.label}{s.isDefaultFor ? `, the ${activeSkin?.label ?? ''} default` : ''}
+                                {s.label}{defaultOf ? `, the ${defaultOf} default` : ''}
                             </span>
                         </button>
                     {/each}

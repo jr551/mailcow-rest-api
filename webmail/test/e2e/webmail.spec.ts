@@ -25,6 +25,18 @@ test('login screen renders (dark)', async ({ page }) => {
     await page.screenshot({ path: `${SCREEN_DIR}/02-login-dark.png`, fullPage: true });
 });
 
+test('login page does not inherit the Outlook command bar', async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem('webmail.theme', 'light'));
+    await page.goto('/webmail/');
+    const login = page.getByTestId('login-page');
+    await expect(login.locator('.login-chrome')).toBeVisible();
+    await expect(login.locator('.topbar')).toHaveCount(0);
+    const bar = login.locator('.login-chrome');
+    const bg = await bar.evaluate((el) => getComputedStyle(el).backgroundColor);
+    // Transparent / none — not the azure command-bar fill.
+    expect(bg === 'rgba(0, 0, 0, 0)' || bg === 'transparent').toBe(true);
+});
+
 test('shows error when API rejects credentials', async ({ page }) => {
     await page.unroute('**/v1/auth/session');
     await page.route('**/v1/auth/session', (route, request) => {
@@ -64,6 +76,9 @@ test('inbox renders well in light theme', async ({ page }) => {
     await page.addInitScript(() => localStorage.setItem('webmail.theme', 'light'));
     await login(page);
     await expect(page.getByTestId('msg-list')).toBeVisible();
+    await expect(page.getByTestId('compose-btn')).toHaveText(/New mail/);
+    await expect(page.getByTestId('filter-all')).toBeVisible();
+    await expect(page.getByTestId('filter-unread')).toBeVisible();
     await page.screenshot({ path: `${SCREEN_DIR}/04b-inbox-light.png`, fullPage: true });
     await page.click('[data-testid=msg-row-1001]');
     await expect(page.getByTestId('detail-subject')).toBeVisible();
@@ -73,7 +88,7 @@ test('inbox renders well in light theme', async ({ page }) => {
 test('empty detail pane shows hint with kbd glyphs', async ({ page }) => {
     await page.addInitScript(() => localStorage.setItem('webmail.theme', 'dark'));
     await login(page);
-    await expect(page.getByText('Select a message to read')).toBeVisible();
+    await expect(page.getByText('Select an item to read')).toBeVisible();
     await page.screenshot({ path: `${SCREEN_DIR}/04c-empty-detail-dark.png`, fullPage: true });
 });
 

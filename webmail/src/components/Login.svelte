@@ -198,7 +198,7 @@
 </script>
 
 <div class="page" class:add-mode={isAddAccountMode} data-testid="login-page">
-    <div class="topbar">
+    <div class="login-chrome">
         <ThemeToggle />
     </div>
 
@@ -207,12 +207,12 @@
             <div class="brand-mark">
                 <Icon name="mail" size={32} />
             </div>
-            <h2 class="brand-title">Your inbox, reimagined.</h2>
-            <p class="brand-tagline">A fast, private webmail for mailcow with AI summaries and draft replies built in.</p>
+            <h2 class="brand-title">Webmail</h2>
+            <p class="brand-tagline">Outlook-class mail for your mailbox — folders, search, calendar, and draft replies in one place.</p>
             <ul class="brand-bullets">
-                <li><span class="dot"></span> End-to-end Basic / Bearer auth — no third-party identity</li>
-                <li><span class="dot"></span> Pluggable AI: Mistral, OpenAI, Anthropic, Ollama, your own</li>
-                <li><span class="dot"></span> Polished dark mode that actually has contrast</li>
+                <li><span class="dot"></span> Sign in with your mailbox address</li>
+                <li><span class="dot"></span> Mail, calendar, and files in one window</li>
+                <li><span class="dot"></span> Light and dark that keep real contrast</li>
             </ul>
         </aside>
 
@@ -374,10 +374,7 @@
         min-height: 100vh;
         display: flex;
         flex-direction: column;
-        background:
-            linear-gradient(135deg,
-                color-mix(in srgb, var(--accent) 8%, var(--bg-base)),
-                var(--bg-base) 70%);
+        background: var(--bg-base);
     }
     /* When adding an account on top of an existing inbox, overlay only — no
      * full-bleed background. The card stays centered. */
@@ -388,13 +385,14 @@
         backdrop-filter: blur(3px);
         z-index: 80;
     }
-    .page.add-mode .topbar { display: none; }
+    .page.add-mode .login-chrome { display: none; }
     .page.add-mode .brand-panel { display: none; }
     .page.add-mode :global(.card-wrap) { grid-template-columns: 1fr; }
-    .topbar {
+    .login-chrome {
         display: flex;
         justify-content: flex-end;
         padding: 16px 20px;
+        background: transparent;
     }
     .card-wrap {
         flex: 1;
@@ -424,7 +422,7 @@
         width: 52px;
         height: 52px;
         border-radius: var(--radius-lg);
-        background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 55%, #c47bff));
+        background: var(--accent);
         color: var(--text-on-accent);
         box-shadow: 0 8px 22px color-mix(in srgb, var(--accent) 28%, transparent);
         margin-bottom: 4px;

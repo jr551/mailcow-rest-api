@@ -1182,9 +1182,9 @@
             <div class="empty-icon" aria-hidden="true">
                 <Icon name="mail" size={36} />
             </div>
-            <p class="empty-title">Select a message to read</p>
+            <p class="empty-title">Select an item to read</p>
             <p class="empty-hint">
-                Tip — use <kbd>j</kbd> / <kbd>k</kbd> to navigate, <kbd>Enter</kbd> to open
+                Use <kbd>j</kbd> / <kbd>k</kbd> to move, <kbd>Enter</kbd> to open
             </p>
         </div>
     {:else if !shown && ui.detailLoading}

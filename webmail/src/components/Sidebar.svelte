@@ -14,6 +14,7 @@
     import Icon from './Icon.svelte';
     import type { Mailbox, Shortcut } from '../lib/api';
     import type { IconName } from '../lib/icons';
+    import { skinState } from '../lib/skins.svelte';
 
     interface Props {
         onSelect: (path: string) => void;
@@ -265,7 +266,7 @@
     <div class="compose-row">
         <button type="button" class="btn btn-primary compose" onclick={onCompose} data-testid="compose-btn">
             <Icon name="plus" size={16} />
-            <span>Compose</span>
+            <span>{skinState.skinId === 'outlook' ? 'New mail' : 'Compose'}</span>
         </button>
         {#if onRefresh}
             <button

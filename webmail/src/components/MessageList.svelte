@@ -2134,6 +2134,13 @@
         scrollbar-width: none;
     }
     .filter-chips::-webkit-scrollbar { display: none; }
+    /* Mail filters are the primary chrome. AI tools and Select all used
+     * to render first and shove All/Unread off the narrow list pane. */
+    .filter-chips .chip { order: 1; }
+    .filter-chips .chip.select-all-chip { order: 2; }
+    .filter-chips .ai-action-group { order: 3; }
+    .filter-chips .cat-quick-spacer { order: 4; }
+    .filter-chips .cat-quick-group { order: 5; }
 
     /* Background-crawl progress strip — sits under the chip row while the
      * crawler is paging through the rest of the mailbox to satisfy a
@@ -2317,10 +2324,10 @@
     }
     .ai-seg .ai-seg-label { line-height: 1; }
     .ai-seg-sort.active {
-        color: white;
-        background: linear-gradient(135deg, var(--accent), #d268f4);
+        color: var(--text-on-accent);
+        background: var(--accent);
     }
-    .ai-seg-sort.active:hover { filter: brightness(1.08); color: white; }
+    .ai-seg-sort.active:hover { filter: none; color: var(--text-on-accent); }
     .ai-seg:disabled { opacity: 0.75; cursor: wait; }
     @media (prefers-reduced-motion: reduce) {
         .ai-seg, .ai-seg-sort.active { transition: none; }

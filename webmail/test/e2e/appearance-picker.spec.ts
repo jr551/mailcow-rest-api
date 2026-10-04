@@ -146,6 +146,7 @@ test('the trigger announces its state and the swatches have real names', async (
     // same hex reads differently on Outlook and Gmail.
     await expect(group).toHaveAttribute('aria-label', /over the Outlook skin/);
     await expect(group.getByRole('radio', { name: 'Outlook blue, the Outlook default' })).toBeVisible();
+    await expect(group.getByRole('radio', { name: 'Gmail red, the Gmail default' })).toBeVisible();
 });
 
 test('the picker states which skin the accent is layered over', async ({ page }) => {

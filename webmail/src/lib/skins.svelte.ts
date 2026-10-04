@@ -87,19 +87,20 @@ export const SKINS: Skin[] = [
         hidesAmbientChips: true,
         extras: {
             css: `
-                /* Azure command bar. The bar paints from --accent and its
-                 * underline from the darker hover shade, so the accent
-                 * picker retints the chrome as a whole. */
-                .topbar {
+                /* Azure command bar — scoped to .shell so the login page
+                 * cannot inherit it. Login used to share class="topbar",
+                 * which painted a full-width accent strip across the sign-in
+                 * screen and made the SPA look unfinished. */
+                .shell .topbar {
                     background: var(--accent) !important;
                     border-bottom: 1px solid var(--accent-hover) !important;
                 }
                 /* OWA's own wordmark is a quiet watermark, not a heading, so
                  * the brand ink sits at 78% rather than full white. */
-                .topbar .brand-mark {
+                .shell .topbar .brand-mark {
                     color: color-mix(in srgb, var(--text-on-accent) 78%, transparent) !important;
                 }
-                .topbar .logo { background: color-mix(in srgb, var(--text-on-accent) 18%, transparent) !important; }
+                .shell .topbar .logo { background: color-mix(in srgb, var(--text-on-accent) 18%, transparent) !important; }
                 /* The command bar paints from --accent, so its ink has to
                  * follow --text-on-accent rather than being pinned to
                  * #fff. Gmail's red is the case that matters: white on
@@ -108,10 +109,10 @@ export const SKINS: Skin[] = [
                  * --text-on-accent is white for every other shipped swatch
                  * (see accentOverrideVars), so this is a no-op until the
                  * user picks one of the warm lights. */
-                .topbar .btn-ghost,
-                .topbar .theme-toggle { color: var(--text-on-accent) !important; }
-                .topbar .btn-ghost:hover,
-                .topbar .theme-toggle:hover {
+                .shell .topbar .btn-ghost,
+                .shell .topbar .theme-toggle { color: var(--text-on-accent) !important; }
+                .shell .topbar .btn-ghost:hover,
+                .shell .topbar .theme-toggle:hover {
                     background: color-mix(in srgb, var(--text-on-accent) 15%, transparent) !important;
                     color: var(--text-on-accent) !important;
                 }
@@ -128,60 +129,100 @@ export const SKINS: Skin[] = [
                  * measured here. Background, input text, placeholder and the
                  * scope-button border all have to move together, or not at
                  * all. Measured in a real browser at #ffffff / #242424. */
-                .topbar .search-wrap {
+                .shell .topbar .search-wrap {
                     background: #ffffff !important;
                     border: 1px solid #ffffff !important;
+                    border-radius: 4px !important;
                 }
-                .topbar .search-wrap input { color: #242424 !important; }
-                .topbar .search-wrap input::placeholder { color: #616161 !important; }
-                .topbar .search-scope-btn {
+                .shell .topbar .search-wrap input { color: #242424 !important; }
+                .shell .topbar .search-wrap input::placeholder { color: #616161 !important; }
+                .shell .topbar .search-scope-btn {
                     color: var(--accent-text) !important;
                     border-color: #c8c6c4 !important;
                 }
-                .topbar .muted { color: color-mix(in srgb, var(--text-on-accent) 85%, transparent) !important; }
+                .shell .topbar .muted { color: color-mix(in srgb, var(--text-on-accent) 85%, transparent) !important; }
 
-                /* Signed-in user next to the brand, like OWA's header. */
-                .topbar .brand-user {
-                    display: inline-flex !important;
+                /* Identity lives once, on the right — a circular avatar, the
+                 * way OWA does it. Showing the local-part next to the
+                 * wordmark AND the full address in a chip next to settings
+                 * was two answers to "who am I". */
+                .shell .topbar .brand-user { display: none !important; }
+                .shell .topbar .user-email,
+                .shell .topbar .user .caret { display: none !important; }
+                .shell .topbar .user {
+                    width: 32px !important;
+                    height: 32px !important;
+                    padding: 0 !important;
+                    justify-content: center !important;
+                    border-radius: 50% !important;
                     color: var(--text-on-accent) !important;
-                    margin-left: 4px;
                 }
-                .topbar .brand-user-emoji { font-size: 14px; }
+                .shell .topbar .user:hover {
+                    background: color-mix(in srgb, var(--text-on-accent) 15%, transparent) !important;
+                }
 
-                /* The latency slot is a fixed-width box on the accent bar, so
-                 * the chip's own white-ish pill would read as a second field.
-                 * OWA puts its status indicator straight on the chrome.
-                 *
-                 * Plain descendant selectors, deliberately: this block is
-                 * injected as raw text via styleEl.textContent, so it never
-                 * passes through Svelte's CSS pipeline, so a :global()
-                 * pseudo here is emitted literally and matches nothing. */
-                .topbar .latency-slot .lat-chip,
-                .topbar .latency-slot .server-ping {
-                    /* Measured, not eyeballed. The original was a 14% white
-                     * wash, which put its own text at 3.10:1 against itself
-                     * and 1.25:1 against the bar, so the ms figure read as a
-                     * smudge. A chip this small is TEXT first: it needs a
-                     * real light-on-dark pairing, not a tint of the surface
-                     * behind it. Opaque near-white fill with near-black ink
-                     * lands ~13:1 on either skin and still reads as a chip,
-                     * because of the border and the rounded silhouette. */
-                    background: var(--text-on-accent) !important;
-                    border-color: color-mix(in srgb, var(--text-on-accent) 55%, var(--accent)) !important;
-                    color: #16181d !important;
-                }
+                /* Diagnostic chrome does not belong on a command bar. Ping
+                 * ms and the mute toggle live in Settings; OWA's header is
+                 * search + an icon cluster. */
+                .shell .topbar .latency-slot,
+                .shell .topbar [data-testid="sound-mute-btn"] { display: none !important; }
 
                 /* OWA's topbar carries no ambient chips — weather and the
                  * calendar ticker stay hidden under this skin even when the
                  * user has them enabled. The skin's hidesAmbientChips flag
                  * makes Layout skip mounting them at all; this rule covers
                  * the opt-in case where the weather chip comes back. */
-                .topbar .weather-wrap, .topbar .cal-wrap { display: none !important; }
+                .shell .topbar .weather-wrap, .shell .topbar .cal-wrap { display: none !important; }
 
-                /* OWA marks unread rows with a blue edge bar and a blue
-                 * bolded subject — no dot, no tint. */
+                /* Fluent New mail: a squared primary, not a Gmail capsule
+                 * paired with a second primary refresh. Refresh already
+                 * lives in the command bar. */
+                .compose-row .compose {
+                    border-radius: 4px !important;
+                    box-shadow: none !important;
+                    padding: 8px 16px !important;
+                    font-size: 14px !important;
+                    font-weight: 600 !important;
+                }
+                .compose-row .compose:hover { box-shadow: none !important; }
+                .compose-row .refresh-btn { display: none !important; }
+
+                /* Filter row: underline tabs, not pills. The AI action
+                 * group keeps its labels but drops the purple gradient that
+                 * made Sort look like a marketing chip. */
+                .filter-chips .chip {
+                    border-radius: 0 !important;
+                    border: none !important;
+                    border-bottom: 2px solid transparent !important;
+                    background: transparent !important;
+                    padding: 8px 10px !important;
+                }
+                .filter-chips .chip.active {
+                    background: transparent !important;
+                    border-bottom-color: var(--accent) !important;
+                    color: var(--accent-text) !important;
+                    font-weight: 600 !important;
+                }
+                .filter-chips .chip:hover { transform: none !important; }
+                .ai-action-group {
+                    border-radius: 4px !important;
+                    background: var(--bg-surface) !important;
+                }
+                .ai-seg-sort.active {
+                    background: var(--accent) !important;
+                    color: var(--text-on-accent) !important;
+                }
+                .ai-seg-sort.active:hover { filter: none !important; }
+
+                /* Unread: OWA's blue edge bar + bold ink. Colouring the
+                 * subject with --accent-text made every unread line look
+                 * like a hyperlink. */
                 .row.unread { box-shadow: inset 3px 0 0 var(--accent) !important; }
-                .row.unread .subject { color: var(--accent-text) !important; }
+                .row.unread .from,
+                .row.unread .subject {
+                    color: var(--text-primary) !important;
+                    font-weight: 600 !important;
+                }
 
                 /* OWA folder counts are plain blue numerals, not pills. */
                 .folder .count {
@@ -194,6 +235,30 @@ export const SKINS: Skin[] = [
                     background: transparent !important;
                     color: var(--accent-text) !important;
                 }
+
+                /* Assistant bubble: a Fluent chip, not a purple pill. */
+                .bubble {
+                    border-radius: 4px !important;
+                    background: var(--accent) !important;
+                    box-shadow: var(--shadow-sm) !important;
+                    padding: 8px 12px !important;
+                }
+                .bubble:hover { transform: none !important; }
+
+                /* Filter tabs stay on screen; AI actions shrink to icons
+                 * and sit at the trailing edge, like OWA's extra tools. */
+                .filter-chips .ai-action-group { margin-left: auto !important; }
+                .filter-chips .ai-seg-label { display: none !important; }
+                .filter-chips .ai-seg { padding: 6px 8px !important; gap: 0 !important; }
+
+                /* The reading pane already has Reply/Archive/Trash. Hover
+                 * icons on the selected row covered the sender and made
+                 * the list look like a prototype overlay. */
+                .row.selected .row-actions { display: none !important; }
+
+                /* Unknown SPF is not a status worth a "?" next to the
+                 * sender. Fail and pass badges still show. */
+                .auth-badge.auth-unknown { display: none !important; }
 
                 /* OWA is flat: rows, folders and buttons don't lift. */
                 .btn:hover, .row:hover, .folder:hover { transform: none !important; }
