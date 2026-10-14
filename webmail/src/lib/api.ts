@@ -628,11 +628,52 @@ export type MailRuleConditionType =
 
 export type MailRuleActionType = 'discard' | 'redirect' | 'copy' | 'fileinto' | 'webhook';
 
-export interface MailRuleCondition {
+export interface MailRuleLeafCondition {
     type: MailRuleConditionType;
     value: string;
     /** Required when type is `header-contains` or `header-is`. */
     header?: string;
+    /** When true, this sub-condition is negated (NOT). */
+    not?: boolean;
+}
+
+export interface MailRuleCompoundCondition {
+    /** `all` = AND every sub-condition; `any` = OR. */
+    match: 'all' | 'any';
+    conditions: MailRuleLeafCondition[];
+}
+
+export type MailRuleCondition = MailRuleLeafCondition | MailRuleCompoundCondition;
+
+export function isCompoundMailRuleCondition(
+    c: MailRuleCondition
+): c is MailRuleCompoundCondition {
+    return Array.isArray((c as MailRuleCompoundCondition).conditions);
+}
+
+const MAIL_RULE_CONDITION_LABELS: Record<MailRuleConditionType, string> = {
+    'envelope-to-is': 'Envelope To is',
+    'from-contains': 'From contains',
+    'to-contains': 'To contains',
+    'subject-contains': 'Subject contains',
+    'header-contains': 'Header contains',
+    'header-is': 'Header is'
+};
+
+/** One-line summary for Settings / mobile rule lists. */
+export function formatMailRuleConditionSummary(c: MailRuleCondition): string {
+    if (isCompoundMailRuleCondition(c)) {
+        const joiner = c.match === 'all' ? ' AND ' : ' OR ';
+        return c.conditions.map(formatMailRuleLeafSummary).join(joiner);
+    }
+    return formatMailRuleLeafSummary(c);
+}
+
+export function formatMailRuleLeafSummary(c: MailRuleLeafCondition): string {
+    const base = c.type === 'header-contains' || c.type === 'header-is'
+        ? `${c.header || 'header'} ${c.type === 'header-is' ? 'is' : 'contains'}`
+        : (MAIL_RULE_CONDITION_LABELS[c.type] || c.type);
+    return `${c.not ? 'NOT ' : ''}${base} "${c.value}"`;
 }
 
 export interface MailRuleAction {

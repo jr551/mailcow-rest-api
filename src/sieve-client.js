@@ -2,6 +2,7 @@
 
 const net = require('node:net');
 const tls = require('node:tls');
+const { isGroupCondition, ruleUsesEnvelope } = require('./mail-rule-condition');
 
 const SCRIPT_NAME = 'imap-rest-rules';
 const PRESERVED_MARKER = '# --- preserved rules ---';
@@ -107,7 +108,7 @@ function escapeSieveString(s) {
         .replace(/"/g, '\\"');
 }
 
-function compileCondition(condition) {
+function compileLeafTest(condition) {
     switch (condition.type) {
         case 'envelope-to-is':
             return `envelope :is "to" "${escapeSieveString(condition.value)}"`;
@@ -124,6 +125,20 @@ function compileCondition(condition) {
         default:
             throw new Error(`Unknown condition type: ${condition.type}`);
     }
+}
+
+function compileLeafCondition(condition) {
+    const test = compileLeafTest(condition);
+    return condition.not ? `not ${test}` : test;
+}
+
+function compileCondition(condition) {
+    if (isGroupCondition(condition)) {
+        const keyword = condition.match === 'any' ? 'anyof' : 'allof';
+        const parts = condition.conditions.map((c) => compileLeafCondition(c));
+        return `${keyword} (${parts.join(', ')})`;
+    }
+    return compileLeafCondition(condition);
 }
 
 function compileAction(action) {
@@ -168,7 +183,7 @@ function compileRule(rule) {
 function compileRulesScript(rules, preservedContent) {
     if (!rules.length && !preservedContent) return '';
 
-    const needsEnvelope = rules.some((r) => r.condition.type === 'envelope-to-is');
+    const needsEnvelope = rules.some((r) => ruleUsesEnvelope(r.condition));
     const needsCopy = rules.some((r) => r.action.type === 'copy');
     // `fileinto` is not in the base Sieve capability set — Dovecot rejects a
     // script that uses it without declaring the extension. Webhook rules
@@ -226,11 +241,45 @@ function parseRules(content) {
     return { rules, preservedContent };
 }
 
-function parseCondition(condStr) {
-    const envMatch = condStr.match(/envelope :is "to" "((?:[^"\\]|\\.)+)"/);
+function splitSieveTests(s) {
+    const parts = [];
+    let i = 0;
+    while (i < s.length) {
+        while (i < s.length && (s[i] === ' ' || s[i] === ',')) i++;
+        if (i >= s.length) break;
+        let depth = 0;
+        let inString = false;
+        let escape = false;
+        const start = i;
+        for (; i < s.length; i++) {
+            const ch = s[i];
+            if (escape) {
+                escape = false;
+                continue;
+            }
+            if (ch === '\\' && inString) {
+                escape = true;
+                continue;
+            }
+            if (ch === '"') {
+                inString = !inString;
+                continue;
+            }
+            if (inString) continue;
+            if (ch === '(') depth++;
+            else if (ch === ')') depth--;
+            else if (ch === ',' && depth === 0) break;
+        }
+        parts.push(s.slice(start, i).trim());
+    }
+    return parts.filter(Boolean);
+}
+
+function parseLeafTest(condStr) {
+    const envMatch = condStr.match(/^envelope :is "to" "((?:[^"\\]|\\.)+)"$/);
     if (envMatch) return { type: 'envelope-to-is', value: unescapeSieveString(envMatch[1]) };
 
-    const headerContainsMatch = condStr.match(/header :contains "((?:[^"\\]|\\.)+)" "((?:[^"\\]|\\.)+)"/);
+    const headerContainsMatch = condStr.match(/^header :contains "((?:[^"\\]|\\.)+)" "((?:[^"\\]|\\.)+)"$/);
     if (headerContainsMatch) {
         const header = unescapeSieveString(headerContainsMatch[1]);
         const value = unescapeSieveString(headerContainsMatch[2]);
@@ -240,12 +289,46 @@ function parseCondition(condStr) {
         return { type: 'header-contains', header, value };
     }
 
-    const headerIsMatch = condStr.match(/header :is "((?:[^"\\]|\\.)+)" "((?:[^"\\]|\\.)+)"/);
+    const headerIsMatch = condStr.match(/^header :is "((?:[^"\\]|\\.)+)" "((?:[^"\\]|\\.)+)"$/);
     if (headerIsMatch) {
         return { type: 'header-is', header: unescapeSieveString(headerIsMatch[1]), value: unescapeSieveString(headerIsMatch[2]) };
     }
 
     return null;
+}
+
+function parseCondition(condStr) {
+    let s = condStr.trim();
+    const allofMatch = s.match(/^allof \(([\s\S]*)\)$/);
+    if (allofMatch) {
+        const conditions = splitSieveTests(allofMatch[1])
+            .map(parseLeafCondition)
+            .filter(Boolean);
+        if (!conditions.length) return null;
+        return { match: 'all', conditions };
+    }
+    const anyofMatch = s.match(/^anyof \(([\s\S]*)\)$/);
+    if (anyofMatch) {
+        const conditions = splitSieveTests(anyofMatch[1])
+            .map(parseLeafCondition)
+            .filter(Boolean);
+        if (!conditions.length) return null;
+        return { match: 'any', conditions };
+    }
+    return parseLeafCondition(s);
+}
+
+function parseLeafCondition(condStr) {
+    let s = condStr.trim();
+    let not = false;
+    if (s.startsWith('not ')) {
+        not = true;
+        s = s.slice(4).trim();
+    }
+    const leaf = parseLeafTest(s);
+    if (!leaf) return null;
+    if (not) leaf.not = true;
+    return leaf;
 }
 
 function parseAction(actionStr) {
@@ -418,6 +501,7 @@ module.exports = {
     ManageSieveClient,
     SCRIPT_NAME,
     compileRulesScript,
+    compileCondition,
     parseRules,
     buildBlockedRecipientsScript,
     parseBlockedRecipients,

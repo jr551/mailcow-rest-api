@@ -2,6 +2,38 @@
 
 const { notFound, badRequest, problem } = require('../errors');
 const { problemSchema } = require('../schemas');
+const { VALID_LEAF_TYPES, validateRuleCondition } = require('../mail-rule-condition');
+
+const mailRuleLeafConditionSchema = {
+    type: 'object',
+    required: ['type', 'value'],
+    properties: {
+        type: { type: 'string', enum: VALID_LEAF_TYPES },
+        header: { type: 'string', maxLength: 200 },
+        value: { type: 'string', maxLength: 1000 },
+        not: { type: 'boolean' }
+    }
+};
+
+const mailRuleConditionSchema = {
+    oneOf: [
+        mailRuleLeafConditionSchema,
+        {
+            type: 'object',
+            required: ['match', 'conditions'],
+            additionalProperties: false,
+            properties: {
+                match: { type: 'string', enum: ['all', 'any'] },
+                conditions: {
+                    type: 'array',
+                    minItems: 1,
+                    maxItems: 20,
+                    items: mailRuleLeafConditionSchema
+                }
+            }
+        }
+    ]
+};
 
 function requirePassword(req) {
     if (!req.creds.pass) {
@@ -13,21 +45,13 @@ function validateRuleBody(body) {
     if (!body.name || typeof body.name !== 'string') {
         throw badRequest('Rule name is required');
     }
-    if (!body.condition || typeof body.condition !== 'object') {
-        throw badRequest('Rule condition is required');
-    }
     if (!body.action || typeof body.action !== 'object') {
         throw badRequest('Rule action is required');
     }
-    const validConditions = ['envelope-to-is', 'header-contains', 'header-is', 'from-contains', 'to-contains', 'subject-contains'];
-    if (!validConditions.includes(body.condition.type)) {
-        throw badRequest(`Invalid condition type. Must be one of: ${validConditions.join(', ')}`);
-    }
-    if (body.condition.type.startsWith('header-') && !body.condition.header) {
-        throw badRequest('Header name is required for header conditions');
-    }
-    if (!body.condition.value || typeof body.condition.value !== 'string') {
-        throw badRequest('Condition value is required');
+    try {
+        validateRuleCondition(body.condition);
+    } catch (err) {
+        throw badRequest(err.message);
     }
     const validActions = ['discard', 'redirect', 'copy', 'fileinto', 'webhook'];
     if (!validActions.includes(body.action.type)) {
@@ -192,18 +216,7 @@ module.exports = async function mailRulesRoutes(app, { sieveManager, outboundWeb
                 required: ['name', 'condition', 'action'],
                 properties: {
                     name: { type: 'string', maxLength: 200 },
-                    condition: {
-                        type: 'object',
-                        required: ['type', 'value'],
-                        properties: {
-                            type: {
-                                type: 'string',
-                                enum: ['envelope-to-is', 'header-contains', 'header-is', 'from-contains', 'to-contains', 'subject-contains']
-                            },
-                            header: { type: 'string', maxLength: 200 },
-                            value: { type: 'string', maxLength: 1000 }
-                        }
-                    },
+                    condition: mailRuleConditionSchema,
                     action: {
                         type: 'object',
                         required: ['type'],
