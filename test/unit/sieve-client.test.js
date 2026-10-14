@@ -4,10 +4,12 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const {
     compileRulesScript,
+    compileCondition,
     parseRules,
     buildBlockedRecipientsScript,
     parseBlockedRecipients
 } = require('../../src/sieve-client');
+const { validateRuleCondition } = require('../../src/mail-rule-condition');
 
 test('compileRulesScript with discard rules', () => {
     const rules = [
@@ -168,6 +170,85 @@ test('buildBlockedRecipientsScript backward compat', () => {
     assert.ok(script.includes('require ["envelope"];'));
     const parsed = parseBlockedRecipients(script);
     assert.deepEqual(parsed, ['a@b.com', 'c@d.com']);
+});
+
+test('compileCondition: allof with NOT sub-conditions', () => {
+    const cond = {
+        match: 'all',
+        conditions: [
+            { type: 'from-contains', value: 'healthera' },
+            { type: 'subject-contains', value: 'days left' },
+            { type: 'subject-contains', value: 'X', not: true }
+        ]
+    };
+    validateRuleCondition(cond);
+    const sieve = compileCondition(cond);
+    assert.equal(
+        sieve,
+        'allof (header :contains "From" "healthera", header :contains "Subject" "days left", not header :contains "Subject" "X")'
+    );
+});
+
+test('compileCondition: anyof OR group', () => {
+    const cond = {
+        match: 'any',
+        conditions: [
+            { type: 'from-contains', value: '@a.com' },
+            { type: 'from-contains', value: '@b.com' }
+        ]
+    };
+    const sieve = compileCondition(cond);
+    assert.equal(
+        sieve,
+        'anyof (header :contains "From" "@a.com", header :contains "From" "@b.com")'
+    );
+});
+
+test('compound AND rule round-trips through compile and parse', () => {
+    const rules = [{
+        id: 'compound-1',
+        name: 'Healthera days left',
+        condition: {
+            match: 'all',
+            conditions: [
+                { type: 'from-contains', value: 'healthera' },
+                { type: 'subject-contains', value: 'days left' },
+                { type: 'subject-contains', value: 'Reminder', not: true }
+            ]
+        },
+        action: { type: 'fileinto', folder: 'Health' }
+    }];
+    const script = compileRulesScript(rules);
+    assert.ok(script.includes('allof ('));
+    assert.ok(script.includes('not header :contains "Subject" "Reminder"'));
+    assert.ok(script.includes('fileinto :create "Health"'));
+    const parsed = parseRules(script);
+    assert.equal(parsed.rules.length, 1);
+    assert.deepEqual(parsed.rules[0].condition, rules[0].condition);
+});
+
+test('legacy single-condition rules still compile and parse unchanged', () => {
+    const rules = [{
+        id: 'legacy-1',
+        name: 'Simple from',
+        condition: { type: 'from-contains', value: 'newsletter' },
+        action: { type: 'discard' }
+    }];
+    const parsed = parseRules(compileRulesScript(rules));
+    assert.deepEqual(parsed.rules[0].condition, rules[0].condition);
+});
+
+test('single leaf with not:true round-trips', () => {
+    const rules = [{
+        id: 'not-1',
+        name: 'Not spam subject',
+        condition: { type: 'subject-contains', value: 'unsubscribe', not: true },
+        action: { type: 'copy', to: 'bot@example.com' }
+    }];
+    const script = compileRulesScript(rules);
+    assert.ok(script.includes('if not header :contains "Subject" "unsubscribe"'));
+    const parsed = parseRules(script);
+    assert.deepEqual(parsed.rules[0].condition, rules[0].condition);
 });
 
 test('parseBlockedRecipients backward compat with mixed rules', () => {

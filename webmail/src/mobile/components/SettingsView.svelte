@@ -19,7 +19,8 @@
     import {
         getSendFromAddresses, summarizeMessage, createTempAlias, deleteTempAlias, getTempAliases,
         listMailRules, addMailRule, removeMailRule,
-        type TempAliasEntry, type MailRule, type MailRuleConditionType
+        type TempAliasEntry, type MailRule, type MailRuleConditionType,
+        formatMailRuleConditionSummary
     } from '../../lib/api';
     import Icon from '../../components/Icon.svelte';
 
@@ -665,7 +666,7 @@
                 <div class="ios-row" style="align-items:center;gap:8px;">
                     <div style="flex:1;min-width:0;">
                         <span class="row-label truncate" style="display:block;">{r.name}</span>
-                        <span class="muted small">{r.condition.type.replace('-', ' ')}: {r.condition.value} → {r.action.type}{r.action.type === 'redirect' && r.action.to ? ` ${r.action.to}` : ''}</span>
+                        <span class="muted small">{formatMailRuleConditionSummary(r.condition)} → {r.action.type}{r.action.type === 'redirect' && r.action.to ? ` ${r.action.to}` : ''}</span>
                     </div>
                     <button
                         type="button"

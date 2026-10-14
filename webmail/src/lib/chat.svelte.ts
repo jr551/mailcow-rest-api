@@ -321,20 +321,45 @@ export const TOOLS: ToolDef[] = [
         type: 'function',
         function: {
             name: 'add_mail_rule',
-            description: 'Add a mail rule. action.type is one of discard | redirect | copy. redirect/copy require action.to. condition.type is one of from-contains | to-contains | subject-contains | envelope-to-is | header-contains | header-is. header-* conditions require condition.header.',
+            description: 'Add a mail rule. action.type is one of discard | redirect | copy. redirect/copy require action.to. Simple rule: condition with type + value. Compound rule: { match: "all"|"any", conditions: [...] } where each sub-condition has type, value, optional not:true for NOT. header-* sub-conditions require header.',
             parameters: {
                 type: 'object',
                 required: ['name', 'condition', 'action'],
                 properties: {
                     name: { type: 'string' },
                     condition: {
-                        type: 'object',
-                        required: ['type', 'value'],
-                        properties: {
-                            type: { type: 'string', enum: ['from-contains', 'to-contains', 'subject-contains', 'envelope-to-is', 'header-contains', 'header-is'] },
-                            header: { type: 'string' },
-                            value: { type: 'string' }
-                        }
+                        oneOf: [
+                            {
+                                type: 'object',
+                                required: ['type', 'value'],
+                                properties: {
+                                    type: { type: 'string', enum: ['from-contains', 'to-contains', 'subject-contains', 'envelope-to-is', 'header-contains', 'header-is'] },
+                                    header: { type: 'string' },
+                                    value: { type: 'string' },
+                                    not: { type: 'boolean' }
+                                }
+                            },
+                            {
+                                type: 'object',
+                                required: ['match', 'conditions'],
+                                properties: {
+                                    match: { type: 'string', enum: ['all', 'any'] },
+                                    conditions: {
+                                        type: 'array',
+                                        items: {
+                                            type: 'object',
+                                            required: ['type', 'value'],
+                                            properties: {
+                                                type: { type: 'string', enum: ['from-contains', 'to-contains', 'subject-contains', 'envelope-to-is', 'header-contains', 'header-is'] },
+                                                header: { type: 'string' },
+                                                value: { type: 'string' },
+                                                not: { type: 'boolean' }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        ]
                     },
                     action: {
                         type: 'object',

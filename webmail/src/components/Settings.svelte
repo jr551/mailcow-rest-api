@@ -93,7 +93,8 @@
         listWebhookInboxes, createWebhookInbox, revokeWebhookInbox, type WebhookInbox,
         ApiError, type MailboxInfo, type LoginEntry, type AliasEntry,
         type TempAliasEntry, type SenderPolicy,
-        type MailRule, type MailRuleConditionType, type MailRuleActionType
+        type MailRule, type MailRuleConditionType, type MailRuleActionType,
+        isCompoundMailRuleCondition, formatMailRuleConditionSummary, formatMailRuleLeafSummary
     } from '../lib/api';
     import { formatBytes, formatFullDate } from '../lib/format';
     import {
@@ -923,9 +924,7 @@
     function describeRule(r: MailRule): string {
         const c = r.condition;
         const a = r.action;
-        const cTxt = ruleHasHeader(c.type)
-            ? `${c.header || 'header'} ${c.type === 'header-is' ? 'is' : 'contains'} "${c.value}"`
-            : `${RULE_CONDITION_LABELS[c.type] || c.type} "${c.value}"`;
+        const cTxt = formatMailRuleConditionSummary(c);
         const aTxt = a.type === 'discard'
             ? 'block'
             : a.type === 'fileinto'
@@ -2771,9 +2770,7 @@
                                     {#if mailRules.length}
                                         <ul class="rule-cards" data-testid="rule-list">
                                             {#each mailRules as r (r.id)}
-                                                {@const cTxt = ruleHasHeader(r.condition.type)
-                                                    ? `${r.condition.header || 'header'} ${r.condition.type === 'header-is' ? 'is' : 'contains'}`
-                                                    : (RULE_CONDITION_LABELS[r.condition.type] || r.condition.type)}
+                                                {@const compound = isCompoundMailRuleCondition(r.condition)}
                                                 <li class={`rule-card rule-${r.action.type}`} data-testid={`rule-item-${r.id}`}>
                                                     <div class="rule-card-head">
                                                         <span class={`rule-badge rule-${r.action.type}`}>
@@ -2802,8 +2799,20 @@
                                                     <div class="rule-card-body">
                                                         <div class="rule-clause">
                                                             <span class="rule-when">When</span>
-                                                            <span class="rule-cond">{cTxt}</span>
-                                                            <code class="rule-val">{r.condition.value}</code>
+                                                            {#if compound}
+                                                                <span class="rule-cond">{r.condition.match === 'all' ? 'All of' : 'Any of'}</span>
+                                                                <ul class="rule-compound-list">
+                                                                    {#each r.condition.conditions as sub (sub.type + sub.value + (sub.header || '') + (sub.not ? '!' : ''))}
+                                                                        <li><span class="rule-cond">{formatMailRuleLeafSummary(sub)}</span></li>
+                                                                    {/each}
+                                                                </ul>
+                                                            {:else}
+                                                                {@const cTxt = ruleHasHeader(r.condition.type)
+                                                                    ? `${r.condition.header || 'header'} ${r.condition.type === 'header-is' ? 'is' : 'contains'}`
+                                                                    : (RULE_CONDITION_LABELS[r.condition.type] || r.condition.type)}
+                                                                <span class="rule-cond">{cTxt}{#if r.condition.not} (NOT){/if}</span>
+                                                                <code class="rule-val">{r.condition.value}</code>
+                                                            {/if}
                                                         </div>
                                                         <div class="rule-clause">
                                                             <span class="rule-when">Then</span>

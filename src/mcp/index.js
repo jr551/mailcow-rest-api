@@ -289,18 +289,30 @@ function buildServer({ client }) {
         inputSchema: {}
     }, wrap(async () => client.listMailRules()));
 
+    const mailRuleLeafCondition = z.object({
+        type: z.enum(['envelope-to-is', 'header-contains', 'header-is', 'from-contains', 'to-contains', 'subject-contains'])
+            .describe('What to match against'),
+        header: z.string().optional().describe('Header name (required for header-contains and header-is)'),
+        value: z.string().describe('Value to match'),
+        not: z.boolean().optional().describe('When true, invert this sub-condition (NOT)')
+    });
+
     server.registerTool('add_mail_rule', {
-        description: 'Add a mail rule (block, redirect, or copy). For "redirect" the original email is forwarded and not kept. For "copy" the email is forwarded AND kept in the inbox. Requires ManageSieve.',
+        description: 'Add a mail rule (block, redirect, or copy). For "redirect" the original email is forwarded and not kept. For "copy" the email is forwarded AND kept in the inbox. Requires ManageSieve. Use a single condition object for simple rules, or { match: "all"|"any", conditions: [...] } to AND/OR multiple sub-conditions; set not: true on a sub-condition to negate it.',
         inputSchema: {
             name: z.string().describe('Human-readable name for the rule, e.g. "PagerDuty to Bot"'),
-            condition: z.object({
-                type: z.enum(['envelope-to-is', 'header-contains', 'header-is', 'from-contains', 'to-contains', 'subject-contains']).describe('What to match against'),
-                header: z.string().optional().describe('Header name (required for header-contains and header-is)'),
-                value: z.string().describe('Value to match')
-            }).describe('Condition that triggers the rule'),
+            condition: z.union([
+                mailRuleLeafCondition,
+                z.object({
+                    match: z.enum(['all', 'any']).describe('all = every sub-condition must match (AND); any = at least one (OR)'),
+                    conditions: z.array(mailRuleLeafCondition).min(1).max(20)
+                })
+            ]).describe('Condition that triggers the rule'),
             action: z.object({
-                type: z.enum(['discard', 'redirect', 'copy']).describe('discard = block/delete, redirect = forward and dont keep, copy = forward and keep'),
-                to: z.string().optional().describe('Destination email address (required for redirect and copy)')
+                type: z.enum(['discard', 'redirect', 'copy', 'fileinto', 'webhook']).describe('discard = block/delete, redirect = forward and dont keep, copy = forward and keep'),
+                to: z.string().optional().describe('Destination email address (required for redirect and copy)'),
+                folder: z.string().optional().describe('Destination folder (required for fileinto)'),
+                webhookId: z.string().optional().describe('Outbound webhook id (required for webhook)')
             }).describe('Action to take when condition matches')
         }
     }, wrap(async ({ name, condition, action }) => client.addMailRule({ name, condition, action })));
