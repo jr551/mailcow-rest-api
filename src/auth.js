@@ -2,8 +2,9 @@
 
 const { ImapFlow } = require('imapflow');
 const { hashCreds } = require('./cache');
-const { unauthorized } = require('./errors');
-const { looksLikeAppPassword } = require('./app-password-store');
+const { problem, unauthorized } = require('./errors');
+const { looksLikeAppPassword, parseToken } = require('./app-password-store');
+const { createAuthFailureLimiter } = require('./auth-failure-limit');
 
 // Parse `Authorization: Basic <base64>` into { user, pass } or null.
 function parseBasicAuth(headerValue) {
@@ -95,17 +96,46 @@ function isWebmailPath(url) {
 // Fastify onRequest hook factory. Populates `req.creds = { user, pass, hash }`.
 // Supports Bearer (session token or app password), Basic auth, and Basic auth
 // whose password is an app password — auto-detected from the header.
-function createAuthHook({ cache, imap, appPasswords = null, verifier = verifyWithDovecot, now = () => Date.now() }) {
+function createAuthHook({
+    cache, imap, appPasswords = null, verifier = verifyWithDovecot, now = () => Date.now(),
+    authFailures = createAuthFailureLimiter()
+}) {
     // An app password stands in for the mailbox password. The store hands back
     // the real one (decrypted) so IMAP still gets a credential it recognises;
     // req.appPassword marks the request as delegated, which the app-password
     // routes use to refuse self-management.
     function acceptAppPassword(req, reply, token, expectedUser) {
-        const result = appPasswords.verify({ token, ip: req.ip }, now());
+        // Failures are counted per token id, which the token carries in
+        // cleartext, so an unparseable token falls back to the caller's IP.
+        // The raw token is never stored.
+        const parsed = parseToken(token);
+        const key = parsed ? parsed.id : `ip:${req.ip}`;
+        const at = now();
+
+        // The live log shows a client retrying an expired token indefinitely;
+        // each retry costs a database read and a decrypt. Telling the client to
+        // back off is cheaper for everyone than re-checking.
+        const gate = authFailures.check(key, at);
+        if (gate.blocked) {
+            reply.header('retry-after', String(Math.max(1, Math.ceil(gate.retryAfterMs / 1000))));
+            throw problem(429, 'Too Many Requests', 'Too many failed app password attempts — retry later');
+        }
+
+        const result = appPasswords.verify({ token, ip: req.ip }, at);
         if (!result.ok) {
+            authFailures.fail(key, at);
             // The reason separates "wrong token" from "right token, wrong
-            // network"; the client is told neither.
+            // network"; the client is told neither — except for `expired`,
+            // which the holder of the token needs to know about to go and mint
+            // a new one.
             req.log.warn({ reason: result.reason, ip: req.ip }, 'app password rejected');
+            if (result.reason === 'expired') {
+                reply.header(
+                    'WWW-Authenticate',
+                    'Bearer realm="imap-rest", error="invalid_token", error_description="app password expired"'
+                );
+                throw unauthorized('App password expired — create a new one in the webmail (Settings → Security)');
+            }
             reply.header('WWW-Authenticate', 'Bearer realm="imap-rest"');
             throw unauthorized('Invalid credentials');
         }
@@ -114,6 +144,7 @@ function createAuthHook({ cache, imap, appPasswords = null, verifier = verifyWit
             reply.header('WWW-Authenticate', 'Bearer realm="imap-rest"');
             throw unauthorized('Invalid credentials');
         }
+        authFailures.clear(key);
         req.creds = {
             user: result.user,
             pass: result.password,
