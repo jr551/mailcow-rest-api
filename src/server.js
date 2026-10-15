@@ -319,11 +319,17 @@ function createTakeoverSendNow({ config: cfg, pool, imapCache, logger }) {
 }
 
 async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap, pushLookup } = {}) {
+    // A full logger instance (tests, embedding) has to go through
+    // loggerInstance; Fastify rejects instances passed as `logger`.
+    const loggerOptions = logger && typeof logger.child === 'function'
+        ? { loggerInstance: logger }
+        : { logger: logger ?? createLogger() };
     const app = Fastify({
         serverFactory: createServer,
-        logger: logger ?? createLogger(),
+        ...loggerOptions,
         https: loadTls(),
-        disableRequestLogging: false,
+        // FSTDEP023: disableRequestLogging moved into logController; fastify@6 removes it.
+        logController: new Fastify.LogController({ disableRequestLogging: false }),
         bodyLimit: 2 * 1024 * 1024,
         trustProxy: config.security.trustProxy
     });
@@ -777,7 +783,9 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
             detail: status >= 500 ? 'Internal server error' : (err.message || 'Unexpected error')
         };
         if (status >= 500) req.log.error({ err }, 'request failed');
-        else req.log.warn({ err: { message: err.message, code: err.code } }, 'request rejected');
+        // 4xx is the client's problem — a missing token or a folder that is
+        // not there is expected traffic. Only 5xx is ours.
+        else req.log.info({ err: { message: err.message, code: err.code }, status }, 'request rejected');
         reply.code(status).type('application/problem+json').send(problem);
     });
 

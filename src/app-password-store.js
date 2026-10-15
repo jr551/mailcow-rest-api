@@ -174,6 +174,9 @@ function createAppPasswordStore({ filePath, secretBox, maxPerUser = 25 } = {}) {
     // Returns { ok: true, user, password, id, label } or { ok: false, reason }.
     // `reason` is for the server log — callers must not echo it to the client,
     // since it distinguishes "wrong token" from "right token, wrong network".
+    // The one exception is `expired`, which is only returned once the presented
+    // secret matched (so it says nothing about ids the caller does not hold)
+    // and which the holder of the token needs in order to mint a new one.
     function verify({ token, ip }, now = Date.now()) {
         const parsed = parseToken(token);
         if (!parsed) return { ok: false, reason: 'malformed' };
@@ -181,13 +184,18 @@ function createAppPasswordStore({ filePath, secretBox, maxPerUser = 25 } = {}) {
         const row = getStmt.get(parsed.id);
         if (!row) return { ok: false, reason: 'unknown' };
         if (row.revoked_at) return { ok: false, reason: 'revoked' };
-        if (row.expires_at && now > row.expires_at) return { ok: false, reason: 'expired' };
 
+        // The secret is compared before the expiry check so that `expired` is
+        // only ever reported to a caller who actually holds the token. Checked
+        // the other way round, `map_<known-id>_<garbage>` against an expired
+        // row would both confirm that the id exists and return a reason the
+        // caller now surfaces to the client.
         const expected = Buffer.from(row.token_hash, 'hex');
         const actual = Buffer.from(hashSecret(parsed.id, parsed.secret), 'hex');
         if (expected.length !== actual.length || !crypto.timingSafeEqual(expected, actual)) {
             return { ok: false, reason: 'bad-secret' };
         }
+        if (row.expires_at && now > row.expires_at) return { ok: false, reason: 'expired' };
 
         // The IP scope is the whole point of an app password: a leaked token
         // is only usable from the networks its owner named.

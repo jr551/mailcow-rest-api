@@ -61,6 +61,20 @@ test('listMessages encodes path and forwards query params', withMockAgent(async 
     assert.deepEqual(res, { messages: [] });
 }));
 
+test('listMessages forwards include verbatim', withMockAgent(async (agent) => {
+    const pool = agent.get('http://imap-rest:3001');
+    // The extras are opt-in on the server (they force a full message fetch on
+    // a Gmail-synced folder), so the MCP tool has to be able to ask for them.
+    pool.intercept({
+        path: '/v1/mailboxes/INBOX/messages?page=0&include=attachments%2Cauth',
+        method: 'GET'
+    }).reply(200, { messages: [] });
+
+    const c = new RestClient(baseOpts);
+    const res = await c.listMessages('INBOX', { page: 0, include: 'attachments,auth' });
+    assert.deepEqual(res, { messages: [] });
+}));
+
 test('createMailbox sends JSON body', withMockAgent(async (agent) => {
     const pool = agent.get('http://imap-rest:3001');
     pool.intercept({

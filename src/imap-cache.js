@@ -15,6 +15,15 @@ const Database = require('better-sqlite3');
 
 function createImapCache(opts) {
     const { filePath, ttlMs = 300_000, pruneIntervalMs = 60_000 } = opts || {};
+    // The folder UID manifest gets its own, much longer TTL. It is keyed by
+    // uidvalidity and its validity is decided by comparing its length with
+    // the mailbox's live EXISTS — never by the clock — so a stale-by-age
+    // manifest is still correct and simply saves the SEARCH. The TTL only
+    // bounds how long an unused manifest occupies the database, and 5 minutes
+    // (the generic ttlMs) re-ran SEARCH ALL on any folder the user visited
+    // less often than that. Mailbox tree and folder status keep ttlMs: those
+    // are read as authoritative for display, not as a hint to be verified.
+    const uidsTtlMs = opts.uidsTtlMs || 86_400_000; // 24 h
     const maxMemTree = opts.maxMemTree || 500;
     const maxMemUids = opts.maxMemUids || 500;
     const maxMemStatus = opts.maxMemStatus || 500;
@@ -201,7 +210,7 @@ function createImapCache(opts) {
         try {
             const uids = JSON.parse(row.uids);
             if (!Array.isArray(uids)) return null;
-            memSet(uidsMem, key, { uids, expiresAt: n + ttlMs }, maxMemUids);
+            memSet(uidsMem, key, { uids, expiresAt: n + uidsTtlMs }, maxMemUids);
             return uids;
         } catch {
             return null;
@@ -210,7 +219,7 @@ function createImapCache(opts) {
 
     function setUids(userHash, path, uidvalidity, uids) {
         const n = now();
-        const expiresAt = n + ttlMs;
+        const expiresAt = n + uidsTtlMs;
         bestEffort(() => uidsSetStmt.run(userHash, path, uidvalidity, JSON.stringify(uids), expiresAt));
         memSet(uidsMem, _uidsKey(userHash, path, uidvalidity), { uids, expiresAt }, maxMemUids);
     }

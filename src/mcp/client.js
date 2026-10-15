@@ -83,9 +83,13 @@ class RestClient {
         return this._call('DELETE', `/v1/mailboxes/${encodeURIComponent(path)}`);
     }
 
-    listMessages(path, { page, pageSize, search } = {}) {
+    // `include` is forwarded verbatim: the list endpoint only computes MIME
+    // structure and authentication verdicts when asked, because on a
+    // Gmail-synced folder both force the server to pull the whole message
+    // from upstream. A caller that needs them names them.
+    listMessages(path, { page, pageSize, search, include } = {}) {
         return this._call('GET', `/v1/mailboxes/${encodeURIComponent(path)}/messages`, {
-            query: { page, pageSize, search }
+            query: { page, pageSize, search, include }
         });
     }
     getMessage(path, uid) {

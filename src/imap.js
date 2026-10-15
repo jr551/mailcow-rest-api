@@ -1,6 +1,7 @@
 'use strict';
 
 const { fromImapError } = require('./errors');
+const { redactForLog } = require('./secret-scrub');
 
 // Acquire a pooled IMAP client for the authenticated user, run `fn(client)`,
 // then release or discard. If the operation throws, classify the error and
@@ -16,8 +17,43 @@ async function withClient(pool, creds, fn) {
             /ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|socket/i.test(String(err && err.message));
         if (isFatal) pool.discard(creds.hash, client);
         else pool.release(creds.hash, client);
-        throw fromImapError(err);
+        const mapped = fromImapError(err);
+        // mapped === err means the error is already an HTTP problem the route
+        // chose deliberately (notFound('Message not found'), say) — that is
+        // not an IMAP failure and must not be logged as one.
+        if (mapped !== err) logImapFailure(pool, creds, client, err, mapped);
+        throw mapped;
     }
+}
+
+// Log the raw backend error behind a mapped 4xx/5xx. The pool owns the logger
+// because it is the single injection point both request callers and
+// background ones (push-sender, takeover-worker) already hold — those have no
+// request-scoped logger to thread down.
+function logImapFailure(pool, creds, client, err, mapped) {
+    const log = pool.logger;
+    if (!log) return;
+    const secrets = [creds.pass];
+    const raw = err || {};
+    const status = mapped.problem.status;
+    const payload = {
+        user: redactForLog(creds.user, secrets),
+        status,
+        imap: {
+            code: redactForLog(raw.code, secrets),
+            serverResponseCode: redactForLog(raw.serverResponseCode, secrets),
+            responseText: redactForLog(raw.responseText, secrets),
+            command: redactForLog(raw.command, secrets),
+            mailbox: redactForLog(raw.mailbox || (client.mailbox && client.mailbox.path), secrets)
+        },
+        err: {
+            name: redactForLog(raw.name, secrets),
+            message: redactForLog(raw.message, secrets)
+        }
+    };
+    // A mapped 401/404 is the client's problem; only 5xx is a server fault.
+    if (status >= 500) log.error(payload, 'imap operation failed');
+    else log.warn(payload, 'imap operation failed');
 }
 
 // Run `fn(lock)` while holding a mailbox lock. Ensures release even on error.

@@ -158,7 +158,16 @@ const listMessagesQuerySchema = {
     properties: {
         page: { type: 'integer', minimum: 0, default: 0 },
         pageSize: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
-        search: { type: 'string' }
+        search: { type: 'string' },
+        // Comma-separated opt-in for per-item extras that are expensive on a
+        // Gmail-synced folder, where the IMAP server ships no MIME structure
+        // and no cached headers:
+        //   attachments — adds hasAttachments / attachmentCount (forces the
+        //                 whole message to be pulled from Google)
+        //   auth        — adds per-item SPF/DKIM/DMARC verdicts (a second
+        //                 per-item BODY[HEADER.FIELDS] round trip)
+        // Omitted (the default), the list carries envelope + flags only.
+        include: { type: 'string' }
     }
 };
 
