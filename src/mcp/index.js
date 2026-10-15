@@ -83,15 +83,16 @@ function buildServer({ client }) {
     }, wrap(async ({ path }) => client.deleteMailbox(path)));
 
     server.registerTool('list_messages', {
-        description: 'List messages in a mailbox, paginated, optionally filtered by a free-text search across subject/from/body.',
+        description: 'List messages in a mailbox, paginated, optionally filtered by a free-text search across subject/from/body. Pass include="attachments" and/or "auth" to also get attachment counts and SPF/DKIM/DMARC verdicts per message — those cost an extra IMAP fetch per item, so they are off by default.',
         inputSchema: {
             path: z.string().describe('Mailbox path'),
             page: z.number().int().min(0).optional().describe('Page index (0-based, default 0)'),
             pageSize: z.number().int().min(1).max(100).optional().describe('Items per page (default 20, max 100)'),
-            search: z.string().optional().describe('Free-text search query')
+            search: z.string().optional().describe('Free-text search query'),
+            include: z.string().optional().describe('Comma-separated extras: "attachments" (hasAttachments/attachmentCount), "auth" (SPF/DKIM/DMARC per message)')
         }
-    }, wrap(async ({ path, page, pageSize, search }) =>
-        client.listMessages(path, { page, pageSize, search })
+    }, wrap(async ({ path, page, pageSize, search, include }) =>
+        client.listMessages(path, { page, pageSize, search, include })
     ));
 
     server.registerTool('get_message', {
