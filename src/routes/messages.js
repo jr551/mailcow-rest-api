@@ -249,28 +249,40 @@ module.exports = async function messageRoutes(app, { pool, ocrCache, imapCache }
         }
     }, async (req, reply) => {
         const mboxPath = mailboxPathParam(req);
-        const { page = 0, pageSize = 20, search } = req.query;
+        const { page = 0, pageSize = 20, search, include } = req.query;
         const userHash = req.creds.hash;
+
+        // `include` opts in to the two per-item extras that are expensive on
+        // a Gmail-synced folder: `attachments` adds hasAttachments /
+        // attachmentCount (answering it forces the whole message to be pulled
+        // from Google, which doesn't ship MIME structure separately), and
+        // `auth` adds the SPF/DKIM/DMARC verdicts (a second per-item
+        // BODY[HEADER.FIELDS] round trip). Only a client that actually draws
+        // them should pay for them, so the default fetch carries the envelope
+        // and flags and nothing else.
+        const includes = new Set();
+        for (const token of String(include ?? '').split(',')) {
+            const value = token.trim();
+            if (!value) continue; // tolerate 'attachments, auth' and stray commas
+            if (value !== 'attachments' && value !== 'auth') {
+                throw badRequest(`Unknown include value "${value}" — expected attachments and/or auth`);
+            }
+            includes.add(value);
+        }
 
         const result = await withClient(pool, req.creds, (client) =>
             withMailbox(client, mboxPath, true, async () => {
-                // bodyStructure is requested so the list response can carry
-                // hasAttachments / attachmentCount for the client's filter
-                // without per-message detail fetches.
-                // authentication-results lets serializeListItem surface a
-                // per-row SPF/DKIM/DMARC badge without forcing the user
-                // to open each message. The header fetch costs one extra
-                // BODY[HEADER.FIELDS] round-trip per item but the result
-                // is cached on the item itself, not re-fetched.
                 const fetchQuery = {
                     uid: true,
                     flags: true,
                     envelope: true,
                     size: true,
-                    internalDate: true,
-                    bodyStructure: true,
-                    headers: ['authentication-results', 'arc-authentication-results']
+                    internalDate: true
                 };
+                if (includes.has('attachments')) fetchQuery.bodyStructure = true;
+                if (includes.has('auth')) {
+                    fetchQuery.headers = ['authentication-results', 'arc-authentication-results'];
+                }
                 let uids;
 
                 let requireAttachment = false;
@@ -313,6 +325,14 @@ module.exports = async function messageRoutes(app, { pool, ocrCache, imapCache }
                 } else {
                     const exists = client.mailbox?.exists || 0;
                     if (!exists) return { path: mboxPath, page, pageSize, total: 0, messages: [] };
+                    // A page past the end is a stale pagination cursor from
+                    // the client — the folder shrank under it (or it was
+                    // restored from an old cache). EXISTS already answers it,
+                    // while the old path paid a full SEARCH plus a lock on a
+                    // 100k-message folder to render an empty page.
+                    if (page * pageSize >= exists) {
+                        return { path: mboxPath, page, pageSize, total: exists, messages: [] };
+                    }
 
                     const uidValidity = client.mailbox?.uidValidity || 0;
                     const cached = cache?.getUids(userHash, mboxPath, uidValidity);
@@ -321,6 +341,26 @@ module.exports = async function messageRoutes(app, { pool, ocrCache, imapCache }
                     // every page load while the mailbox is quiet.
                     if (cached && cached.length === exists) {
                         uids = cached;
+                    } else if (cached && cached.length && cached.length < exists) {
+                        // Mail arrived since the manifest was written. The
+                        // manifest is newest-first, so cached[0] is the
+                        // highest UID we know and everything above it is new
+                        // — ask for exactly that tail (imapflow compiles the
+                        // `uid` key to `UID <set>`) instead of re-running
+                        // SEARCH ALL over a 100k-message folder.
+                        const fresh = await client.search({ uid: `${cached[0] + 1}:*` }, { uid: true });
+                        const merged = [...(fresh || []).sort((a, b) => b - a), ...cached];
+                        if (merged.length === exists) {
+                            uids = merged;
+                            cache?.setUids(userHash, mboxPath, uidValidity, merged);
+                        } else {
+                            // Expunges (or anything else that moved more than
+                            // the tail) make the merge unauthoritative — only
+                            // a full search is.
+                            uids = await client.search({ all: true }, { uid: true });
+                            uids = (uids || []).sort((a, b) => b - a);
+                            cache?.setUids(userHash, mboxPath, uidValidity, uids);
+                        }
                     } else {
                         uids = await client.search({ all: true }, { uid: true });
                         uids = (uids || []).sort((a, b) => b - a);
@@ -329,6 +369,13 @@ module.exports = async function messageRoutes(app, { pool, ocrCache, imapCache }
                 }
 
                 const total = uids.length;
+                // Same stale-cursor short-circuit as above, but a search's
+                // total is only known once the search (and any has:attachment
+                // bodyStructure pass) has settled. Nothing to fetch past the
+                // end, so don't open a FETCH over an empty slice.
+                if (page * pageSize >= total) {
+                    return { path: mboxPath, page, pageSize, total, messages: [] };
+                }
                 const slice = uids.slice(page * pageSize, page * pageSize + pageSize);
                 const messages = [];
                 if (slice.length) {

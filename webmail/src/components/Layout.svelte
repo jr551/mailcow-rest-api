@@ -118,7 +118,7 @@
             for (let page = 1; page * PER_PAGE < HARD_CAP; page++) {
                 if (path !== ui.selectedPath) break; // user navigated away
                 if (!ui.online) break;
-                const r = await listMessages(path, { page, pageSize: PER_PAGE, search }).catch(() => null);
+                const r = await listMessages(path, { page, pageSize: PER_PAGE, search, include: 'attachments' }).catch(() => null);
                 if (!r) break;
                 cache.putMessageList(currentUser(), path, page, search, r);
                 if (r.messages.length < PER_PAGE) break; // we've drained the folder
@@ -508,7 +508,7 @@
         // The network promise is *not* aborted; if it eventually returns
         // we still replace (in cache, and in the view if the user is
         // still on this folder), so offline → online recovery is seamless.
-        const fetchP = listMessages(reqPath, { page: reqPage, pageSize: pageSize(), search });
+        const fetchP = listMessages(reqPath, { page: reqPage, pageSize: pageSize(), search, include: 'attachments' });
         // Mobile races the 2s budget; desktop just awaits the real call.
         const r = isMobile
             ? await withTimeout(fetchP, FIRST_LOAD_BUDGET_MS).catch(() => null)
@@ -583,7 +583,8 @@
             const r = await listMessages(ui.selectedPath, {
                 page: nextPage,
                 pageSize: SERVER_PAGE_CAP,
-                search
+                search,
+                include: 'attachments'
             });
             const seen = new Set(ui.messages.map((m) => m.uid));
             const fresh = r.messages.filter((m) => !seen.has(m.uid));
@@ -633,7 +634,8 @@
                 const r = await listMessages(path, {
                     page: nextPage,
                     pageSize: SERVER_PAGE_CAP,
-                    search
+                    search,
+                    include: 'attachments'
                 });
                 if (ctrl.signal.aborted || ui.selectedPath !== path) break;
                 const seen = new Set(ui.messages.map((m) => m.uid));
@@ -945,7 +947,8 @@
                     const r = await listMessages(path, {
                         page: 0,
                         pageSize: SERVER_PAGE_CAP,
-                        search: q
+                        search: q,
+                        include: 'attachments'
                     });
                     if (ctrl.signal.aborted) break;
                     for (const msg of r.messages) {

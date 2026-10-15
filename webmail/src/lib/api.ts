@@ -266,12 +266,17 @@ export async function appendRawMessage(
 
 export async function listMessages(
     path: string,
-    params: { page?: number; pageSize?: number; search?: string; cache?: RequestCache } = {}
+    params: { page?: number; pageSize?: number; search?: string; include?: string; cache?: RequestCache } = {}
 ): Promise<MessageListResponse> {
     const q = new URLSearchParams();
     if (params.page !== undefined) q.set('page', String(params.page));
     if (params.pageSize !== undefined) q.set('pageSize', String(params.pageSize));
     if (params.search) q.set('search', params.search);
+    // Opt-in per-item extras ('attachments', 'auth'). Omitted, the server
+    // skips bodyStructure and the auth-results headers entirely — on a
+    // Gmail-synced folder that is the difference between a light envelope
+    // fetch and pulling every message body.
+    if (params.include) q.set('include', params.include);
     const qs = q.toString();
     return request<MessageListResponse>(
         'GET',
