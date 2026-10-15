@@ -193,6 +193,8 @@ The Swagger UI is the source of truth for schemas and response examples. This ro
 | `POST` | `/v1/mailboxes/{path}/messages` | Append a message |
 | `POST` | `/v1/send` | Send mail (draft/reply metadata, pending approvals) |
 
+`GET /v1/mailboxes/{path}/messages` returns envelopes only. Pass `include=attachments` (adds `hasAttachments`/`attachmentCount`) and/or `include=auth` (adds the per-message SPF/DKIM/DMARC verdicts) when the caller needs them: on a Gmail-synced folder both extras make the mail server pull the whole message from upstream, which is what made listings of large folders slow.
+
 **Account, rules, and sender policy**
 
 | Method | Path | Purpose |
@@ -333,8 +335,8 @@ The setup scripts are intentionally conservative: before they start containers o
 Manual install:
 
 ```sh
-git clone https://github.com/jr551/mailcow-rest-api.git /opt/mailcow-rest-api
-cd /opt/mailcow-rest-api
+git clone https://github.com/jr551/mailcow-rest-api.git /opt/imap-rest-mailcow
+cd /opt/imap-rest-mailcow
 cp .env.example .env
 sudo install/mailcow-safety-check.sh
 sudo install/setup.sh
@@ -344,7 +346,7 @@ The default setup exposes the API through mailcow nginx at `https://<your-mailco
 
 Set `MAILCOW_PATH` if your mailcow checkout is not `/opt/mailcow-dockerized`, and set `MAILCOW_NETWORK` if your Docker network name differs from `mailcowdockerized_mailcow-network`.
 
-Install this checkout outside of `/opt/mailcow-dockerized` (e.g. as a sibling directory like `/opt/mailcow-rest-api`) so mailcow's own `update.sh` — which resets its working tree — never touches it.
+Install this checkout outside of `/opt/mailcow-dockerized` (e.g. as a sibling directory like `/opt/imap-rest-mailcow`) so mailcow's own `update.sh` — which resets its working tree — never touches it.
 
 For production edge hardening (rate limiting, security headers, ban coverage), see [`docs/deployment-hardening.md`](docs/deployment-hardening.md).
 
