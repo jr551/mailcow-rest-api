@@ -111,6 +111,34 @@ function scrubText(input, counts) {
     return out;
 }
 
+// Redact a value before it goes into a log line. Same reasoning as the LLM
+// scrubber above: a Dovecot response can echo back the command it failed —
+// including the credentials that command carried — and that text must not
+// land in the log. The caller's exact secrets go first (they may match no
+// pattern at all), then the scrubText pass catches vendor tokens and
+// "password: <value>" shapes, then the result is truncated so one server
+// response cannot flood a log line.
+const LOG_VALUE_MAX = 500;
+
+function redactForLog(value, secrets = []) {
+    if (value === null || value === undefined) return '';
+    let out;
+    try {
+        out = typeof value === 'string' ? value : String(value);
+    } catch {
+        // An object whose toString throws is not worth crashing a log call.
+        return '';
+    }
+    for (const secret of Array.isArray(secrets) ? secrets : []) {
+        // Below 4 chars a "secret" is just text; replacing it would mangle
+        // ordinary words for no protection.
+        if (typeof secret !== 'string' || secret.length < 4) continue;
+        out = out.split(secret).join('[redacted]');
+    }
+    out = scrubText(out, {});
+    return out.length > LOG_VALUE_MAX ? `${out.slice(0, LOG_VALUE_MAX)}…` : out;
+}
+
 // --- PII pass -------------------------------------------------------------
 // Due-diligence layer for mail leaving to a *cloud* provider: addresses and
 // phone numbers the model doesn't need to see. Local providers (Ollama on
@@ -195,5 +223,6 @@ function scrubMessages(messages) {
 module.exports = {
     scrubText,
     scrubMessages,
-    scrubMessagesPii
+    scrubMessagesPii,
+    redactForLog
 };

@@ -262,7 +262,9 @@ function createPool(opts) {
         await Promise.allSettled(closes);
     }
 
-    return { acquire, release, discard, sweepIdle, closeAll, flushIdle, count };
+    // Expose the logger so callers sharing this pool (imap.withClient) can log
+    // backend failures without every call site threading a logger down.
+    return { acquire, release, discard, sweepIdle, closeAll, flushIdle, count, logger };
 }
 
 module.exports = { createPool };
