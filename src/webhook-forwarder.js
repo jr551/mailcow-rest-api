@@ -5,6 +5,7 @@ const { ImapFlow } = require('imapflow');
 const { request } = require('undici');
 const { walkStructure, downloadPartText, streamToBuffer, parseAuthResultsHeader } = require('./imap');
 const { headersFromSource, htmlToText, addressList } = require('./webhook-payload');
+const { createWebhookStager } = require('./webhook-staging');
 const { setHeader } = require('./utils/webhook-headers');
 
 // Webhook conversion accounts.
@@ -51,11 +52,13 @@ function toIsoOrNull(value) {
 
 // `connectOverride` exists so tests can drive the whole delivery/delete
 // path without a live IMAP server. Production never passes it.
-function createWebhookForwarder({ config, store, logger, connect: connectOverride }) {
+function createWebhookForwarder({ config, store, logger, connect: connectOverride, stager: stagerOverride }) {
+    const stager = stagerOverride || createWebhookStager({ config, logger });
     const accounts = config.webhooks.accounts || [];
     const pollIntervalMs = config.webhooks.pollIntervalMs;
     const maxAttempts = config.webhooks.maxAttempts;
     const maxBytes = config.webhooks.maxMessageBytes;
+    const maxPayloadBytes = config.webhooks.maxPayloadBytes || 240 * 1024;
     const includeAttachments = config.webhooks.includeAttachments;
     const maxAttachmentBytes = config.webhooks.maxAttachmentBytes;
     const maxAttachmentsTotalBytes = config.webhooks.maxAttachmentsTotalBytes;
@@ -142,6 +145,10 @@ function createWebhookForwarder({ config, store, logger, connect: connectOverrid
         }
     }
 
+    function safeName(value) {
+        return String(value || 'attachment').replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 120) || 'attachment';
+    }
+
     async function buildPayload(client, account, uid, uidvalidity) {
         const msg = await client.fetchOne(String(uid), {
             uid: true,
@@ -155,17 +162,8 @@ function createWebhookForwarder({ config, store, logger, connect: connectOverrid
         if (!msg) return null;
 
         const source = msg.source ? Buffer.from(msg.source) : Buffer.alloc(0);
-        const truncated = source.length > maxBytes;
         const env = msg.envelope || {};
 
-        // Decode the body rather than shipping only base64.
-        //
-        // The receiver is usually a model or a script, and neither can do
-        // anything useful with a base64 blob: an LLM can't reliably decode
-        // it, and it inflates the payload by a third — a 100 KB mail became
-        // 133 KB of unreadable characters in the prompt. The raw source is
-        // still included for anything that wants to parse MIME itself, but
-        // text and html are now there to be read directly.
         const acc = { textPart: null, htmlPart: null, attachments: [] };
         if (msg.bodyStructure) walkStructure(msg.bodyStructure, msg.bodyStructure.part || '1', acc);
         let text = null;
@@ -174,73 +172,25 @@ function createWebhookForwarder({ config, store, logger, connect: connectOverrid
             if (acc.textPart) text = await downloadPartText(client, String(uid), acc.textPart);
             if (acc.htmlPart) html = await downloadPartText(client, String(uid), acc.htmlPart);
         } catch (err) {
-            logger?.warn({ err: err.message, uid }, 'webhook body extraction failed; sending raw only');
+            logger?.warn({ err: err.message, uid }, 'webhook body extraction failed; link still has full message');
         }
-        // HTML-only mails (Tesco receipts) would otherwise leave text=null and force the LLM to parse raw HTML.
-        // Provide a stripped text fallback so the agent can extract line items without decoding base64 raw.
         if (!text && html) {
             const stripped = htmlToText(html);
             if (stripped) text = stripped;
         }
-        const headers = headersFromSource(source);
-        const authHeaderRaw = headers['authentication-results'] ? (Array.isArray(headers['authentication-results']) ? headers['authentication-results'][0] : headers['authentication-results']) : null;
-        const auth = parseAuthResultsHeader(authHeaderRaw);
 
-        // Attachment bytes, not just a manifest.
-        //
-        // A receiver told an invoice exists but not given it can't do
-        // anything with it — and digging the part back out of the base64
-        // raw source means reimplementing a MIME parser at the other end,
-        // which is the work this payload exists to avoid.
-        //
-        // Bounded per attachment and in total: a mailbox is allowed 25 MB
-        // attachments, and base64 adds a third on top, so an unbounded
-        // payload could be ~33 MB of JSON per message. Anything over the
-        // cap is described and flagged rather than silently dropped, so
-        // the receiver knows something was there.
-        const attachments = [];
-        let attachmentBudget = maxAttachmentsTotalBytes;
-        for (const att of acc.attachments) {
-            const meta = { ...att, included: false, content: null, encoding: 'base64' };
-            if (!includeAttachments) {
-                meta.omittedReason = 'attachments disabled';
-                attachments.push(meta);
-                continue;
-            }
-            const declared = Number(att.size) || 0;
-            if (declared > maxAttachmentBytes) {
-                meta.omittedReason = `larger than the ${Math.round(maxAttachmentBytes / 1024 / 1024)} MB per-attachment limit`;
-                attachments.push(meta);
-                continue;
-            }
-            try {
-                const dl = await client.download(String(uid), att.id, { uid: true });
-                if (!dl || !dl.content) {
-                    meta.omittedReason = 'part could not be fetched';
-                    attachments.push(meta);
-                    continue;
-                }
-                const buf = await streamToBuffer(dl.content);
-                if (buf.length > maxAttachmentBytes || buf.length > attachmentBudget) {
-                    meta.omittedReason = buf.length > maxAttachmentBytes
-                        ? `larger than the ${Math.round(maxAttachmentBytes / 1024 / 1024)} MB per-attachment limit`
-                        : 'total attachment budget for this message exhausted';
-                    attachments.push(meta);
-                    continue;
-                }
-                attachmentBudget -= buf.length;
-                meta.included = true;
-                meta.bytes = buf.length;
-                meta.content = buf.toString('base64');
-                attachments.push(meta);
-            } catch (err) {
-                meta.omittedReason = `fetch failed: ${err.message}`;
-                attachments.push(meta);
-                logger?.warn({ err: err.message, uid, part: att.id }, 'webhook attachment fetch failed');
-            }
-        }
+        const staged = await stager.stageMessage(account, uidvalidity, uid, source);
 
-        return {
+        const attachments = acc.attachments.map((att) => ({
+            filename: att.filename || null,
+            contentType: att.type || null,
+            part: att.id || null,
+            size: Number(att.size) || null
+        }));
+
+        let body = text || '';
+        let truncated = false;
+        const payload = {
             account: account.address,
             mailbox: account.mailbox,
             uid,
@@ -260,23 +210,40 @@ function createWebhookForwarder({ config, store, logger, connect: connectOverrid
                 cc: addressList(env.cc),
                 bcc: addressList(env.bcc)
             },
-            // Decoded bodies — what a downstream model or script actually
-            // reads. Null when the message has no part of that type.
-            text,
-            html,
-            headers,
-            authenticationResults: authHeaderRaw,
-            auth,
+            text: body,
+            textTruncated: false,
             attachments,
-            // Full RFC822 source, base64'd, for receivers that would rather
-            // parse MIME themselves than trust our extraction.
-            raw: {
-                encoding: 'base64',
-                truncated,
-                bytes: source.length,
-                data: (truncated ? source.subarray(0, maxBytes) : source).toString('base64')
+            attachmentCount: attachments.length,
+            fullEmailUrl: staged.url,
+            expiresAt: staged.expiresAt,
+            webhook: {
+                version: 3,
+                complete: true,
+                note: 'fullEmailUrl is the complete RFC822 message with all attachments; the link is random and expires after one hour'
             }
         };
+
+        const tooBig = () => Buffer.byteLength(JSON.stringify(payload), 'utf8') > maxPayloadBytes;
+        if (tooBig()) {
+            // Keep the complete body readable where possible; shrink to a preview
+            // and let the one-time link carry the full original.
+            body = body.slice(0, 16000);
+            truncated = true;
+            payload.text = body;
+            payload.textTruncated = true;
+        }
+        if (tooBig()) {
+            payload.attachments = [];
+            payload.attachmentCount = attachments.length;
+        }
+        if (tooBig()) {
+            payload.text = body.slice(0, 4000);
+            payload.textTruncated = true;
+        }
+        if (tooBig()) {
+            throw new Error(`webhook payload remains over ${maxPayloadBytes} bytes after staging`);
+        }
+        return payload;
     }
 
     async function processAccount(account) {

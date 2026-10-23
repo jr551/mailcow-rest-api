@@ -518,7 +518,16 @@ module.exports = Object.freeze({
             // than silently dropped.
             includeAttachments: bool(process.env.WEBHOOK_INCLUDE_ATTACHMENTS, true),
             maxAttachmentBytes: num(process.env.WEBHOOK_MAX_ATTACHMENT_BYTES, 10 * 1024 * 1024),
-            maxAttachmentsTotalBytes: num(process.env.WEBHOOK_MAX_ATTACHMENTS_TOTAL_BYTES, 20 * 1024 * 1024)
+            maxAttachmentsTotalBytes: num(process.env.WEBHOOK_MAX_ATTACHMENTS_TOTAL_BYTES, 20 * 1024 * 1024),
+            // Webhook receivers (OpenMausBot) cap request bodies at 256 KB.
+            // The webhook payload therefore carries a small inline preview and
+            // signed links to the full raw email/attachments, which are staged
+            // on disk for one hour.
+            maxPayloadBytes: num(process.env.WEBHOOK_MAX_PAYLOAD_BYTES, 240 * 1024),
+            stagingDir: dataFile(process.env.WEBHOOK_STAGING_DIR, 'webhook-staging'),
+            stagingBaseUrl: process.env.WEBHOOK_STAGING_BASE_URL || process.env.PUBLIC_BASE_URL || 'https://userapi.delivering.email',
+            stagingTtlMs: num(process.env.WEBHOOK_STAGING_TTL_MS, 60 * 60 * 1000),
+            stagingSecret: process.env.WEBHOOK_STAGING_SECRET || ''
         };
     })(),
 
