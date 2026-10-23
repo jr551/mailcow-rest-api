@@ -23,6 +23,7 @@ const {
 const { headerSafe, formatPhrase } = require('./utils/rfc822');
 const { backoffFor } = require('./webhook-forwarder');
 const { deliverOutbound } = require('./outbound-webhook-deliver');
+const { createWebhookStager } = require('./webhook-staging');
 
 // Per-user outbound webhooks: mail that matched a rule is POSTed to a URL the
 // user named.
@@ -64,6 +65,7 @@ function createOutboundWebhookForwarder({
     logger,
     connect: connectOverride,
     request: requestOverride,
+    stager: stagerOverride,
     now = () => Date.now()
 }) {
     const pollIntervalMs = config.outboundWebhooks.pollIntervalMs;
@@ -73,6 +75,13 @@ function createOutboundWebhookForwarder({
     const includeAttachments = config.outboundWebhooks.includeAttachments;
     const maxAttachmentBytes = config.outboundWebhooks.maxAttachmentBytes;
     const maxAttachmentsTotalBytes = config.outboundWebhooks.maxAttachmentsTotalBytes;
+    const trustedHosts = config.outboundWebhooks.trustedHosts || [];
+    // Receivers cap request bodies (OpenMausBot: 256 KB) and answer 413
+    // forever, so an over-cap payload is shrunk and the complete message is
+    // offered as a one-time expiring link instead. 0 disables the cap.
+    const maxPayloadBytes = config.outboundWebhooks.maxPayloadBytes || 0;
+    let stager = stagerOverride || null;
+    const getStager = () => (stager ||= createWebhookStager({ config, logger }));
 
     let timer = null;
     let running = false;
@@ -113,7 +122,8 @@ function createOutboundWebhookForwarder({
             secret: webhook.secret,
             now,
             timeoutMs,
-            requestImpl: requestOverride || request
+            requestImpl: requestOverride || request,
+            trustedHosts
         });
         if (!outcome.ok) {
             const err = new Error(`Webhook returned ${outcome.status}: ${outcome.reply}`);
@@ -205,7 +215,7 @@ function createOutboundWebhookForwarder({
             }
         }
 
-        return {
+        return fitPayload({
             webhook: { id: webhook.id, label: webhook.label },
             mailbox: webhook.mailbox,
             uid,
@@ -243,7 +253,35 @@ function createOutboundWebhookForwarder({
                 bytes: source.length,
                 data: (truncated ? source.subarray(0, maxBytes) : source).toString('base64')
             }
-        };
+        }, source, webhook, uid, uidvalidity);
+    }
+
+    async function fitPayload(payload, source, webhook, uid, uidvalidity) {
+        if (!maxPayloadBytes) return payload;
+        const tooBig = () => Buffer.byteLength(JSON.stringify(payload), 'utf8') > maxPayloadBytes;
+        if (!tooBig()) return payload;
+        const staged = await getStager().stageMessage({ address: webhook.mailbox }, uidvalidity, uid, source);
+        payload.fullEmailUrl = staged.url;
+        payload.expiresAt = staged.expiresAt;
+        payload.payloadReduced = true;
+        payload.raw = { encoding: 'base64', truncated: true, omitted: true, bytes: payload.raw.bytes, data: null };
+        const steps = [
+            () => {
+                for (const a of payload.attachments) {
+                    if (a.content) { a.content = null; a.included = false; a.omittedReason = 'payload size cap; use fullEmailUrl'; }
+                }
+            },
+            () => { payload.html = null; },
+            () => { payload.text = payload.text && payload.text.slice(0, 16000); payload.message = payload.message && payload.message.slice(0, 16000); },
+            () => { payload.headers = {}; },
+            () => { payload.text = payload.text && payload.text.slice(0, 4000); payload.message = payload.message && payload.message.slice(0, 4000); }
+        ];
+        for (const step of steps) {
+            if (!tooBig()) break;
+            step();
+        }
+        if (tooBig()) throw new Error(`outbound webhook payload remains over ${maxPayloadBytes} bytes after reduction`);
+        return payload;
     }
 
     // The user-facing record of what happened, appended to Sent so it syncs to

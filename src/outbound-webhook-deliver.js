@@ -77,7 +77,8 @@ async function deliverOutbound({
     secret,
     now = () => Date.now(),
     timeoutMs = 15_000,
-    requestImpl = request
+    requestImpl = request,
+    trustedHosts = []
 }) {
     const { body, headers } = deliveryHeaders(webhook, payload, { secret, now });
     const started = now();
@@ -91,7 +92,7 @@ async function deliverOutbound({
     let dispatcher;
     if (requestImpl === request) {
         try {
-            dispatcher = (await createPinnedDispatcher(webhook.url)) || undefined;
+            dispatcher = (await createPinnedDispatcher(webhook.url, { trustedHosts })) || undefined;
         } catch (err) {
             // Only a genuinely disallowed destination is permanent. A resolver
             // blip (EAI_AGAIN, SERVFAIL) throws here too, and treating that

@@ -74,7 +74,8 @@ async function runForwarder({ uids, envelopeDate, internalDate }) {
             pollIntervalMs: 60_000, timeoutMs: 5000, maxAttempts: 14, maxMessageBytes: 1024 * 1024,
             includeAttachments: true,
             maxAttachmentBytes: 1024 * 1024,
-            maxAttachmentsTotalBytes: 1024 * 1024
+            maxAttachmentsTotalBytes: 1024 * 1024,
+            stagingDir: require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'wh-date-')), stagingBaseUrl: 'https://mail.example', stagingTtlMs: 3600000, stagingSecret: 's'
         }
     };
 
@@ -142,7 +143,8 @@ test('webhook: a garbage date does not burn an attempt on a failing endpoint', a
         webhooks: {
             accounts: [{ address: 'f@x.com', password: 'p', url, mailbox: 'INBOX' }],
             pollIntervalMs: 60_000, timeoutMs: 5000, maxAttempts: 14, maxMessageBytes: 1024 * 1024,
-            includeAttachments: true, maxAttachmentBytes: 1024 * 1024, maxAttachmentsTotalBytes: 1024 * 1024
+            includeAttachments: true, maxAttachmentBytes: 1024 * 1024, maxAttachmentsTotalBytes: 1024 * 1024,
+            stagingDir: require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'wh-date-')), stagingBaseUrl: 'https://mail.example', stagingTtlMs: 3600000, stagingSecret: 's'
         }
     };
     const fake = makeFakeImap({

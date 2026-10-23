@@ -20,6 +20,9 @@ const { createPushStore } = require('./push-store');
 const { createPushSender } = require('./push-sender');
 const { createWebhookStore } = require('./webhook-store');
 const { createWebhookForwarder } = require('./webhook-forwarder');
+const { createWebhookStager } = require('./webhook-staging');
+const webhookStagingRoutes = require('./routes/webhook-staging');
+const webhookMessageRoutes = require('./routes/webhook-message');
 const { createOutboundWebhookStore } = require('./outbound-webhook-store');
 const { createOutboundWebhookForwarder } = require('./outbound-webhook-forwarder');
 const { createTrackingStore } = require('./tracking-store');
@@ -509,9 +512,10 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
     // when at least one account is configured.
     let webhookStore = null;
     let webhookForwarder = null;
+    const webhookStager = createWebhookStager({ config, logger: app.log });
     if (config.webhooks.accounts.length) {
         webhookStore = createWebhookStore({ filePath: config.webhooks.dbPath });
-        webhookForwarder = createWebhookForwarder({ config, store: webhookStore, logger: app.log });
+        webhookForwarder = createWebhookForwarder({ config, store: webhookStore, logger: app.log, stager: webhookStager });
     }
 
     const mailcowDb = createMailcowDb(config.mailcowDb);
@@ -577,7 +581,8 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
             config,
             store: outboundWebhookStore,
             queue: outboundWebhookQueue,
-            logger: app.log
+            logger: app.log,
+            stager: webhookStager
         })
         : null;
 
@@ -883,9 +888,12 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         sieveManager,
         // The test send must time out exactly as a real delivery does, or a
         // green test proves nothing about the worker.
-        timeoutMs: config.outboundWebhooks.timeoutMs
+        timeoutMs: config.outboundWebhooks.timeoutMs,
+        trustedHosts: config.outboundWebhooks.trustedHosts
     });
     await app.register(takeoverRoutes, { store: takeoverStore, worker: takeoverWorker });
+    await app.register(webhookStagingRoutes, { config, stager: webhookStager });
+    await app.register(webhookMessageRoutes, { config, stager: webhookStager });
     await app.register(iconProxyRoutes);
     await app.register(trackingRoutes, { store: trackingStore, smtp: config.smtp });
     await app.register(imageProxyRoutes, { cache: imageProxyCache, maxBytesPerDay: config.imageProxy.maxBytesPerDay });

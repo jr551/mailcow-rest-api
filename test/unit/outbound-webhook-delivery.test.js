@@ -315,3 +315,59 @@ test('delivery: a reserved header name is rejected at creation', () => {
         /reserved/i
     );
 });
+
+test('payload: an over-cap payload is shrunk and carries a one-time fullEmailUrl instead of 413-ing forever', async () => {
+    const big = 'Subject: big\r\nFrom: a@b.c\r\n\r\n' + 'x'.repeat(200_000) + '\n';
+    const { client } = fakeImap({ source: big });
+    const store = createOutboundWebhookStore({ filePath: ':memory:', secretBox: fakeBox, maxPerUser: 5 });
+    const queue = createWebhookStore({ filePath: ':memory:' });
+    const created = store.create({ user: 'me@example.com', password: 'pw', label: 'Big', url: 'https://receiver.example/hook' });
+    const http = stubHttp(200);
+    const staged = [];
+    const forwarder = createOutboundWebhookForwarder({
+        config: makeConfig({ maxPayloadBytes: 64 * 1024 }),
+        store,
+        queue,
+        logger: silentLog,
+        connect: async () => client,
+        request: http.fn,
+        stager: {
+            async stageMessage(account, uidvalidity, uid, source) {
+                staged.push({ account, uid, bytes: source.length });
+                return { url: 'https://mail.example/v1/webhook-message/' + 'a'.repeat(64), expiresAt: new Date(Date.now() + 3600e3).toISOString() };
+            }
+        }
+    });
+    await forwarder.tick();
+    assert.strictEqual(http.seen.length, 1);
+    const body = http.seen[0].opts.body;
+    assert.ok(Buffer.byteLength(body) <= 64 * 1024, 'payload fits the cap');
+    const payload = JSON.parse(body);
+    assert.strictEqual(payload.payloadReduced, true);
+    assert.match(payload.fullEmailUrl, /webhook-message\/a{64}$/);
+    assert.strictEqual(payload.raw.data, null);
+    assert.strictEqual(staged.length, 1);
+    assert.strictEqual(staged[0].account.address, created.mailbox);
+    assert.strictEqual(staged[0].bytes, Buffer.byteLength(big));
+});
+
+test('payload: under the cap nothing is staged and raw is still inline', async () => {
+    const { client } = fakeImap();
+    const store = createOutboundWebhookStore({ filePath: ':memory:', secretBox: fakeBox, maxPerUser: 5 });
+    const queue = createWebhookStore({ filePath: ':memory:' });
+    store.create({ user: 'me@example.com', password: 'pw', label: 'Small', url: 'https://receiver.example/hook' });
+    const http = stubHttp(200);
+    let stagedCalls = 0;
+    const forwarder = createOutboundWebhookForwarder({
+        config: makeConfig({ maxPayloadBytes: 64 * 1024 }),
+        store, queue, logger: silentLog,
+        connect: async () => client,
+        request: http.fn,
+        stager: { async stageMessage() { stagedCalls++; } }
+    });
+    await forwarder.tick();
+    const payload = JSON.parse(http.seen[0].opts.body);
+    assert.strictEqual(stagedCalls, 0);
+    assert.strictEqual(payload.fullEmailUrl, undefined);
+    assert.ok(payload.raw.data.length > 0);
+});
