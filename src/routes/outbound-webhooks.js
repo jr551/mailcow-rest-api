@@ -165,7 +165,8 @@ module.exports = async function outboundWebhookRoutes(app, {
     // not exist in this module, so the default parameter threw a
     // ReferenceError the moment the route registered without an injected
     // seam — taking the whole file's tests with it.
-    assertPublicDestination = assertPublicDestinationImpl
+    assertPublicDestination = assertPublicDestinationImpl,
+    trustedHosts = []
 } = {}) {
     if (!store) {
         app.log.info('outbound webhooks disabled — needs CREDENTIAL_ENCRYPTION_KEY');
@@ -268,7 +269,7 @@ module.exports = async function outboundWebhookRoutes(app, {
         // check that matters; this only turns a refusal into a 400 with a
         // readable reason instead of a bare connection error.
         try {
-            await assertPublicDestination(webhook.url, { schemes: ['https:'] });
+            await assertPublicDestination(webhook.url, { schemes: ['https:'], trustedHosts });
         } catch (err) {
             throw badRequest(`Webhook URL is not allowed: ${err.message}`);
         }
@@ -280,7 +281,8 @@ module.exports = async function outboundWebhookRoutes(app, {
                 payload: buildTestPayload(webhook, Date.now),
                 secret: webhook.secret,
                 timeoutMs: testSendTimeoutMs,
-                requestImpl
+                requestImpl,
+                trustedHosts
             });
         } catch (err) {
             if (err.permanent === true) {
@@ -347,7 +349,7 @@ module.exports = async function outboundWebhookRoutes(app, {
             // https only: the POST carries the message body, headers,
             // attachments and the raw RFC822 source, so a plaintext URL
             // would put mailbox contents on the wire in the clear.
-            await assertPublicDestination(req.body.url, { schemes: ['https:'] });
+            await assertPublicDestination(req.body.url, { schemes: ['https:'], trustedHosts });
         } catch (err) {
             throw badRequest(`Webhook URL is not allowed: ${err.message}`);
         }

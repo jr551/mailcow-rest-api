@@ -186,6 +186,7 @@ async function runForwarder(opts) {
     const url = `http://127.0.0.1:${server.address().port}/hook`;
 
     const store = createWebhookStore({ filePath: ':memory:' });
+    const stagingDir = require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'wh-stage-'));
     const cfg = {
         imap: { host: 'x', port: 993, secure: true, rejectUnauthorized: false, tlsServername: '', connectTimeoutMs: 5000 },
         webhooks: {
@@ -193,7 +194,12 @@ async function runForwarder(opts) {
             pollIntervalMs: 60_000, timeoutMs: 5000, maxAttempts, maxMessageBytes: 1024 * 1024,
             includeAttachments: opts.includeAttachments !== false,
             maxAttachmentBytes: opts.maxAttachmentBytes ?? 1024 * 1024,
-            maxAttachmentsTotalBytes: opts.maxAttachmentsTotalBytes ?? 1024 * 1024
+            maxAttachmentsTotalBytes: opts.maxAttachmentsTotalBytes ?? 1024 * 1024,
+            maxPayloadBytes: opts.maxPayloadBytes ?? 240 * 1024,
+            stagingDir,
+            stagingBaseUrl: 'https://mail.example',
+            stagingTtlMs: 60 * 60 * 1000,
+            stagingSecret: 'stage-secret'
         }
     };
 
@@ -206,16 +212,23 @@ async function runForwarder(opts) {
     await forwarder.tick();
     if (opts.secondTick) await forwarder.tick();
     await new Promise((r) => server.close(r));
-    return { received, deleted, store };
+    return { received, deleted, store, stagingDir };
+}
+
+// The full RFC822 source lives behind the one-time link, not in the payload.
+function stagedSource(stagingDir, url) {
+    const guid = url.split('/').pop();
+    return require('node:fs').readFileSync(require('node:path').join(stagingDir, 'messages', guid, 'message.eml'), 'utf8');
 }
 
 test('webhook: message is POSTed with a signature and deleted only after 2xx', async () => {
-    const { received, deleted, store } = await runForwarder({ status: 200, uids: [11] });
+    const { received, deleted, store, stagingDir } = await runForwarder({ status: 200, uids: [11] });
     try {
         assert.equal(received.length, 1);
         assert.equal(received[0].body.uid, 11);
         assert.equal(received[0].body.envelope.subject, 'msg-11');
-        assert.equal(Buffer.from(received[0].body.raw.data, 'base64').toString().includes('msg-11'), true);
+        assert.match(received[0].body.fullEmailUrl, /^https:\/\/mail\.example\/v1\/webhook-message\/[a-f0-9]{64}$/);
+        assert.ok(stagedSource(stagingDir, received[0].body.fullEmailUrl).includes('msg-11'));
         // V2: hex HMAC over "<timestamp>.<raw body>", so the signature is
         // bound to a moment in time and a replay can be rejected on age.
         assert.match(received[0].timestamp, /^\d{10}$/);
@@ -273,58 +286,38 @@ test('webhook: stops retrying after maxAttempts and leaves the message in place'
     } finally { store.close(); }
 });
 
-test('payload carries a decoded body, not just base64', async () => {
+test('payload carries a decoded body plus a one-time link to the full email', async () => {
     // A receiver is usually a model or a script; neither can do anything
-    // with base64. Shipping only `raw` meant the body was effectively
-    // unreadable and inflated the payload by a third.
-    const { received, store } = await runForwarder({ status: 200, uids: [14] });
+    // with base64. The body is inline; the complete original (every
+    // attachment included) is one random, expiring link away.
+    const { received, store, stagingDir } = await runForwarder({ status: 200, uids: [14] });
     try {
         const body = received[0].body;
         assert.equal(body.text, 'the readable body text');
-        assert.ok('html' in body, 'html key must be present even when null');
+        assert.equal(body.textTruncated, false);
         assert.ok(Array.isArray(body.attachments));
-        // Raw is still there for anything that wants to parse MIME itself.
-        assert.equal(body.raw.encoding, 'base64');
-        assert.ok(body.raw.data.length > 0);
+        assert.equal(body.raw, undefined, 'no base64 source in the payload');
+        assert.ok(Date.parse(body.expiresAt) > Date.now());
+        assert.ok(stagedSource(stagingDir, body.fullEmailUrl).startsWith('Subject: msg-14'));
     } finally { store.close(); }
 });
 
-test('attachment bytes are included, not just a manifest', async () => {
-    // Telling a receiver an invoice exists without giving it the invoice
-    // means it has to re-parse MIME out of the raw source — the work this
-    // payload exists to avoid.
+test('attachments are a manifest; their bytes travel in the full-email link', async () => {
     const { received, store } = await runForwarder({ status: 200, uids: [15] });
     try {
         const att = received[0].body.attachments;
         assert.equal(att.length, 1);
-        assert.equal(att[0].filename, 'invoice.pdf');
-        assert.equal(att[0].contentType, 'application/pdf');
-        assert.equal(att[0].included, true);
-        assert.equal(att[0].encoding, 'base64');
-        assert.equal(Buffer.from(att[0].content, 'base64').toString(), 'PDF-BYTES-1');
+        assert.deepEqual(att[0], { filename: 'invoice.pdf', contentType: 'application/pdf', part: '2', size: 11 });
+        assert.equal(received[0].body.attachmentCount, 1);
     } finally { store.close(); }
 });
 
-test('an oversized attachment is flagged, never silently dropped', async () => {
-    const { received, store } = await runForwarder({ status: 200, uids: [16], maxAttachmentBytes: 4 });
+test('an over-cap payload is shrunk to fit rather than rejected by the receiver', async () => {
+    const { received, store } = await runForwarder({ status: 200, uids: [16], maxPayloadBytes: 1200 });
     try {
-        const att = received[0].body.attachments[0];
-        // The receiver still learns something was attached and why it is
-        // missing, rather than seeing an empty list.
-        assert.equal(att.included, false);
-        assert.equal(att.content, null);
-        assert.equal(att.filename, 'invoice.pdf');
-        assert.match(att.omittedReason, /limit/);
-    } finally { store.close(); }
-});
-
-test('attachments can be turned off entirely', async () => {
-    const { received, store } = await runForwarder({ status: 200, uids: [17], includeAttachments: false });
-    try {
-        const att = received[0].body.attachments[0];
-        assert.equal(att.included, false);
-        assert.equal(att.content, null);
-        assert.match(att.omittedReason, /disabled/);
+        assert.equal(received.length, 1);
+        assert.ok(received[0].rawBody.length <= 1200);
+        assert.ok(received[0].body.fullEmailUrl);
     } finally { store.close(); }
 });
 

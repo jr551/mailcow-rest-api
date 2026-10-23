@@ -581,7 +581,8 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
             config,
             store: outboundWebhookStore,
             queue: outboundWebhookQueue,
-            logger: app.log
+            logger: app.log,
+            stager: webhookStager
         })
         : null;
 
@@ -887,7 +888,8 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         sieveManager,
         // The test send must time out exactly as a real delivery does, or a
         // green test proves nothing about the worker.
-        timeoutMs: config.outboundWebhooks.timeoutMs
+        timeoutMs: config.outboundWebhooks.timeoutMs,
+        trustedHosts: config.outboundWebhooks.trustedHosts
     });
     await app.register(takeoverRoutes, { store: takeoverStore, worker: takeoverWorker });
     await app.register(webhookStagingRoutes, { config, stager: webhookStager });

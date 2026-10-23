@@ -183,7 +183,7 @@ function createWebhookForwarder({ config, store, logger, connect: connectOverrid
 
         const attachments = acc.attachments.map((att) => ({
             filename: att.filename || null,
-            contentType: att.type || null,
+            contentType: att.contentType || null,
             part: att.id || null,
             size: Number(att.size) || null
         }));

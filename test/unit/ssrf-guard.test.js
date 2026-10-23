@@ -188,3 +188,39 @@ test('assertPublicDestination throws on a rejected destination', async () => {
         /private/i
     );
 });
+
+// Operator-trusted hosts: a tailnet receiver (MagicDNS → 100.64/10) must be
+// reachable for outbound webhooks without opening the guard for anyone else.
+const { parseTrustedHosts, isTrustedHost } = require('../../src/utils/ssrf-guard');
+const tailnet = async () => [{ address: '100.78.13.28', family: 4 }];
+const TAILNET_URL = 'https://omb.tail.ts.net:10000/hooks/x';
+
+test('parseTrustedHosts normalises a comma/space list', () => {
+    assert.deepEqual(parseTrustedHosts(' OMB.tail.ts.net., other.example ,,'), ['omb.tail.ts.net', 'other.example']);
+    assert.deepEqual(parseTrustedHosts(undefined), []);
+    assert.equal(isTrustedHost('omb.tail.ts.net', ['omb.tail.ts.net']), true);
+    assert.equal(isTrustedHost('evil.omb.tail.ts.net', ['omb.tail.ts.net']), false, 'exact match only');
+});
+
+test('a trusted host may resolve to a private address and is still pinned', async () => {
+    const trustedHosts = ['omb.tail.ts.net'];
+    const v = await assertPublicDestination(TAILNET_URL, { schemes: ['https:'], lookup: tailnet, trustedHosts });
+    assert.equal(v.ok, true);
+    let pinned;
+    class FakeAgent { constructor(o) { pinned = o; } }
+    assert.ok(await createPinnedDispatcher(TAILNET_URL, { lookup: tailnet, AgentCtor: FakeAgent, trustedHosts }));
+    assert.equal(typeof pinned.connect.lookup, 'function');
+});
+
+test('trust does not leak: untrusted hosts and wrong schemes are still refused', async () => {
+    const trustedHosts = ['omb.tail.ts.net'];
+    await assert.rejects(assertPublicDestination(TAILNET_URL, { schemes: ['https:'], lookup: tailnet }), { permanent: true });
+    await assert.rejects(
+        assertPublicDestination('https://other.example/x', { schemes: ['https:'], lookup: tailnet, trustedHosts }),
+        /private IP/
+    );
+    await assert.rejects(
+        assertPublicDestination('http://omb.tail.ts.net/x', { schemes: ['https:'], lookup: tailnet, trustedHosts }),
+        { permanent: true }
+    );
+});

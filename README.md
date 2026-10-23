@@ -324,6 +324,8 @@ Each card has a **Send test** button. It POSTs a synthetic payload through the *
 | `OUTBOUND_WEBHOOK_POLL_INTERVAL_MS` | `60000` | How often hidden `.wh-*` mailboxes are drained |
 | `OUTBOUND_WEBHOOK_MAX_ATTEMPTS` | `14` | Retry budget with backoff |
 | `OUTBOUND_WEBHOOK_MAX_MESSAGE_BYTES` | `26214400` | Skip forwarding past this |
+| `OUTBOUND_WEBHOOK_TRUSTED_HOSTS` | _(empty)_ | Comma/space list of exact hostnames allowed to resolve to private/CGNAT addresses (e.g. a Tailscale `*.ts.net` receiver). Still resolved and pinned; HTTPS still required. Operator-only — users cannot add hosts |
+| `OUTBOUND_WEBHOOK_MAX_PAYLOAD_BYTES` | `0` (off) | When a payload exceeds this, attachment bytes/raw/HTML are dropped and a one-time expiring `fullEmailUrl` to the complete `.eml` is added (`payloadReduced: true`). Set below your receiver's body cap (e.g. `245760` for a 256 KB limit) |
 
 </details>
 

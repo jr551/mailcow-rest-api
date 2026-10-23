@@ -149,17 +149,37 @@ function blockedDestination(message) {
     return err;
 }
 
+// Operator-configured exact hostnames (never user input) that may resolve to
+// a private address — e.g. a tailnet-only receiver such as
+// openmausbot.<tailnet>.ts.net, which MagicDNS answers with a 100.64/10 CGNAT
+// address. They are still resolved and pinned; only the private-address
+// refusal is skipped. Without this every such webhook was abandoned after one
+// "permanent" failure and its mail stranded in the hidden folder.
+function parseTrustedHosts(raw) {
+    return String(raw || '')
+        .split(/[\s,]+/)
+        .map((h) => normalizeHost(h).replace(/\.$/, ''))
+        .filter(Boolean);
+}
+
+function isTrustedHost(hostname, trustedHosts = []) {
+    if (!trustedHosts || !trustedHosts.length) return false;
+    const h = normalizeHost(hostname).replace(/\.$/, '');
+    return trustedHosts.includes(h);
+}
+
 // Resolve a URL's host and reject it if any answer is private. Returns the
 // checked addresses, or an empty array for a literal IP (already validated,
 // nothing to pin).
-async function resolvePublicAddresses(rawUrl, lookup = dns.lookup) {
+async function resolvePublicAddresses(rawUrl, lookup = dns.lookup, trustedHosts = []) {
     const hostname = new URL(rawUrl).hostname;
     const bare = normalizeHost(hostname);
+    const trusted = isTrustedHost(hostname, trustedHosts);
     if (isIP(bare)) {
         // Nothing to resolve, but a literal address still has to be public.
         // Returning early without checking is what let a webhook point at
         // http://127.0.0.1/ and have the server POST to it.
-        if (isPrivateIp(bare)) throw blockedDestination('Private IP addresses are blocked');
+        if (!trusted && isPrivateIp(bare)) throw blockedDestination('Private IP addresses are blocked');
         return [];
     }
 
@@ -172,7 +192,7 @@ async function resolvePublicAddresses(rawUrl, lookup = dns.lookup) {
         throw new Error('Hostname did not resolve');
     }
     if (!addresses.length) throw new Error('Hostname did not resolve');
-    if (addresses.some(({ address }) => isPrivateIp(address))) {
+    if (!trusted && addresses.some(({ address }) => isPrivateIp(address))) {
         throw blockedDestination('Hostname resolved to a private IP address');
     }
     // Every answer was checked, so hand them all to the connector. Pinning
@@ -194,8 +214,8 @@ function pinnedLookup(pinned) {
 
 // For undici/fetch callers. Returns null for a literal-IP host so the result
 // can be passed straight through.
-async function createPinnedDispatcher(rawUrl, { lookup = dns.lookup, AgentCtor = Agent } = {}) {
-    const pinned = await resolvePublicAddresses(rawUrl, lookup);
+async function createPinnedDispatcher(rawUrl, { lookup = dns.lookup, AgentCtor = Agent, trustedHosts = [] } = {}) {
+    const pinned = await resolvePublicAddresses(rawUrl, lookup, trustedHosts);
     if (!pinned.length) return null;
     return new AgentCtor({ connect: { lookup: pinnedLookup(pinned) } });
 }
@@ -213,7 +233,13 @@ async function createPinnedHttpsAgent(rawUrl, { lookup = dns.lookup, AgentCtor }
 // reason: callers wrap it in try/catch, and a helper that *returns* its
 // verdict is silently ignored by that shape — which is exactly how the
 // outbound-webhook route shipped with no working SSRF check at all.
-async function assertPublicDestination(rawUrl, { schemes, lookup = dns.lookup } = {}) {
+async function assertPublicDestination(rawUrl, { schemes, lookup = dns.lookup, trustedHosts = [] } = {}) {
+    if (isTrustedHost(new URL(rawUrl).hostname, trustedHosts)) {
+        const parsed = new URL(rawUrl);
+        if (schemes && !schemes.includes(parsed.protocol)) throw blockedDestination('Scheme not allowed');
+        await resolvePublicAddresses(rawUrl, lookup, trustedHosts);
+        return { ok: true, url: parsed };
+    }
     const v = validateTargetUrl(rawUrl, schemes ? { schemes } : undefined);
     if (!v.ok) throw blockedDestination(v.reason);
     await resolvePublicAddresses(rawUrl, lookup);
@@ -222,6 +248,8 @@ async function assertPublicDestination(rawUrl, { schemes, lookup = dns.lookup } 
 
 module.exports = {
     normalizeHost,
+    parseTrustedHosts,
+    isTrustedHost,
     isPrivateIp,
     isPrivateHostname,
     validateTargetUrl,

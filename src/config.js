@@ -31,6 +31,7 @@ const bool = (v, d) => {
 // the thing you get for free and "somewhere else" the thing you opt into.
 const nodePath = require('node:path');
 const { sanitizeWebhookHeaders } = require('./utils/webhook-headers');
+const { parseTrustedHosts } = require('./utils/ssrf-guard');
 const CACHE_PATH = process.env.CACHE_PATH || './data/cache.db';
 const dataFile = (envValue, filename) =>
     envValue || nodePath.join(nodePath.dirname(CACHE_PATH), filename);
@@ -301,7 +302,13 @@ module.exports = Object.freeze({
         maxMessageBytes: num(process.env.OUTBOUND_WEBHOOK_MAX_MESSAGE_BYTES, 25 * 1024 * 1024),
         includeAttachments: bool(process.env.OUTBOUND_WEBHOOK_INCLUDE_ATTACHMENTS, true),
         maxAttachmentBytes: num(process.env.OUTBOUND_WEBHOOK_MAX_ATTACHMENT_BYTES, 10 * 1024 * 1024),
-        maxAttachmentsTotalBytes: num(process.env.OUTBOUND_WEBHOOK_MAX_ATTACHMENTS_TOTAL_BYTES, 20 * 1024 * 1024)
+        maxAttachmentsTotalBytes: num(process.env.OUTBOUND_WEBHOOK_MAX_ATTACHMENTS_TOTAL_BYTES, 20 * 1024 * 1024),
+        // Exact hostnames, comma/space separated, that may resolve to a
+        // private address (e.g. a tailnet receiver). Operator-only.
+        trustedHosts: parseTrustedHosts(process.env.OUTBOUND_WEBHOOK_TRUSTED_HOSTS),
+        // Shrink payloads above this and attach a one-time fullEmailUrl.
+        // 0 = no cap (previous behaviour).
+        maxPayloadBytes: num(process.env.OUTBOUND_WEBHOOK_MAX_PAYLOAD_BYTES, 0)
     },
 
     takeover: {
