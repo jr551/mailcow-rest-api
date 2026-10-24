@@ -154,7 +154,7 @@ test('createPinnedDispatcher refuses a literal private IP', async () => {
 test('createPinnedDispatcher returns null for an already-checked literal IP', async () => {
     let looked = false;
     const lookup = async () => { looked = true; return []; };
-    const d = await createPinnedDispatcher('https://93.184.216.34/x', { lookup, AgentCtor: class {} });
+    const d = await createPinnedDispatcher('https://93.184.216.34/x', { AgentCtor: class {}, lookup });
     assert.equal(d, null);
     assert.equal(looked, false, 'a literal IP needs no resolution');
 });
@@ -192,7 +192,7 @@ test('assertPublicDestination throws on a rejected destination', async () => {
 // Operator-trusted hosts: a tailnet receiver (MagicDNS → 100.64/10) must be
 // reachable for outbound webhooks without opening the guard for anyone else.
 const { parseTrustedHosts, isTrustedHost } = require('../../src/utils/ssrf-guard');
-const tailnet = async () => [{ address: '100.78.13.28', family: 4 }];
+const tailnet = async () => [{ address: '100.64.0.1', family: 4 }];
 const TAILNET_URL = 'https://omb.tail.ts.net:10000/hooks/x';
 
 test('parseTrustedHosts normalises a comma/space list', () => {
