@@ -154,7 +154,7 @@ test('createPinnedDispatcher refuses a literal private IP', async () => {
 test('createPinnedDispatcher returns null for an already-checked literal IP', async () => {
     let looked = false;
     const lookup = async () => { looked = true; return []; };
-    const d = await createPinnedDispatcher('https://93.184.216.34/x', { AgentCtor: class {}, lookup });
+    const d = await createPinnedDispatcher('https://93.184.216.34/x', { lookup, AgentCtor: class {} });
     assert.equal(d, null);
     assert.equal(looked, false, 'a literal IP needs no resolution');
 });
