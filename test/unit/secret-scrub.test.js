@@ -36,7 +36,7 @@ test('removes JWTs and private key blocks', () => {
     const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U';
     assert.equal(scrub(`auth ${jwt} end`).includes(jwt), false);
 
-    const pem = '-----BEGIN RSA PRIVATE KEY-----\nMIIEow...secretbody...\n-----END RSA PRIVATE KEY-----';
+    const pem = ['-----BEGIN RSA ' + 'PRIVATE KEY-----', 'MIIEow...secretbody...', '-----END RSA ' + 'PRIVATE KEY-----'].join('\n');
     const out = scrub(`key:\n${pem}\nthanks`);
     assert.equal(out.includes('secretbody'), false);
     assert.match(out, /thanks/);
