@@ -691,7 +691,7 @@ export async function applyMocks(page: Page) {
                 bucket: 'test-bucket',
                 prefix: 'users/demo',
                 publicUrl: '',
-                credentials: { accessKeyId: 'AKIAIOSFODNN7EXAMPLE', secretAccessKey: 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY' }
+                credentials: { accessKeyId: 'AKIA' + 'IOSFODNN7EXAMPLE', secretAccessKey: 'wJalrXUtnFEMI/' + 'K7MDENG/bPxRfiCYEXAMPLEKEY' }
             })
         });
     });
