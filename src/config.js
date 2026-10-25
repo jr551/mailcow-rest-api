@@ -84,16 +84,15 @@ module.exports = Object.freeze({
         cacheMaxEntries: num(process.env.OCR_CACHE_MAX_ENTRIES, 1000)
     },
 
-    // Origins allowed to call the API cross-origin. The webmail SPA is served
-    // from webmail.delivering.email but talks to the API on
-    // userapi.delivering.email, so those calls are cross-origin and need both
-    // a preflight answer and Allow-Origin on the real response.
+    // Origins allowed to call the API cross-origin (e.g. webmail on one host
+    // calling the API on another). Empty until the operator sets
+    // API_CORS_ORIGINS and/or API_CORS_WILDCARD_APEX.
     apiCors: {
-        origins: (process.env.API_CORS_ORIGINS || process.env.DRIVE_CORS_ORIGINS || 'https://webmail.delivering.email,https://delivering.email,https://userapi.delivering.email')
+        origins: (process.env.API_CORS_ORIGINS || process.env.DRIVE_CORS_ORIGINS || '')
             .split(',').map(s => s.trim()).filter(Boolean),
         // Allow any https subdomain of these apex domains without listing
         // each one. Comma-separated, no leading dot.
-        wildcardApex: (process.env.API_CORS_WILDCARD_APEX || 'delivering.email')
+        wildcardApex: (process.env.API_CORS_WILDCARD_APEX || '')
             .split(',').map(s => s.trim()).filter(Boolean)
     },
 
@@ -532,7 +531,7 @@ module.exports = Object.freeze({
             // on disk for one hour.
             maxPayloadBytes: num(process.env.WEBHOOK_MAX_PAYLOAD_BYTES, 240 * 1024),
             stagingDir: dataFile(process.env.WEBHOOK_STAGING_DIR, 'webhook-staging'),
-            stagingBaseUrl: process.env.WEBHOOK_STAGING_BASE_URL || process.env.PUBLIC_BASE_URL || 'https://userapi.delivering.email',
+            stagingBaseUrl: process.env.WEBHOOK_STAGING_BASE_URL || process.env.PUBLIC_BASE_URL || '',
             stagingTtlMs: num(process.env.WEBHOOK_STAGING_TTL_MS, 60 * 60 * 1000),
             stagingSecret: process.env.WEBHOOK_STAGING_SECRET || ''
         };

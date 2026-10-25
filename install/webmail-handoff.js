@@ -6,7 +6,8 @@
     //
     // Injected by the host nginx (sub_filter) rather than added to mailcow's
     // tree, because mailcow's update.sh resets its own working copy.
-    var API = 'https://userapi.delivering.email';
+    // Set to your mailcow-rest-api public origin (no trailing slash).
+    var API = 'https://api.example.com';
     var APP = API + '/webmail/';
 
     function ready(fn) {

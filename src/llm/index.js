@@ -277,7 +277,7 @@ function normalizeModelList(body) {
 }
 
 // Model catalog probe: `GET {baseUrl}/models`, the discovery endpoint every
-// OpenAI-compatible gateway serves (OpenAI, Bifrost, LiteLLM, Ollama, vLLM,
+// OpenAI-compatible gateway serves (OpenAI, LiteLLM, Ollama, vLLM,
 // LM Studio). Anthropic exposes the same shape at /v1/models behind x-api-key.
 //
 // Separate from the chat adapters because it serves a UI affordance (the

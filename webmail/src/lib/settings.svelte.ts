@@ -265,7 +265,7 @@ function load(): Settings {
                 composeHistorySummary: parsed.composeHistorySummary !== false,
                 vipAddresses: typeof parsed.vipAddresses === 'string'
                     ? parsed.vipAddresses
-                    : 'family@delivering.email, family@rowe.net.me',
+                    : '',
                 weatherChip: !!parsed.weatherChip,
                 weatherChipOutlook: !!parsed.weatherChipOutlook,
                 weatherLatitude: typeof parsed.weatherLatitude === 'number' ? parsed.weatherLatitude : 51.5074,
@@ -323,7 +323,7 @@ function load(): Settings {
         aiSuggestReply: true,
         preSendCheck: true,
         composeHistorySummary: true,
-        vipAddresses: 'family@delivering.email, family@rowe.net.me',
+        vipAddresses: '',
         weatherChip: false,
         weatherChipOutlook: false,
         weatherLatitude: 51.5074,

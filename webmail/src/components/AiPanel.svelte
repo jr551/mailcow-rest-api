@@ -95,10 +95,8 @@
 
     function useAsDraft(text: string) {
         ui.composeOpen = true;
-        ui.composeContext = { replyTo: ui.detail };
-        // user can paste — we don't auto-fill the textarea since Compose owns its
-        // state; copying is the cleanest hand-off.
-        copy(text);
+        ui.composeContext = { replyTo: ui.detail, mode: 'reply', draftPlain: text };
+        ui.aiPanelOpen = false;
     }
 </script>
 

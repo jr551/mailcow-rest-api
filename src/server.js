@@ -231,8 +231,8 @@ function createLogger() {
 }
 
 // CORS is handled by hand rather than with @fastify/cors: the only
-// cross-origin caller is the webmail SPA (webmail.delivering.email talking to
-// userapi.delivering.email), the policy is two lines, and a preflight has to
+// cross-origin caller is the webmail SPA (webmail.example.com talking to
+// api.example.com), the policy is two lines, and a preflight has to
 // be answered before the auth hook runs — which is easier to guarantee with an
 // explicit hook than with a plugin's registration order.
 const CORS_ALLOW_METHODS = 'GET,POST,PUT,DELETE,PATCH,OPTIONS';
@@ -864,7 +864,7 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         rejectUnauthorized: imapCfg.rejectUnauthorized,
         // Use the same SNI/cert hostname the IMAP client uses, so STARTTLS
         // on dovecot's ManageSieve port (4190) verifies against the public
-        // cert (delivering.email) instead of the internal docker host.
+        // cert (the public mail host) instead of the internal docker host.
         tlsServername: imapCfg.tlsServername
     }) : null;
     await app.register(mailRulesRoutes, { sieveManager, outboundWebhooks: outboundWebhookStore });

@@ -2144,7 +2144,7 @@
     {/if}
 
     {#if ui.composeOpen}
-        <Compose onClose={() => (ui.composeOpen = false)} />
+        <Compose onClose={() => { ui.composeOpen = false; ui.composeContext = null; }} />
     {/if}
 
     {#if ui.settingsOpen}

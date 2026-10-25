@@ -391,7 +391,7 @@ class ManageSieveClient {
         this.rejectUnauthorized = rejectUnauthorized;
         // Public TLS cert hostname — separate from the connect host so
         // we can talk to dovecot-mailcow over the docker network while
-        // still validating against the user-facing cert (delivering.email).
+        // still validating against the user-facing cert (the public mail host).
         // Without this we got "Hostname/IP does not match certificate's
         // altnames: Host: dovecot-mailcow" on every blocked-recipient /
         // mail-rule call.

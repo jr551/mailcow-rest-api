@@ -204,7 +204,7 @@ function createMailcowDb({ host, port, user, pass, name }) {
             for (const r of aliasRows) {
                 if (!r.address) continue;
                 if (r.address.startsWith('@')) {
-                    // Catch-all alias like @delivering.email — not a literal
+                    // Catch-all alias like @example.com — not a literal
                     // address but signals wildcard authority over the domain.
                     wildcardDomains.push(r.address.slice(1).toLowerCase());
                 } else {

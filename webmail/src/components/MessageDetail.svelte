@@ -1365,17 +1365,17 @@
                                 onclick={toggleAiMenu}
                                 aria-haspopup="menu"
                                 aria-expanded={aiMenuOpen}
-                                title="AI tools, calendar and suggested actions"
+                                title="Help with this message"
                                 data-testid="ai-menu-btn"
                             >
-                                <Icon name="sparkles" size={12} /> AI
+                                <Icon name="sparkles" size={12} /> Help
                                 <Icon name="chevronDown" size={11} />
                             </button>
                             {#if aiMenuOpen}
                                 <div
                                     class="ai-menu-pop"
                                     role="menu"
-                                    aria-label="AI actions"
+                                    aria-label="Help with this message"
                                     tabindex="-1"
                                     data-testid="ai-menu-pop"
                                     onclick={(e) => e.stopPropagation()}
@@ -1390,8 +1390,8 @@
                                     >
                                         <span class="ai-menu-icon"><Icon name="sparkles" size={13} /></span>
                                         <span class="ai-menu-text">
-                                            <span class="ai-menu-label">AI tools</span>
-                                            <span class="ai-menu-hint muted small">Summarize, draft, translate, actions</span>
+                                            <span class="ai-menu-label">Help with this message</span>
+                                            <span class="ai-menu-hint muted small">Summarize, draft, translate</span>
                                         </span>
                                     </button>
                                     {#if isChatConfigured()}
@@ -1418,7 +1418,7 @@
                                     >
                                         <span class="ai-menu-icon"><Icon name="wand" size={13} /></span>
                                         <span class="ai-menu-text">
-                                            <span class="ai-menu-label">Other AI actions</span>
+                                            <span class="ai-menu-label">More actions</span>
                                             <span class="ai-menu-hint muted small">Suggested next steps for this email</span>
                                         </span>
                                     </button>

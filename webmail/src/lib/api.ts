@@ -3,7 +3,7 @@ import { recallCreds } from './keychain';
 import { aiProviderOverride } from './settings.svelte';
 import { reportCriticalError } from './error-doctor.svelte';
 
-// API base override for cross-origin deployment (userapi.delivering.email)
+// API base override for cross-origin deployment (e.g. userapi.example.com)
 declare global { interface Window { __IMAP_API_BASE__?: string; } }
 export function apiBase(): string { const raw = (globalThis as any).__IMAP_API_BASE__ ?? ''; return String(raw).replace(/\/+$/, ''); }
 export function apiUrl(path: string): string { if (!path.startsWith('/')) return path; return apiBase() + path; }
