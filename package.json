@@ -1,6 +1,6 @@
 {
     "name": "mailcow-rest-api",
-    "version": "0.26.4",
+    "version": "0.26.5",
     "description": "Mailcow add-on REST API, OpenAPI UI, and optional MCP server for mailbox, send, calendar, drive, push, and account workflows.",
     "main": "src/server.js",
     "files": [
@@ -67,5 +67,8 @@
     "devDependencies": {
         "pino-pretty": "13.2.0",
         "puppeteer-core": "^25.15.0"
+    },
+    "allowScripts": {
+        "better-sqlite3@13.0.3": true
     }
 }

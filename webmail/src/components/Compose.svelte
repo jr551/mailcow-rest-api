@@ -69,7 +69,11 @@
     }
 
     function buildBodyHtml(): string {
-        if (!replyTo) return '<p></p>';
+        const draftPlain = (ui.composeContext?.draftPlain || '').trim();
+        if (!replyTo) {
+            if (!draftPlain) return '<p></p>';
+            return `<p>${escapeHtml(draftPlain).replace(/\n/g, '<br>')}</p>`;
+        }
         const isForward = replyMode === 'forward';
         const heading = isForward
             ? `--- Forwarded message ---<br>From: ${escapeHtml(formatAddress(replyTo.envelope.from?.[0]))}<br>Date: ${escapeHtml(formatFullDate(replyTo.internalDate || replyTo.envelope.date))}<br>Subject: ${escapeHtml(replyTo.envelope.subject || '')}`
@@ -80,7 +84,10 @@
         const quoted = sourceText
             ? escapeHtml(sourceText).replace(/\n/g, '<br>')
             : '<em>[No text content]</em>';
-        return `<p></p><p></p><p>${heading}</p><blockquote><p>${quoted}</p></blockquote>`;
+        const draftBlock = draftPlain
+            ? `<p>${escapeHtml(draftPlain).replace(/\n/g, '<br>')}</p>`
+            : '<p></p><p></p>';
+        return `${draftBlock}<p>${heading}</p><blockquote><p>${quoted}</p></blockquote>`;
     }
 
     // htmlToPlainText now lives in lib/reply-suggest.svelte, shared with

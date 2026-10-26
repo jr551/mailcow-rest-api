@@ -22,7 +22,12 @@ export interface UiState {
     detailLoading: boolean;
     detailError: string | null;
     composeOpen: boolean;
-    composeContext: { replyTo?: MessageDetail | null; mode?: 'new' | 'reply' | 'replyAll' | 'forward' } | null;
+    composeContext: {
+        replyTo?: MessageDetail | null;
+        mode?: 'new' | 'reply' | 'replyAll' | 'forward';
+        /** Plain-text draft to place above the quoted reply body (one-shot). */
+        draftPlain?: string;
+    } | null;
     settingsOpen: boolean;
     setupOpen: boolean;
     aiPanelOpen: boolean;

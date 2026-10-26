@@ -72,16 +72,16 @@ test('listModels: requests {baseUrl}/models with the bearer key', async () => {
     assert.equal(seenAuth, 'Bearer sk-test');
 });
 
-test('listModels: honours a custom base URL (Bifrost-style gateway)', async () => {
+test('listModels: honours a custom base URL (OpenAI-compatible gateway)', async () => {
     let seenUrl = null;
     const fetcher = fakeFetcher([(url) => { seenUrl = url; return bodyJson({ data: [{ id: 'x' }] }); }]);
     const r = await llm.listModels({
-        provider: provider({ baseUrl: 'https://bifrost.example/v1/', apiKey: 'sk-gw' }),
+        provider: provider({ baseUrl: 'https://gateway.example/v1/', apiKey: 'sk-gw' }),
         fetcher
     });
     assert.equal(r.ok, true);
     // trailing slash normalised away
-    assert.equal(seenUrl, 'https://bifrost.example/v1/models');
+    assert.equal(seenUrl, 'https://gateway.example/v1/models');
 });
 
 test('listModels: provider 500 degrades to ok:false with a reason, no throw', async () => {

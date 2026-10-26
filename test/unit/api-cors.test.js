@@ -1,7 +1,7 @@
 'use strict';
 
-// The webmail SPA is served from webmail.delivering.email but calls the API on
-// userapi.delivering.email, so every call is cross-origin. Two things have to
+// The webmail SPA is served from webmail.example.com but calls the API on
+// api.example.com, so every call is cross-origin. Two things have to
 // hold or the whole SPA goes dark with opaque "Failed to fetch" errors:
 //
 //   1. the preflight must be answered *before* the auth hook — a browser
@@ -13,8 +13,8 @@
 //      looks correct in a curl -i but fires after the headers are on the wire,
 //      so the browser never sees them.
 
-process.env.API_CORS_ORIGINS = 'https://webmail.delivering.email,https://delivering.email';
-process.env.API_CORS_WILDCARD_APEX = 'delivering.email';
+process.env.API_CORS_ORIGINS = 'https://webmail.cors-fixture.test,https://cors-fixture.test';
+process.env.API_CORS_WILDCARD_APEX = 'cors-fixture.test';
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -28,7 +28,7 @@ function makeApp() {
     });
 }
 
-const ORIGIN = 'https://webmail.delivering.email';
+const ORIGIN = 'https://webmail.cors-fixture.test';
 
 test('preflight is answered 204 with the full header set', async () => {
     const app = await makeApp();
@@ -102,11 +102,11 @@ test('an unlisted origin gets no CORS headers', async () => {
 test('any https subdomain of the apex is allowed, plain http is not', async () => {
     const app = await makeApp();
     try {
-        const ok = await app.inject({ method: 'GET', url: '/health', headers: { origin: 'https://webmail2.delivering.email' } });
-        assert.equal(ok.headers['access-control-allow-origin'], 'https://webmail2.delivering.email');
+        const ok = await app.inject({ method: 'GET', url: '/health', headers: { origin: 'https://webmail2.cors-fixture.test' } });
+        assert.equal(ok.headers['access-control-allow-origin'], 'https://webmail2.cors-fixture.test');
 
         // Credentialed CORS must not be handed to a downgraded origin.
-        const insecure = await app.inject({ method: 'GET', url: '/health', headers: { origin: 'http://webmail2.delivering.email' } });
+        const insecure = await app.inject({ method: 'GET', url: '/health', headers: { origin: 'http://webmail2.cors-fixture.test' } });
         assert.equal(insecure.headers['access-control-allow-origin'], undefined);
     } finally {
         await app.close();
