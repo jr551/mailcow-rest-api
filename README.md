@@ -383,7 +383,7 @@ Turn it on under **Settings → AI → AI assistant takeover**. It is off by def
 
 Tuning: `TAKEOVER_MAX_REPLIES_PER_HOUR` (default `1`, `0` pauses it entirely), `TAKEOVER_MIN_DELAY_MINUTES` (default `5`, floor `5`), `TAKEOVER_LOOKBACK_HOURS`, `TAKEOVER_POLL_INTERVAL_MS`. See `.env.example`.
 
-> A note on what approval actually means: an approval link works for one hour, and every pending approval is lost when the service restarts. If a link has gone stale the page says plainly that **nothing was sent**.
+> A note on what approval actually means: pending approvals are stored on disk and survive service restarts. A link that has passed its one-hour mark no longer works directly, but the draft is not lost — a fresh approval link is emailed to the owner's mailbox automatically the first time the stale link is used, and the page says plainly that the original link expired. If the link is unknown (already approved, denied, or older than the retention window), the page says that nothing was sent.
 
 ## 🧪 Development
 

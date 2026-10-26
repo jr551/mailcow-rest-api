@@ -846,6 +846,7 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         getPublicBaseUrl,
         imapCache,
         secretBox,
+        approvalEmailBaseUrl: config.pendingSends.approvalEmailBaseUrl,
         pendingSendsDbPath: config.pendingSends.dbPath
     });
     await app.register(pushRoutes, { pushStore, lookup: pushLookup });

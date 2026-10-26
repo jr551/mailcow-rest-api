@@ -293,10 +293,13 @@ module.exports = async function sendRoutes(app, {
     approvalEmailBaseUrl
 }) {
     const smtpEnabled = !!(smtp && smtp.host);
-
+    // The resend path has no request, so it needs a base URL for the fresh
+    // approve/deny links. Prefer the configured one; otherwise remember the
+    // base URL the original send used (it built its links from the request).
+    let lastApprovalBaseUrl = approvalEmailBaseUrl || '';
     const resendApproval = smtpEnabled
         ? async ({ token, entry }) => {
-            const baseUrl = approvalEmailBaseUrl || '';
+            const baseUrl = approvalEmailBaseUrl || lastApprovalBaseUrl;
             const approveUrl = `${baseUrl}/v1/messages/approve/${token}`;
             const denyUrl = `${baseUrl}/v1/messages/deny/${token}`;
             const { html, text } = buildApprovalEmail({
@@ -327,7 +330,7 @@ module.exports = async function sendRoutes(app, {
         secretBox,
         logger: app.log,
         resendApproval,
-        baseUrl: approvalEmailBaseUrl
+        baseUrl: approvalEmailBaseUrl || lastApprovalBaseUrl
     });
 
     app.addHook('onClose', async () => {
@@ -463,6 +466,7 @@ p.note{color:#666;font-size:13px}</style></head>
             });
 
             const baseUrl = getPublicBaseUrl ? getPublicBaseUrl(req) : '';
+            lastApprovalBaseUrl = baseUrl;
             const approveUrl = `${baseUrl}/v1/messages/approve/${token}`;
             const denyUrl = `${baseUrl}/v1/messages/deny/${token}`;
 
