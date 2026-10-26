@@ -63,6 +63,14 @@ module.exports = Object.freeze({
         path: dataFile(process.env.IMAP_CACHE_PATH, 'imap-cache.db')
     },
 
+    pendingSends: {
+        dbPath: dataFile(process.env.PENDING_SENDS_DB_PATH, 'pending-sends.db'),
+        // Expiry resends build fresh approve/deny links with no request in
+        // scope, so the base URL has to come from config when the captured
+        // request host is gone (restart). Same precedence as stagingBaseUrl.
+        approvalEmailBaseUrl: process.env.PUBLIC_BASE_URL || 'https://userapi.delivering.email'
+    },
+
     pool: {
         max: num(process.env.POOL_MAX, 50),
         idleMs: num(process.env.POOL_IDLE_MS, 30_000)

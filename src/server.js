@@ -838,7 +838,17 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
     await app.register(messageRoutes, { pool, ocrCache, imapCache });
     await app.register(aiRoutes, { aiCache });
     await app.register(linkCheckRoutes);
-    await app.register(sendRoutes, { db: mailcowDb, smtp: config.smtp, pool, trackingStore, getPublicBaseUrl, imapCache });
+    await app.register(sendRoutes, {
+        db: mailcowDb,
+        smtp: config.smtp,
+        pool,
+        trackingStore,
+        getPublicBaseUrl,
+        imapCache,
+        secretBox,
+        approvalEmailBaseUrl: config.pendingSends.approvalEmailBaseUrl,
+        pendingSendsDbPath: config.pendingSends.dbPath
+    });
     await app.register(pushRoutes, { pushStore, lookup: pushLookup });
 
     if (pushSender.enabled) {
