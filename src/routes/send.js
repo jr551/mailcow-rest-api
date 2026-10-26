@@ -205,6 +205,26 @@ lost when the service restarts. The draft was not delivered to anyone.</p>
 </body></html>`;
 }
 
+function buildExpiredApprovalFreshLinkPage(freshUrl) {
+    const linkSafe = escapeEmailHtml(freshUrl, 2000);
+    return `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Approval expired — a new link was sent</title>
+<style>body{font-family:sans-serif;max-width:600px;margin:40px auto;padding:0 16px;text-align:center}
+.error{color:#f59e0b;font-size:48px;margin-bottom:16px}
+h1{margin:0 0 8px}
+p{color:#666}
+a.btn{display:inline-block;margin-top:16px;padding:12px 24px;background:#10b981;color:#fff;text-decoration:none;border-radius:6px;font-weight:600}
+p.note{margin-top:24px;font-size:13px}</style></head>
+<body>
+<div class="error">⏳</div>
+<h1>Approval expired — a new link was sent</h1>
+<p><strong>Nothing was sent to the original recipient.</strong> A fresh approval link was emailed to your mailbox.</p>
+<p><a class="btn" href="${linkSafe}">Open the new approval link</a></p>
+<p class="note">If you do not see the email, check spam and try the button above.</p>
+</body></html>`;
+}
+
 function buildApprovalEmail({ from, to, subject, approveUrl, denyUrl, text: bodyText, html: bodyHtml, unsureReason }) {
     const toList = Array.isArray(to) ? to.join(', ') : to;
     const fromSafe = escapeEmailHtml(from);
@@ -261,13 +281,103 @@ This request was made via the MCP/API.`;
     return { html, text };
 }
 
-module.exports = async function sendRoutes(app, { db, smtp, pool, trackingStore, getPublicBaseUrl, imapCache }) {
+module.exports = async function sendRoutes(app, {
+    db,
+    smtp,
+    pool,
+    trackingStore,
+    getPublicBaseUrl,
+    imapCache,
+    secretBox,
+    pendingSendsDbPath,
+    approvalEmailBaseUrl
+}) {
     const smtpEnabled = !!(smtp && smtp.host);
-    const pendingStore = createPendingSendStore();
+
+    const resendApproval = smtpEnabled
+        ? async ({ token, entry }) => {
+            const baseUrl = approvalEmailBaseUrl || '';
+            const approveUrl = `${baseUrl}/v1/messages/approve/${token}`;
+            const denyUrl = `${baseUrl}/v1/messages/deny/${token}`;
+            const { html, text } = buildApprovalEmail({
+                from: entry.from,
+                to: entry.to,
+                subject: entry.subject,
+                approveUrl,
+                denyUrl,
+                text: entry.text,
+                html: entry.html,
+                unsureReason: entry.unsureReason
+            });
+            await sendMessage({
+                smtpConfig: smtp,
+                user: entry.user,
+                pass: entry.pass,
+                from: entry.from,
+                to: [entry.user],
+                subject: `Approve sending: ${entry.subject}`,
+                text,
+                html
+            });
+        }
+        : null;
+
+    const pendingStore = createPendingSendStore({
+        filePath: pendingSendsDbPath,
+        secretBox,
+        logger: app.log,
+        resendApproval,
+        baseUrl: approvalEmailBaseUrl
+    });
 
     app.addHook('onClose', async () => {
         pendingStore.close();
     });
+
+    function buildConfirmApprovalHtml(entry) {
+        const toList = Array.isArray(entry.to) ? entry.to.join(', ') : String(entry.to || '');
+        const bodyCell = entry.text
+            ? `<pre style="white-space:pre-wrap;word-wrap:break-word;margin:0;max-height:320px;overflow:auto;">${escapeEmailHtml(entry.text, 4000)}</pre>`
+            : (entry.html ? '<em>HTML-only draft — the body is not shown in this preview.</em>' : '<em>(empty)</em>');
+        return `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Confirm send</title>
+<style>body{font-family:sans-serif;max-width:600px;margin:40px auto;padding:0 16px}
+h1{margin:0 0 16px}
+dl{background:#f6f6f6;padding:16px;border-radius:8px}
+dt{font-weight:600;color:#444}
+dd{margin:0 0 12px}
+button{padding:12px 24px;background:#10b981;color:#fff;border:0;border-radius:6px;font-weight:600;font-size:15px;cursor:pointer}
+p.note{color:#666;font-size:13px}</style></head>
+<body>
+<h1>Confirm sending this email</h1>
+<dl>
+  <dt>From</dt><dd>${escapeEmailHtml(entry.from)}</dd>
+  <dt>To</dt><dd>${escapeEmailHtml(toList, 400)}</dd>
+  <dt>Subject</dt><dd>${escapeEmailHtml(entry.subject)}</dd>
+  <dt>Body</dt><dd>${bodyCell}</dd>
+</dl>
+<form method="POST" action="">
+  <button type="submit">Send now</button>
+</form>
+<p class="note">Nothing has been sent yet. This step exists because mail scanners follow links automatically.</p>
+</body></html>`;
+    }
+
+    function replyApprovalUnavailable(token, req, reply) {
+        const fresh = {};
+        const entry = pendingStore.get(token, (info) => { fresh.info = info; });
+        if (entry) {
+            return reply.code(404).type('text/html').send(buildConfirmApprovalHtml(entry));
+        }
+        if (fresh.info) {
+            const baseUrl = getPublicBaseUrl ? getPublicBaseUrl(req) : (approvalEmailBaseUrl || '');
+            const freshUrl = `${baseUrl}/v1/messages/approve/${fresh.info.freshToken}`;
+            return reply.code(404).type('text/html').send(buildExpiredApprovalFreshLinkPage(freshUrl));
+        }
+        return reply.code(404).type('text/html').send(buildExpiredApprovalPage());
+    }
 
     app.post('/v1/messages/send', {
         schema: {
@@ -331,6 +441,11 @@ module.exports = async function sendRoutes(app, { db, smtp, pool, trackingStore,
 
         // If the request comes from Basic Auth (MCP / API client), require approval.
         if (isBasicAuth(req)) {
+            // Approval-email-only: the owner reads the reason before he
+            // clicks. The approved send itself never includes it.
+            const unsureReason = typeof body.unsureReason === 'string' && body.unsureReason.trim()
+                ? body.unsureReason
+                : undefined;
             const token = pendingStore.create({
                 user,
                 pass,
@@ -343,13 +458,9 @@ module.exports = async function sendRoutes(app, { db, smtp, pool, trackingStore,
                 html: body.html,
                 inReplyTo: body.inReplyTo,
                 attachments: body.attachments,
-                trackOpens: body.trackOpens
+                trackOpens: body.trackOpens,
+                unsureReason
             });
-            // Approval-email-only: the owner reads the reason before he
-            // clicks. The approved send itself never includes it.
-            const unsureReason = typeof body.unsureReason === 'string' && body.unsureReason.trim()
-                ? body.unsureReason
-                : undefined;
 
             const baseUrl = getPublicBaseUrl ? getPublicBaseUrl(req) : '';
             const approveUrl = `${baseUrl}/v1/messages/approve/${token}`;
@@ -497,71 +608,77 @@ module.exports = async function sendRoutes(app, { db, smtp, pool, trackingStore,
         return { sent: result.sent, messageId: result.messageId };
     }
 
-    // Mail scanners (SafeLinks, Proofpoint, Mimecast) fetch the URLs in
-    // inbound mail, and the approval email lands in the user's own INBOX —
-    // i.e. it is inbound mail. A GET that sent the message therefore let a
-    // scanner approve it before the user ever saw it. GET now only renders a
-    // confirmation page; the send happens on POST from that form.
-    app.get('/v1/messages/approve/:token', {
-        config: { public: true },
-        schema: {
-            tags: ['messages'],
-            summary: 'Show the confirmation page for a pending email',
-            response: { 200: { type: 'string' }, 404: problemSchema }
-        }
-    }, async (req, reply) => {
-        const entry = pendingStore.get(req.params.token);
-        if (!entry) {
-            return reply.code(404).type('text/html').send(buildExpiredApprovalPage());
-        }
-        const toList = Array.isArray(entry.to) ? entry.to.join(', ') : String(entry.to || '');
-        // Show the draft body so the approver sees what is being sent.
-        // Plain text is escaped into a <pre>; an HTML-only draft gets a
-        // note — the raw html is never injected into this page (XSS).
-        const bodyCell = entry.text
-            ? `<pre style="white-space:pre-wrap;word-wrap:break-word;margin:0;max-height:320px;overflow:auto;">${escapeEmailHtml(entry.text, 4000)}</pre>`
-            : (entry.html ? '<em>HTML-only draft — the body is not shown in this preview.</em>' : '<em>(empty)</em>');
-        return reply.type('text/html').send(`<!DOCTYPE html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex,nofollow">
-<title>Confirm send</title>
-<style>body{font-family:sans-serif;max-width:600px;margin:40px auto;padding:0 16px}
-h1{margin:0 0 16px}
-dl{background:#f6f6f6;padding:16px;border-radius:8px}
-dt{font-weight:600;color:#444}
-dd{margin:0 0 12px}
-button{padding:12px 24px;background:#10b981;color:#fff;border:0;border-radius:6px;font-weight:600;font-size:15px;cursor:pointer}
-p.note{color:#666;font-size:13px}</style></head>
-<body>
-<h1>Confirm sending this email</h1>
-<dl>
-  <dt>From</dt><dd>${escapeEmailHtml(entry.from)}</dd>
-  <dt>To</dt><dd>${escapeEmailHtml(toList, 400)}</dd>
-  <dt>Subject</dt><dd>${escapeEmailHtml(entry.subject)}</dd>
-  <dt>Body</dt><dd>${bodyCell}</dd>
-</dl>
-<form method="POST" action="">
-  <button type="submit">Send now</button>
-</form>
-<p class="note">Nothing has been sent yet. This step exists because mail scanners follow links automatically.</p>
-</body></html>`);
-    });
-
-    app.post('/v1/messages/approve/:token', {
-        config: { public: true },
-        schema: {
-            tags: ['messages'],
-            summary: 'Approve and send a pending email',
-            response: {
-                200: { type: 'object', properties: { sent: { type: 'boolean' }, messageId: { type: 'string' } } },
-                404: problemSchema,
-                502: problemSchema
+    // Mail scanners fetch approval links in inbound mail. GET only renders a
+    // confirmation page; POST sends. Approve/deny live in a nested plugin so
+    // form-urlencoded and empty-body POSTs work without touching JSON /send.
+    await app.register(async function approveRoutesScope(app2) {
+        app2.addContentTypeParser('application/x-www-form-urlencoded', { parseAs: 'string' }, (_req, body, done) => {
+            done(null, body);
+        });
+        app2.addContentTypeParser(/^text\/plain(\s*;.*)?$/, { parseAs: 'string' }, (_req, body, done) => {
+            done(null, body);
+        });
+        app2.addContentTypeParser('*', { parseAs: 'buffer', bodyLimit: 65536 }, (_req, _body, done) => {
+            done(null, undefined);
+        });
+        app2.setErrorHandler((err, req, reply) => {
+            const status = err.statusCode || 500;
+            if (status >= 500) {
+                req.log.error({ err }, 'request failed');
+                return reply.code(status).type('application/problem+json').send({
+                    type: 'about:blank',
+                    title: err.name || 'Error',
+                    status,
+                    detail: 'Internal server error'
+                });
             }
-        }
-    }, async (req, reply) => {
-        try {
-            const result = await resolvePendingAndSend(req.params.token, req);
-            reply.type('text/html').send(`<!DOCTYPE html>
+            if (status === 415 || status === 400) {
+                return reply.code(status).type('text/html').send(buildExpiredApprovalPage());
+            }
+            reply.code(status).type('application/problem+json').send(err.problem || {
+                type: 'about:blank',
+                title: err.name || 'Error',
+                status,
+                detail: err.message || 'Unexpected error'
+            });
+        });
+
+        app2.get('/v1/messages/approve/:token', {
+            config: { public: true },
+            schema: {
+                tags: ['messages'],
+                summary: 'Show the confirmation page for a pending email',
+                response: { 200: { type: 'string' }, 404: problemSchema }
+            }
+        }, async (req, reply) => {
+            const fresh = {};
+            const entry = pendingStore.get(req.params.token, (info) => { fresh.info = info; });
+            if (!entry) {
+                if (fresh.info) {
+                    const baseUrl = getPublicBaseUrl ? getPublicBaseUrl(req) : (approvalEmailBaseUrl || '');
+                    const freshUrl = `${baseUrl}/v1/messages/approve/${fresh.info.freshToken}`;
+                    return reply.code(404).type('text/html').send(buildExpiredApprovalFreshLinkPage(freshUrl));
+                }
+                return reply.code(404).type('text/html').send(buildExpiredApprovalPage());
+            }
+            return reply.type('text/html').send(buildConfirmApprovalHtml(entry));
+        });
+
+        app2.post('/v1/messages/approve/:token', {
+            config: { public: true },
+            schema: {
+                tags: ['messages'],
+                summary: 'Approve and send a pending email',
+                response: {
+                    200: { type: 'object', properties: { sent: { type: 'boolean' }, messageId: { type: 'string' } } },
+                    404: problemSchema,
+                    502: problemSchema
+                }
+            }
+        }, async (req, reply) => {
+            try {
+                const result = await resolvePendingAndSend(req.params.token, req);
+                reply.type('text/html').send(`<!DOCTYPE html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sent</title>
 <style>body{font-family:sans-serif;max-width:600px;margin:40px auto;padding:0 16px;text-align:center}
@@ -573,15 +690,12 @@ p{color:#666}</style></head>
 <h1>Email sent</h1>
 <p>Message ID: <code>${result.messageId}</code></p>
 </body></html>`);
-        } catch (err) {
-            if (err.problem && err.problem.status === 404) {
-                reply.code(404).type('text/html').send(buildExpiredApprovalPage());
-            } else {
+            } catch (err) {
+                if (err.problem && err.problem.status === 404) {
+                    return replyApprovalUnavailable(req.params.token, req, reply);
+                }
                 req.log.warn({ err }, 'Approval send failed');
                 const detail = err && err.response ? `${err.response} (${err.message})` : err.message;
-                // SMTP responses can echo attacker-influenced text (recipient
-                // addresses, policy quotes) — escape it like every other
-                // interpolated value on these pages.
                 const detailSafe = escapeEmailHtml(detail, 2000);
                 reply.code(502).type('text/html').send(`<!DOCTYPE html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -596,23 +710,22 @@ p{color:#666}</style></head>
 <p>${detailSafe}</p>
 </body></html>`);
             }
-        }
-    });
+        });
 
-    app.get('/v1/messages/deny/:token', {
-        config: { public: true },
-        schema: {
-            tags: ['messages'],
-            summary: 'Deny a pending email send',
-            response: {
-                200: { type: 'object', properties: { denied: { type: 'boolean' } } },
-                404: problemSchema
+        app2.get('/v1/messages/deny/:token', {
+            config: { public: true },
+            schema: {
+                tags: ['messages'],
+                summary: 'Deny a pending email send',
+                response: {
+                    200: { type: 'object', properties: { denied: { type: 'boolean' } } },
+                    404: problemSchema
+                }
             }
-        }
-    }, async (req, reply) => {
-        const removed = pendingStore.remove(req.params.token);
-        if (!removed) {
-            reply.code(404).type('text/html').send(`<!DOCTYPE html>
+        }, async (req, reply) => {
+            const removed = pendingStore.remove(req.params.token);
+            if (!removed) {
+                reply.code(404).type('text/html').send(`<!DOCTYPE html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Expired</title>
 <style>body{font-family:sans-serif;max-width:600px;margin:40px auto;padding:0 16px;text-align:center}
@@ -624,9 +737,9 @@ p{color:#666}</style></head>
 <h1>Already handled</h1>
 <p>This approval link is no longer valid.</p>
 </body></html>`);
-            return;
-        }
-        reply.type('text/html').send(`<!DOCTYPE html>
+                return;
+            }
+            reply.type('text/html').send(`<!DOCTYPE html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Denied</title>
 <style>body{font-family:sans-serif;max-width:600px;margin:40px auto;padding:0 16px;text-align:center}
@@ -638,6 +751,7 @@ p{color:#666}</style></head>
 <h1>Send denied</h1>
 <p>The email was not sent.</p>
 </body></html>`);
+        });
     });
 
     app.get('/v1/messages/send/:messageId/status', {

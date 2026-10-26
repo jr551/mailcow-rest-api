@@ -63,6 +63,10 @@ module.exports = Object.freeze({
         path: dataFile(process.env.IMAP_CACHE_PATH, 'imap-cache.db')
     },
 
+    pendingSends: {
+        dbPath: dataFile(process.env.PENDING_SENDS_DB_PATH, 'pending-sends.db')
+    },
+
     pool: {
         max: num(process.env.POOL_MAX, 50),
         idleMs: num(process.env.POOL_IDLE_MS, 30_000)
