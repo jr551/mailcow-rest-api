@@ -337,3 +337,33 @@ test('mailbox-info: an address with a bare percent is not a 500', async () => {
         await app.close();
     }
 });
+
+// ── src/routes/webhook-staging.js ──
+
+test('webhook-staging: account address with a bare percent is not a 500', async () => {
+    const seen = [];
+    const stager = {
+        async resolve(account) {
+            seen.push(account.address);
+            const err = new Error('missing file');
+            err.statusCode = 404;
+            throw err;
+        }
+    };
+    const config = {
+        webhooks: {
+            accounts: [{ address: '100%@x.com', secret: 's' }]
+        }
+    };
+    const app = await buildApp(require('../../src/routes/webhook-staging'), { config, stager });
+    try {
+        const res = await app.inject({
+            method: 'GET',
+            url: '/v1/webhook-staging/100%25%40x.com/stage-key/raw.eml?expires=1&sig=deadbeef'
+        });
+        assert.notEqual(res.statusCode, 500);
+        assert.equal(seen[0], '100%@x.com');
+    } finally {
+        await app.close();
+    }
+});
