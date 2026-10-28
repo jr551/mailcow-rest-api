@@ -2,6 +2,7 @@
 
 const crypto = require('node:crypto');
 const mysql = require('mysql2/promise');
+const { isValidEmail } = require('./utils/email');
 
 const ALIAS_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
 
@@ -18,30 +19,9 @@ function isValidSenderPattern(sender) {
     return /^[a-zA-Z0-9@_.*-]+$/.test(sender);
 }
 
-function isValidEmail(email) {
-    if (!email || typeof email !== 'string') return false;
-    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-}
-
-function createMailcowDb({ host, port, user, pass, name }) {
-    if (!pass) return null;
-    const pool = mysql.createPool({
-        host,
-        port,
-        user,
-        password: pass,
-        database: name,
-        waitForConnections: true,
-        connectionLimit: 5,
-        queueLimit: 0,
-        connectTimeout: 10000,
-        enableKeepAlive: true
-    });
-
+function createMailcowDbFromPool(pool) {
     return {
         pool,
-
-        // ── Sender policies ──
         async listPolicies(email, option) {
             const [rows] = await pool.execute(
                 'SELECT `prefid`, `value` AS `sender` FROM `filterconf` WHERE `object` = ? AND `option` = ? ORDER BY `value`',
@@ -80,7 +60,7 @@ function createMailcowDb({ host, port, user, pass, name }) {
                     m.quota, m.created, m.modified, m.authsource, m.attributes,
                     q.bytes, q.messages
                 FROM mailbox m
-                JOIN quota2 q ON m.username = q.username
+                LEFT JOIN quota2 q ON m.username = q.username
                 WHERE m.username = ? AND (m.kind = '' OR m.kind IS NULL)`,
                 [email]
             );
@@ -108,13 +88,16 @@ function createMailcowDb({ host, port, user, pass, name }) {
 
         // ── SASL logins ──
         async getLogins(email, limit = 20) {
+            let lim = Number(limit);
+            if (!Number.isFinite(lim)) lim = 20;
+            lim = Math.min(100, Math.max(1, lim));
             const [rows] = await pool.execute(
                 `SELECT service, real_rip AS ip, datetime AS time
                  FROM sasl_log
                  WHERE username = ?
                  ORDER BY datetime DESC
                  LIMIT ?`,
-                [email, limit]
+                [email, lim]
             );
             return rows;
         },
@@ -145,16 +128,22 @@ function createMailcowDb({ host, port, user, pass, name }) {
             const hrs = Number(validityHours);
             if (!Number.isFinite(hrs) || hrs < 1 || hrs > 87600) throw new Error('Validity must be 1-87600 hours');
             const domain = email.split('@')[1];
-            const local = email.split('@')[0];
-            // Generate a random alias like abc123@domain.tld
-            const rand = randomAlias(10);
-            const address = `${rand}@${domain}`;
             const validity = permanent ? 0 : Math.floor(Date.now() / 1000) + (hrs * 3600);
-            await pool.execute(
-                'INSERT INTO spamalias (address, goto, description, validity, permanent) VALUES (?, ?, ?, ?, ?)',
-                [address, email, description, validity, permanent ? 1 : 0]
-            );
-            return { address, validity, permanent: !!permanent };
+            for (let attempt = 0; attempt < 8; attempt += 1) {
+                const rand = randomAlias(10);
+                const address = `${rand}@${domain}`;
+                try {
+                    await pool.execute(
+                        'INSERT INTO spamalias (address, goto, description, validity, permanent) VALUES (?, ?, ?, ?, ?)',
+                        [address, email, description, validity, permanent ? 1 : 0]
+                    );
+                    return { address, validity, permanent: !!permanent };
+                } catch (err) {
+                    if (err && err.code === 'ER_DUP_ENTRY' && attempt < 7) continue;
+                    throw err;
+                }
+            }
+            throw new Error('Could not allocate a unique temp alias');
         },
 
         async deleteTempAlias(email, address) {
@@ -229,8 +218,25 @@ function createMailcowDb({ host, port, user, pass, name }) {
     };
 }
 
+function createMailcowDb({ host, port, user, pass, name }) {
+    if (!pass || !String(pass).trim()) return null;
+    const pool = mysql.createPool({
+        host,
+        port,
+        user,
+        password: pass,
+        database: name,
+        waitForConnections: true,
+        connectionLimit: 5,
+        queueLimit: 0,
+        connectTimeout: 10000,
+        enableKeepAlive: true
+    });
+    return createMailcowDbFromPool(pool);
+}
+
 function safeJson(v) {
     try { return JSON.parse(v); } catch { return {}; }
 }
 
-module.exports = { createMailcowDb, isValidSenderPattern };
+module.exports = { createMailcowDb, createMailcowDbFromPool, isValidSenderPattern };

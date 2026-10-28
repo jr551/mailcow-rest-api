@@ -8,6 +8,7 @@
         "build": "vite build",
         "preview": "vite preview",
         "check": "svelte-check --tsgo --tsconfig ./tsconfig.json",
+        "test:unit": "node --test test/unit/*.test.mjs",
         "test:e2e": "playwright test",
         "check:config": "node scripts/check-config.mjs",
         "setup": "bash scripts/setup.sh"
@@ -48,6 +49,7 @@
         "@sveltejs/vite-plugin-svelte": "^7.3.1",
         "@tsconfig/svelte": "^5.0.8",
         "@typescript/native-preview": "7.0.0-dev.20260707.2",
+        "esbuild": "^0.27.3",
         "svelte-check": "^4.7.7",
         "tslib": "^2.8.1",
         "typescript": "^6.0.3",

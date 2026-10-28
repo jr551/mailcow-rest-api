@@ -9,11 +9,7 @@ const {
     parseRules,
     parseBlockedRecipients
 } = require('./sieve-client');
-
-function isValidEmail(email) {
-    if (!email || typeof email !== 'string') return false;
-    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-}
+const { isValidEmail } = require('./utils/email');
 
 function generateId() {
     return 'rule-' + crypto.randomBytes(8).toString('hex');
