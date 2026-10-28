@@ -40,6 +40,7 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: npm run build
+      - run: npm run test:unit
       # The webmail tree is the larger dependency surface (tldraw, tiptap,
       # pdfjs, pdf-lib, tesseract) — audit it too.
       - run: npm audit --audit-level=high

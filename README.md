@@ -406,7 +406,7 @@ The webmail is a separate workspace with its own checks. From `webmail/`:
 npm install
 npm run check                     # svelte-check
 npm run build                     # the SPA the image serves
-node --test test/unit/*.test.mjs  # unit — there is no `npm test` script here
+node --test test/unit/*.test.mjs  # unit — or `npm run test:unit`
 npm run test:e2e                  # playwright; builds first, never reuses a server
 ```
 
