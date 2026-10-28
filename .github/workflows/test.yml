@@ -7,6 +7,7 @@ on:
 
 # Public repo: never run on self-hosted home hardware for fork PRs (untrusted code).
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -14,15 +15,55 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Prefer an online self-hosted runner (alexpc / matthewpc when registered).
+  # If none are idle/online, fall back to GitHub-hosted so jobs never queue forever.
+  resolve-runner:
+    runs-on: ubuntu-latest
+    outputs:
+      label: ${{ steps.pick.outputs.label }}
+    steps:
+      - id: pick
+        uses: actions/github-script@379587d6aa349658548d8df2da05927763b9fcb8 # v7.1.1
+        with:
+          script: |
+            const fork = context.payload.pull_request
+              && context.payload.pull_request.head.repo.full_name !== context.repo.full_name;
+            if (fork) {
+              core.setOutput('label', 'ubuntu-latest');
+              return;
+            }
+            try {
+              const { data } = await github.rest.actions.listSelfHostedRunnersForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                per_page: 100
+              });
+              const online = (data.runners || []).filter((r) => r.status === 'online');
+              const home = online.filter((r) => /^(alexpc|matthewpc)$/i.test(r.name));
+              const chosen = home[0] || online[0];
+              if (chosen) {
+                core.info(`Selected self-hosted runner: ${chosen.name}`);
+                core.setOutput('label', chosen.name);
+              } else {
+                core.info('No online self-hosted runners; falling back to ubuntu-latest');
+                core.setOutput('label', 'ubuntu-latest');
+              }
+            } catch (err) {
+              core.warning(`listSelfHostedRunnersForRepo failed (${err.message}); using ubuntu-latest`);
+              core.setOutput('label', 'ubuntu-latest');
+            }
+
   unit:
+    needs: resolve-runner
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: self-hosted
+    runs-on: ${{ needs.resolve-runner.outputs.label }}
     defaults:
       run:
         shell: bash
     steps:
       - name: Runner context
         run: |
+          echo "requested_label=${{ needs.resolve-runner.outputs.label }}"
           echo "runner_name=${RUNNER_NAME}"
           echo "runner_os=${RUNNER_OS}"
           echo "runner_arch=${RUNNER_ARCH}"
@@ -41,8 +82,9 @@ jobs:
   # The image builds the SPA, so a webmail type error or broken build has to
   # fail here rather than at publish time.
   webmail:
+    needs: resolve-runner
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: self-hosted
+    runs-on: ${{ needs.resolve-runner.outputs.label }}
     defaults:
       run:
         shell: bash
@@ -50,6 +92,7 @@ jobs:
     steps:
       - name: Runner context
         run: |
+          echo "requested_label=${{ needs.resolve-runner.outputs.label }}"
           echo "runner_name=${RUNNER_NAME}"
           echo "runner_os=${RUNNER_OS}"
           echo "runner_arch=${RUNNER_ARCH}"

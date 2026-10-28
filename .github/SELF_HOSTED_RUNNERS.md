@@ -1,8 +1,8 @@
 # Self-hosted GitHub Actions runners
 
-GitHub-hosted runners are not used for this repository (billing). Jobs use
-`runs-on: self-hosted` so work is picked up by **repository** runners such as
-**alexpc** and **matthewpc** when those machines are online and registered.
+GitHub-hosted runners are used as a **fallback** when no self-hosted runner is
+online (see the `resolve-runner` job in each workflow). Jobs never sit queued
+forever waiting for a home PC.
 
 ## Security (public repository)
 

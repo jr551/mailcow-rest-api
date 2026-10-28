@@ -7,18 +7,51 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
   packages: write
 
 jobs:
+  resolve-runner:
+    runs-on: ubuntu-latest
+    outputs:
+      label: ${{ steps.pick.outputs.label }}
+    steps:
+      - id: pick
+        uses: actions/github-script@379587d6aa349658548d8df2da05927763b9fcb8 # v7.1.1
+        with:
+          script: |
+            try {
+              const { data } = await github.rest.actions.listSelfHostedRunnersForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                per_page: 100
+              });
+              const online = (data.runners || []).filter((r) => r.status === 'online');
+              const home = online.filter((r) => /^(alexpc|matthewpc)$/i.test(r.name));
+              const chosen = home[0] || online[0];
+              if (chosen) {
+                core.info(`Selected self-hosted runner: ${chosen.name}`);
+                core.setOutput('label', chosen.name);
+              } else {
+                core.info('No online self-hosted runners; falling back to ubuntu-latest');
+                core.setOutput('label', 'ubuntu-latest');
+              }
+            } catch (err) {
+              core.warning(`listSelfHostedRunnersForRepo failed (${err.message}); using ubuntu-latest`);
+              core.setOutput('label', 'ubuntu-latest');
+            }
+
   publish:
-    runs-on: self-hosted
+    needs: resolve-runner
+    runs-on: ${{ needs.resolve-runner.outputs.label }}
     defaults:
       run:
         shell: bash
     steps:
       - name: Runner context
         run: |
+          echo "requested_label=${{ needs.resolve-runner.outputs.label }}"
           echo "runner_name=${RUNNER_NAME}"
           echo "runner_os=${RUNNER_OS}"
           echo "runner_arch=${RUNNER_ARCH}"
