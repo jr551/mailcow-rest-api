@@ -55,15 +55,12 @@ jobs:
           if [ -z "$chosen" ] && [ "${#names[@]}" -gt 0 ] && [ -n "${names[0]}" ]; then
             chosen="${names[0]}"
           fi
-          case "$chosen" in
-            alexpc|matthewpc|AlexPC|MatthewPC|ALEXPC|MATTHEWPC)
-              echo "Using self-hosted runner: $chosen"
-              echo "label=${chosen}" >> "$GITHUB_OUTPUT"
-              ;;
-            *)
-              pick_ubuntu
-              ;;
-          esac
+          if [ -n "$chosen" ] && [[ "$chosen" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "Using self-hosted runner: $chosen"
+            echo "label=${chosen}" >> "$GITHUB_OUTPUT"
+          else
+            pick_ubuntu
+          fi
 
   unit:
     needs: resolve-runner
@@ -100,7 +97,6 @@ jobs:
     defaults:
       run:
         shell: bash
-        working-directory: webmail
     steps:
       - name: Runner context
         run: |
@@ -116,9 +112,14 @@ jobs:
           cache: npm
           cache-dependency-path: webmail/package-lock.json
       - run: npm ci
+        working-directory: webmail
       - run: npm run check
+        working-directory: webmail
       - run: npm run build
+        working-directory: webmail
       - run: npm run test:unit
+        working-directory: webmail
       # The webmail tree is the larger dependency surface (tldraw, tiptap,
       # pdfjs, pdf-lib, tesseract) — audit it too.
       - run: npm audit --audit-level=high
+        working-directory: webmail
