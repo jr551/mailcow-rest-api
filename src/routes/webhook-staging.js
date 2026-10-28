@@ -14,7 +14,7 @@ module.exports = async function webhookStagingRoutes(app, { config, stager }) {
             summary: 'Download a staged webhook payload part (signed URL)'
         }
     }, async (req, reply) => {
-        const address = decodeURIComponent(req.params.address || '');
+        const address = req.params.address || '';
         const account = config.webhooks.accounts.find((a) => a.address.toLowerCase() === address.toLowerCase());
         if (!account) return reply.code(404).send({ error: 'unknown webhook account' });
         const expires = Number(req.query.expires);

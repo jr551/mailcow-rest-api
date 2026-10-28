@@ -519,7 +519,7 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
     }
 
     const mailcowDb = createMailcowDb(config.mailcowDb);
-    if (mailcowDb) app.log.info('mailcow DB connected for sender policies');
+    if (mailcowDb) app.log.info('mailcow DB enabled for account and sender-policy features');
 
     const calendarSubStore = createCalendarSubStore({ filePath: config.calendarSubs.dbPath });
     app.log.info('calendar subscription store ready (%s)', config.calendarSubs.dbPath);

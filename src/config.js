@@ -17,7 +17,7 @@ const num0 = (v, d) => {
     return Number.isFinite(n) && n >= 0 ? n : d;
 };
 const bool = (v, d) => {
-    if (v === undefined) return d;
+    if (v === undefined || v === null || v === '') return d;
     const s = String(v).toLowerCase();
     return s === '1' || s === 'true' || s === 'yes' || s === 'y';
 };
