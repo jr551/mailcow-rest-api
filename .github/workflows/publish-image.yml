@@ -23,25 +23,37 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          names="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runners" \
-            --jq '.runners[] | select(.status=="online") | .name' 2>/dev/null || true)"
-          chosen=""
-          for want in alexpc matthewpc; do
-            if echo "$names" | grep -iq "^${want}$"; then
-              chosen="$want"
-              break
-            fi
-          done
-          if [ -z "$chosen" ] && [ -n "$names" ]; then
-            chosen="$(echo "$names" | head -n1)"
-          fi
-          if [ -n "$chosen" ]; then
-            echo "Using self-hosted runner: $chosen"
-            echo "label=${chosen}" >> "$GITHUB_OUTPUT"
-          else
+          pick_ubuntu() {
             echo "No online self-hosted runners; using ubuntu-latest"
             echo "label=ubuntu-latest" >> "$GITHUB_OUTPUT"
+          }
+          if ! body="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runners" 2>&1)"; then
+            echo "listSelfHostedRunnersForRepo failed: ${body}"
+            pick_ubuntu
+            exit 0
           fi
+          mapfile -t names < <(echo "$body" | jq -r '.runners[]? | select(.status=="online") | .name')
+          chosen=""
+          for want in alexpc matthewpc; do
+            for n in "${names[@]:-}"; do
+              if [ -n "$n" ] && [ "$(echo "$n" | tr '[:upper:]' '[:lower:]')" = "$want" ]; then
+                chosen="$n"
+                break 2
+              fi
+            done
+          done
+          if [ -z "$chosen" ] && [ "${#names[@]}" -gt 0 ] && [ -n "${names[0]}" ]; then
+            chosen="${names[0]}"
+          fi
+          case "$chosen" in
+            alexpc|matthewpc|AlexPC|MatthewPC|ALEXPC|MATTHEWPC)
+              echo "Using self-hosted runner: $chosen"
+              echo "label=${chosen}" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              pick_ubuntu
+              ;;
+          esac
 
   publish:
     needs: resolve-runner
