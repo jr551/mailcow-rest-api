@@ -68,9 +68,10 @@ function createTrackingStore(opts) {
         'WHERE ref = ? AND opened_at IS NULL'
     );
     const getStmt = db.prepare(
-        'SELECT ref, sender, sender_pass, recipient, subject, sent_at, opened_at, opener_ip, opener_ua ' +
+        'SELECT ref, sender, COALESCE(owner, sender) AS owner, sender_pass, recipient, subject, sent_at, opened_at, opener_ip, opener_ua ' +
         'FROM tracking_pixels WHERE ref = ?'
     );
+    const clearPassStmt = db.prepare("UPDATE tracking_pixels SET sender_pass = '' WHERE ref = ?");
     const listStmt = db.prepare(
         'SELECT ref, sender, recipient, subject, sent_at, opened_at, opener_ip, opener_ua ' +
         'FROM tracking_pixels WHERE COALESCE(owner, sender) = ? ORDER BY sent_at DESC'
@@ -111,6 +112,7 @@ function createTrackingStore(opts) {
         return {
             ref: row.ref,
             sender: row.sender,
+            owner: row.owner,
             senderPass: open(row.sender_pass),
             recipient: row.recipient,
             subject: row.subject,
@@ -122,20 +124,10 @@ function createTrackingStore(opts) {
         };
     }
 
-    function get(ref) {
-        const row = getStmt.get(ref);
-        if (!row) return null;
-        return {
-            ref: row.ref,
-            sender: row.sender,
-            senderPass: open(row.sender_pass),
-            recipient: row.recipient,
-            subject: row.subject,
-            sentAt: row.sent_at,
-            openedAt: row.opened_at,
-            openerIp: row.opener_ip,
-            openerUa: row.opener_ua
-        };
+    // Only the first open sends a notification, so the password has no further
+    // use once that attempt is over.
+    function clearSenderPass(ref) {
+        return clearPassStmt.run(ref).changes;
     }
 
     // Argument is the authenticating account (owner), not the From alias.
@@ -178,7 +170,7 @@ function createTrackingStore(opts) {
         db.close();
     }
 
-    return { create, recordOpen, get, listBySender, remove, prune, count, close, migratePlaintextSenders };
+    return { create, recordOpen, clearSenderPass, listBySender, remove, prune, count, close, migratePlaintextSenders };
 }
 
 module.exports = { createTrackingStore };

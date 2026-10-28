@@ -10,8 +10,9 @@
         WRITE_TOOLS
     } from '../../lib/chat.svelte';
     import { settings, capabilities } from '../../lib/settings.svelte';
-    import { mobileState, navigate, showToast } from '../lib/store.svelte';
+    import { navigate, showToast, pushOverlay } from '../lib/store.svelte';
     import Icon from '../../components/Icon.svelte';
+    import Toggle from './Toggle.svelte';
     import type { IconName } from '../../lib/icons';
     import { renderMarkdown } from '../../lib/markdown';
     import VoiceChat from '../../components/ai/VoiceChat.svelte';
@@ -42,6 +43,34 @@
     let scrollBox: HTMLDivElement | undefined = $state();
     let showThreads = $state(false);
     let showSettings = $state(false);
+
+    // Both sheets register with the back-button stack so Android Back
+    // closes them instead of leaving the chat.
+    let threadsDispose: (() => void) | null = null;
+    let settingsDispose: (() => void) | null = null;
+
+    function openThreads() {
+        showThreads = true;
+        threadsDispose = pushOverlay('ai-threads-sheet', () => {
+            showThreads = false;
+            threadsDispose = null;
+        });
+    }
+    function closeThreads() {
+        showThreads = false;
+        if (threadsDispose) { threadsDispose(); threadsDispose = null; }
+    }
+    function openSettings() {
+        showSettings = true;
+        settingsDispose = pushOverlay('ai-settings-sheet', () => {
+            showSettings = false;
+            settingsDispose = null;
+        });
+    }
+    function closeSettings() {
+        showSettings = false;
+        if (settingsDispose) { settingsDispose(); settingsDispose = null; }
+    }
     let pendingImages = $state<string[]>([]);
     let voiceModeOpen = $state(false);
 
@@ -136,6 +165,31 @@
         } else {
             scrollBox.scrollTop = scrollBox.scrollHeight;
         }
+    }
+
+    /** Shows what a write will do — the recipient / rule target / content
+     *  the model chose — so the approval is an informed one. */
+    function describeArgs(args: Record<string, unknown>): { key: string; value: string }[] {
+        return Object.entries(args).slice(0, 8).map(([key, v]) => {
+            const text = typeof v === 'string' ? v : JSON.stringify(v) ?? '';
+            return { key, value: text.length > 200 ? text.slice(0, 200) + '…' : text };
+        });
+    }
+
+    /** Denies every approval still waiting, so a turn never hangs on a
+     *  prompt nobody can answer any more. */
+    function denyPending() {
+        const writes = pendingWrites;
+        const perms = pendingPermissions;
+        pendingWrites = [];
+        pendingPermissions = [];
+        for (const w of writes) w.resolve(false);
+        for (const p of perms) p.resolve(false);
+    }
+
+    function stopTurn() {
+        abortCtrl?.abort();
+        denyPending();
     }
 
     function answerWrite(idx: number, ok: boolean) {
@@ -292,12 +346,13 @@
         sending = true;
         await tickScroll();
 
-        abortCtrl = new AbortController();
+        const ctrl = new AbortController();
+        abortCtrl = ctrl;
         const history = active?.messages.slice() || [];
 
         try {
             for await (const ev of chatTurn(history, {
-                signal: abortCtrl.signal,
+                signal: ctrl.signal,
                 tools: toolCatalog,
                 systemPrompt,
                 modelOverride,
@@ -353,16 +408,18 @@
             }
         } finally {
             sending = false;
-            abortCtrl = null;
+            if (abortCtrl === ctrl) abortCtrl = null;
             await tickScroll();
-            // Soft chime + haptic so the user knows the reply landed
-            // even if they switched away from the chat surface.
-            playNotify();
-            vibrate('success');
-            doneFlashThreadId = threadId;
-            doneFlashStamp = Date.now();
-            if (typeof document !== 'undefined' && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
-                try { new Notification('AI reply ready', { body: 'Your assistant has finished a response.', silent: false }); } catch { /* */ }
+            if (!ctrl.signal.aborted) {
+                // Soft chime + haptic so the user knows the reply landed
+                // even if they switched away from the chat surface.
+                playNotify();
+                vibrate('success');
+                doneFlashThreadId = threadId;
+                doneFlashStamp = Date.now();
+                if (typeof document !== 'undefined' && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+                    try { new Notification('AI reply ready', { body: 'Your assistant has finished a response.', silent: false }); } catch { /* */ }
+                }
             }
             // Generate AI title with emoji once we have a first assistant
             // reply. Driven by the per-thread `aiTitled` flag (mirrors
@@ -393,6 +450,11 @@
     }
 
     function onKey(e: KeyboardEvent) {
+        // Enter that commits an IME / predictive-text composition is not a send.
+        if (e.isComposing || e.keyCode === 229) return;
+        // Touch keyboards have no Shift+Enter and the send button is right
+        // there, so Enter stays a newline on touch-only devices.
+        if (typeof window !== 'undefined' && window.matchMedia('(pointer: coarse) and (hover: none)').matches) return;
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             handleSend();
@@ -401,13 +463,13 @@
 
     function startNewThread() {
         newThread();
-        showThreads = false;
+        closeThreads();
         scrollToBottom(true);
     }
 
     function pickThread(id: string) {
         aiState.activeId = id;
-        showThreads = false;
+        closeThreads();
         scrollToBottom(true);
     }
 
@@ -415,13 +477,15 @@
         if (!active) return;
         const id = active.id;
         deleteThread(id);
-        showSettings = false;
+        closeSettings();
         showToast('info', 'Thread deleted');
     }
 
     function goToSettings() {
-        showSettings = false;
-        mobileState.view = 'settings';
+        // Navigate first: closing the sheet afterwards just drops its back
+        // entry instead of rewinding history over the new view.
+        navigate('settings');
+        closeSettings();
     }
 
     onMount(() => {
@@ -441,25 +505,28 @@
             if (last && last.role === 'user') handleSend();
         }
         scrollToBottom();
+        // Approvals live in this view; once it is gone nobody can answer
+        // them, so deny rather than leave the turn waiting forever.
+        return denyPending;
     });
 </script>
 
 <div class="ai-view">
     <header class="mheader">
-        <button type="button" class="mbtn mbtn-ghost" onclick={() => showThreads = true}>
+        <button type="button" class="mbtn mbtn-ghost" aria-label="Chats" title="Chats" onclick={openThreads}>
             <Icon name="inbox" size={18} />
         </button>
         <h1 class="truncate">{active?.title || 'AI Chat'}</h1>
         <div class="header-actions">
             {#if isVoiceAvailable() && isSttAvailable()}
-                <button type="button" class="mbtn mbtn-ghost" onclick={() => voiceModeOpen = true} title="Voice chat">
+                <button type="button" class="mbtn mbtn-ghost" onclick={() => voiceModeOpen = true} title="Voice chat" aria-label="Voice chat">
                     <Icon name="mic" size={18} />
                 </button>
             {/if}
-            <button type="button" class="mbtn mbtn-ghost" onclick={startNewThread}>
+            <button type="button" class="mbtn mbtn-ghost" aria-label="New chat" title="New chat" onclick={startNewThread}>
                 <Icon name="plus" size={18} />
             </button>
-            <button type="button" class="mbtn mbtn-ghost" onclick={() => showSettings = true}>
+            <button type="button" class="mbtn mbtn-ghost" aria-label="Chat settings" title="Chat settings" onclick={openSettings}>
                 <Icon name="settings" size={18} />
             </button>
         </div>
@@ -478,6 +545,7 @@
                     type="button"
                     class="tool-chip"
                     class:active={aiState.tools[cap as GrantableCapability]}
+                    aria-pressed={aiState.tools[cap as GrantableCapability]}
                     onclick={() => setTools({ [cap]: !aiState.tools[cap as GrantableCapability] })}
                 >
                     {CAP_META[cap as GrantableCapability].title}
@@ -631,7 +699,14 @@
                     {@const wtd = toolDisplay(w.name)}
                     <div class="approval-card">
                         <p class="semibold">{wtd.emoji} {wtd.label}?</p>
-                        <p class="muted small">The assistant wants to make a change.</p>
+                        <p class="muted small">The assistant wants to make this change:</p>
+                        <ul class="approval-args">
+                            {#each describeArgs(w.args) as a (a.key)}
+                                <li><span class="arg-key">{a.key}</span> <span class="arg-value">{a.value}</span></li>
+                            {:else}
+                                <li class="muted">(no arguments)</li>
+                            {/each}
+                        </ul>
                         <div class="approval-actions">
                             <button type="button" class="mbtn mbtn-secondary" onclick={() => answerWrite(idx, false)}>Deny</button>
                             <button type="button" class="mbtn mbtn-primary" onclick={() => answerWrite(idx, true)}>Approve</button>
@@ -646,7 +721,7 @@
                 {#each pendingImages as img, i}
                     <div class="pending-img-wrap">
                         <img src={img} alt="Pending" />
-                        <button type="button" class="pending-remove" onclick={() => removePendingImage(i)}>
+                        <button type="button" class="pending-remove" aria-label="Remove image" onclick={() => removePendingImage(i)}>
                             <Icon name="close" size={12} />
                         </button>
                     </div>
@@ -655,36 +730,51 @@
         {/if}
 
         <div class="input-bar">
-            <button type="button" class="mbtn mbtn-ghost attach-btn" onclick={() => pickImage('camera')} title="Take photo">
+            <button type="button" class="mbtn mbtn-ghost attach-btn" onclick={() => pickImage('camera')} title="Take photo" aria-label="Take photo">
                 <Icon name="camera" size={18} />
             </button>
-            <button type="button" class="mbtn mbtn-ghost attach-btn" onclick={() => pickImage('gallery')} title="Add photo">
+            <button type="button" class="mbtn mbtn-ghost attach-btn" onclick={() => pickImage('gallery')} title="Add photo" aria-label="Add photo">
                 <Icon name="image" size={18} />
             </button>
             <textarea
                 bind:value={input}
                 onkeydown={onKey}
                 placeholder="Ask anything…"
+                aria-label="Message"
                 rows={1}
             ></textarea>
-            <button
-                type="button"
-                class="mbtn mbtn-primary send-btn"
-                disabled={(!input.trim() && !pendingImages.length) || sending}
-                onclick={handleSend}
-            >
-                <Icon name="send" size={18} />
-            </button>
+            {#if sending}
+                <button
+                    type="button"
+                    class="mbtn mbtn-secondary send-btn"
+                    aria-label="Stop"
+                    title="Stop"
+                    data-testid="ai-stop"
+                    onclick={stopTurn}
+                >
+                    <Icon name="close" size={18} />
+                </button>
+            {:else}
+                <button
+                    type="button"
+                    class="mbtn mbtn-primary send-btn"
+                    aria-label="Send"
+                    disabled={!input.trim() && !pendingImages.length}
+                    onclick={handleSend}
+                >
+                    <Icon name="send" size={18} />
+                </button>
+            {/if}
         </div>
     {/if}
 </div>
 
 {#if showThreads}
-    <div class="sheet-backdrop" role="presentation" onclick={() => showThreads = false}></div>
+    <div class="sheet-backdrop" role="presentation" onclick={closeThreads}></div>
     <div class="threads-sheet slide-up">
         <div class="sheet-header">
             <h2>Chats</h2>
-            <button type="button" class="mbtn mbtn-ghost" onclick={() => showThreads = false}>
+            <button type="button" class="mbtn mbtn-ghost" aria-label="Close" onclick={closeThreads}>
                 <Icon name="close" size={18} />
             </button>
         </div>
@@ -712,11 +802,11 @@
 {/if}
 
 {#if showSettings}
-    <div class="sheet-backdrop" role="presentation" onclick={() => showSettings = false}></div>
+    <div class="sheet-backdrop" role="presentation" onclick={closeSettings}></div>
     <div class="threads-sheet slide-up">
         <div class="sheet-header">
             <h2>Chat settings</h2>
-            <button type="button" class="mbtn mbtn-ghost" onclick={() => showSettings = false}>
+            <button type="button" class="mbtn mbtn-ghost" aria-label="Close" onclick={closeSettings}>
                 <Icon name="close" size={18} />
             </button>
         </div>
@@ -726,16 +816,11 @@
                     <div class="settings-info">
                         <span class="semibold">{CAP_META[cap as GrantableCapability].title}</span>
                     </div>
-                    <button
-                        type="button"
-                        class="toggle-switch"
-                        aria-label={CAP_META[cap as GrantableCapability].title}
-                        class:on={aiState.tools[cap as GrantableCapability]}
-                        class:off={!aiState.tools[cap as GrantableCapability]}
-                        onclick={() => setTools({ [cap]: !aiState.tools[cap as GrantableCapability] })}
-                    >
-                        <span class="toggle-knob"></span>
-                    </button>
+                    <Toggle
+                        checked={aiState.tools[cap as GrantableCapability]}
+                        label={CAP_META[cap as GrantableCapability].title}
+                        onToggle={() => setTools({ [cap]: !aiState.tools[cap as GrantableCapability] })}
+                    />
                 </div>
             {/each}
             <div class="settings-divider"></div>
@@ -1136,7 +1221,7 @@
         display: flex;
         align-items: flex-end;
         gap: 8px;
-        padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+        padding: 12px 16px;
         background: var(--bg-surface);
         border-top: 1px solid var(--border-subtle);
     }
@@ -1158,15 +1243,15 @@
         border-color: var(--border-focus);
     }
     .send-btn {
-        width: 40px;
-        height: 40px;
+        width: 44px;
+        height: 44px;
         border-radius: 50%;
         padding: 0;
         flex-shrink: 0;
     }
     .attach-btn {
-        width: 36px;
-        height: 36px;
+        width: 44px;
+        height: 44px;
         border-radius: 50%;
         padding: 0;
         flex-shrink: 0;
@@ -1212,8 +1297,8 @@
         position: absolute;
         top: 2px;
         right: 2px;
-        width: 20px;
-        height: 20px;
+        width: 28px;
+        height: 28px;
         border-radius: 50%;
         border: none;
         background: rgba(0,0,0,0.5);
@@ -1248,8 +1333,31 @@
     }
     .approval-actions .mbtn {
         padding: 6px 12px;
+        min-height: 44px;
         font-size: 13px;
     }
+    .approval-args {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        font-size: 13px;
+        line-height: 1.35;
+        max-height: 30vh;
+        overflow-y: auto;
+    }
+    .approval-args li {
+        overflow-wrap: anywhere;
+        white-space: pre-wrap;
+    }
+    .arg-key {
+        font-weight: 600;
+        color: var(--text-secondary);
+    }
+    .arg-key::after { content: ':'; }
+    .arg-value { color: var(--text-primary); }
 
     /* Human-friendly permission card */
     .perm-card {
@@ -1418,29 +1526,4 @@
         background: var(--border-subtle);
         margin: 8px 16px;
     }
-    .toggle-switch {
-        width: 52px;
-        height: 32px;
-        border-radius: 16px;
-        border: none;
-        padding: 2px;
-        position: relative;
-        cursor: pointer;
-        transition: background-color 200ms ease;
-        flex-shrink: 0;
-        background: var(--border-soft);
-    }
-    .toggle-switch.on { background: var(--accent); }
-    .toggle-switch.off { background: var(--border-soft); }
-    .toggle-knob {
-        display: block;
-        width: 28px;
-        height: 28px;
-        border-radius: 50%;
-        background: var(--bg-surface);
-        box-shadow: 0 1px 3px rgba(0,0,0,0.15);
-        transition: transform 200ms cubic-bezier(0.2, 0.7, 0.2, 1);
-    }
-    .toggle-switch.on .toggle-knob { transform: translateX(20px); }
-    .toggle-switch.off .toggle-knob { transform: translateX(0); }
 </style>

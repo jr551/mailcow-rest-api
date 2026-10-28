@@ -59,7 +59,7 @@
         setTesseractOcrInstalled, setPhishingScanOcrInline,
         setSpamSuggest, setSpamSuggestConfidenceFloor, setSpamSweepBatchSize, setAiSortSweepSpam,
         setVipAddresses, setPreSendCheck, setComposeHistorySummary, setAiSuggestReply,
-        aiAvailable,
+        aiAvailable, resolveCustomBaseUrl, resolveCustomModel, extractChatText,
         setCalendarTicker, setCalendarTickerTitles, setWeatherChipOutlook, setLinkSafetyCheck
     } from '../lib/settings.svelte';
     import { warmupTesseract, teardownTesseract } from '../lib/tesseract-ocr';
@@ -72,6 +72,7 @@
         filterContacts, clearAddressBook, type Contact
     } from '../lib/address-book.svelte';
     import { trapFocus } from '../lib/focus-trap';
+    import { copyToClipboard } from '../lib/clipboard';
     import { pwa, promptInstall, subscribePush, unsubscribePush, pushSubscriptionStatus, diagnosePush, sendTestPush, type PushDiagnostics } from '../lib/pwa.svelte';
     import { authState, getSession, isRemembered, forgetSavedCreds } from '../lib/auth.svelte';
     import {
@@ -80,7 +81,7 @@
         setEventPack, resetSoundProfile, previewPack
     } from '../lib/sounds.svelte';
     import { gravatarPref, setGravatarEnabled, clearAvatarCache, myAvatars, setMyAvatar, clearMyAvatar } from '../lib/avatars.svelte';
-    import { spamFeedback, markTrusted, removeTrusted, removeTrustedDomain } from '../lib/spam-feedback.svelte';
+    import { spamFeedback, markTrusted, addTrustedDomain, removeTrusted, removeTrustedDomain } from '../lib/spam-feedback.svelte';
     import { voicePrefs, setVoiceEnabled, isVoiceAvailable, isSttAvailable } from '../lib/voice.svelte';
     import { SKINS, skinState, setSkin, setCustomAccent, setSemantic, resetSemantics, setCustomCss } from '../lib/skins.svelte';
     import {
@@ -309,12 +310,9 @@
         // (markTrusted assumes a full address). Detect by absence of @.
         if (v.includes('@')) {
             markTrusted(v);
-        } else {
-            // Simulate "user marked this domain as trusted" — addUnique helper
-            // is not exposed, so do via markTrusted on a dummy address.
-            markTrusted(`__user__@${v}`);
-            // Drop the synthetic address row; keep just the domain.
-            removeTrusted(`__user__@${v}`);
+        } else if (!addTrustedDomain(v)) {
+            showToast('error', 'Free-mail providers cannot be trusted as a whole domain. Add the exact address instead.');
+            return;
         }
         trustedAddInput = '';
     }
@@ -412,6 +410,14 @@
         clearMyAvatar(authState.activeUser);
         showToast('success', 'Custom avatar removed.');
     }
+    // isRemembered() reads localStorage, which isn't reactive — bump
+    // credsVersion after changing the vault so the Security card re-renders.
+    let credsVersion = $state(0);
+    const deviceRemembered = $derived.by(() => {
+        void credsVersion;
+        return !!authState.activeUser && isRemembered(authState.activeUser);
+    });
+
     async function copyIp(ip: string) {
         try {
             await navigator.clipboard.writeText(ip);
@@ -841,6 +847,10 @@
         }
     }
 
+    function errMsg(err: unknown): string {
+        return err instanceof ApiError ? (err.detail || err.title) : (err as Error).message;
+    }
+
     async function doBlock() {
         const s = blockInput.trim();
         if (!s) return;
@@ -851,7 +861,7 @@
             blockInput = '';
             showToast('success', `Blocked ${s}`);
         } catch (err) {
-            const msg = err instanceof ApiError ? (err.detail || err.title) : (err as Error).message;
+            const msg = errMsg(err);
             showToast('error', msg);
         }
     }
@@ -872,7 +882,7 @@
             allowInput = '';
             showToast('success', `Allowed ${s}`);
         } catch (err) {
-            const msg = err instanceof ApiError ? (err.detail || err.title) : (err as Error).message;
+            const msg = errMsg(err);
             showToast('error', msg);
         }
     }
@@ -893,7 +903,7 @@
             blockRecipientInput = '';
             showToast('success', `Blocked ${r}`);
         } catch (err) {
-            const msg = err instanceof ApiError ? (err.detail || err.title) : (err as Error).message;
+            const msg = errMsg(err);
             showToast('error', msg);
         }
     }
@@ -966,7 +976,7 @@
             ruleConditionHeader = '';
             showToast('success', 'Rule added');
         } catch (err) {
-            const msg = err instanceof ApiError ? (err.detail || err.title) : (err as Error).message;
+            const msg = errMsg(err);
             showToast('error', msg);
         } finally {
             ruleSaving = false;
@@ -1028,7 +1038,7 @@
             if (!ruleActionWebhookId) ruleActionWebhookId = w.id;
             showToast('success', 'Webhook added');
         } catch (err) {
-            const msg = err instanceof ApiError ? (err.detail || err.title) : (err as Error).message;
+            const msg = errMsg(err);
             showToast('error', msg);
         } finally {
             owSaving = false;
@@ -1040,7 +1050,7 @@
             const u = await updateOutboundWebhook(w.id, patch);
             outboundHooks = outboundHooks.map((x) => (x.id === w.id ? u : x));
         } catch (err) {
-            const msg = err instanceof ApiError ? (err.detail || err.title) : (err as Error).message;
+            const msg = errMsg(err);
             showToast('error', msg);
         }
     }
@@ -1087,7 +1097,7 @@
                 ruleActionWebhookId = outboundHooks[0]?.id ?? '';
             }
         } catch (err) {
-            const msg = err instanceof ApiError ? (err.detail || err.title) : (err as Error).message;
+            const msg = errMsg(err);
             showToast('error', msg);
         }
     }
@@ -1108,7 +1118,7 @@
                 showToast('info', `${w.label}: receiver answered HTTP ${res.status}`);
             }
         } catch (err) {
-            const msg = err instanceof ApiError ? (err.detail || err.title) : (err as Error).message;
+            const msg = errMsg(err);
             showToast('error', msg);
         } finally {
             owBusyId = null;
@@ -1126,7 +1136,7 @@
             tempAliases = [...tempAliases, { address: r.address, validity: r.validity, permanent: r.permanent }];
             showToast('success', `Created ${r.address}`);
         } catch (err) {
-            const msg = err instanceof ApiError ? (err.detail || err.title) : (err as Error).message;
+            const msg = errMsg(err);
             showToast('error', msg);
         } finally {
             creatingAlias = false;
@@ -1368,47 +1378,14 @@
         { value: '', label: 'Custom OpenAI-compatible', help: 'point at any /chat/completions endpoint' }
     ];
 
-    // Provider URL/model resolution mirrors lib/chat.svelte.ts so the test
-    // hits the same endpoint the chat bot uses. Without this, "Use my own
-    // provider" would test the server-side /v1/ai/summarize route — which
-    // 404s when the imap-rest server has no LLM_API_KEY of its own.
-    function resolveProviderBaseUrl(): string {
-        const llm = settings.llm;
-        if (llm.baseUrl) return llm.baseUrl.replace(/\/+$/, '');
-        const presets: Record<string, string> = {
-            mistral: 'https://api.mistral.ai/v1',
-            openai: 'https://api.openai.com/v1',
-            groq: 'https://api.groq.com/openai/v1',
-            together: 'https://api.together.xyz/v1',
-            ollama: 'http://127.0.0.1:11434/v1',
-            perplexity: 'https://api.perplexity.ai',
-            openrouter: 'https://openrouter.ai/api/v1'
-        };
-        return presets[llm.preset] || presets.openai;
-    }
-    function resolveProviderModel(): string {
-        const llm = settings.llm;
-        if (llm.model) return llm.model;
-        const defaults: Record<string, string> = {
-            mistral: 'mistral-small-latest',
-            openai: 'gpt-4o-mini',
-            groq: 'llama-3.1-70b-versatile',
-            together: 'meta-llama/Llama-3-8b-chat-hf',
-            ollama: 'llama3.1',
-            perplexity: 'llama-3.1-sonar-small-128k-chat',
-            openrouter: 'meta-llama/llama-3.1-8b-instruct'
-        };
-        return defaults[llm.preset] || defaults.openai;
-    }
-
     async function testConnection() {
         testing = true;
         testResult = null;
         try {
             if (settings.useCustomLlm && settings.llm.apiKey) {
                 // Direct call to the user's provider — same path as the chat bot.
-                const baseUrl = resolveProviderBaseUrl();
-                const model = resolveProviderModel();
+                const baseUrl = resolveCustomBaseUrl();
+                const model = resolveCustomModel();
                 const res = await fetch(`${baseUrl}/chat/completions`, {
                     method: 'POST',
                     headers: {
@@ -1431,12 +1408,7 @@
                     throw new Error(detail);
                 }
                 const j = await res.json();
-                const m = j?.choices?.[0]?.message || {};
-                const reasoning = typeof m.reasoning === 'string' ? m.reasoning : '';
-                const detailText = Array.isArray(m.reasoning_details)
-                    ? m.reasoning_details.map((d: { text?: string }) => d?.text || '').join('').trim()
-                    : '';
-                const text = (m.content || reasoning || detailText || '').trim() || '(empty reply)';
+                const text = extractChatText(j) || '(empty reply)';
                 testResult = { ok: true, message: `Reply from ${j.model || model}: ${text.slice(0, 80)}` };
             } else {
                 // Server-side /v1/ai/summarize — only works when LLM_API_KEY is set on the backend.
@@ -1762,7 +1734,7 @@
                 <section class="tab-section" data-testid="settings-security">
                     <div class="card">
                         <h4><Icon name="key" size={13} /> This device</h4>
-                        {#if authState.activeUser && isRemembered(authState.activeUser)}
+                        {#if deviceRemembered}
                             <p class="muted small">
                                 Credentials kept locally so this session renews silently before it expires.
                                 The CalDAV calendar also relies on this — Sign out + back in if you turn it off.
@@ -1773,6 +1745,7 @@
                                     class="btn btn-ghost"
                                     onclick={() => {
                                         forgetSavedCreds(authState.activeUser!);
+                                        credsVersion++;
                                         showToast('success', "Forgot credentials. You'll be signed out at session expiry.");
                                     }}
                                     data-testid="settings-forget-device"
@@ -1791,9 +1764,9 @@
                         <p class="muted small">
                             When on, your session is saved to localStorage so you stay signed in across
                             browser restarts — even without the "Stay signed in" checkbox at login.
-                            Uses the same encrypted credential vault plus a persistent session backup.
+                            Uses the same obfuscated credential store plus a persistent session backup.
                         </p>
-                        <div class="form-row" style="padding:0;border:none;background:none;">
+                        <div class="form-row bare">
                             <div class="row-text">
                                 <strong>Keep me signed in permanently</strong>
                                 <span class="muted">Stores an extra session backup in localStorage with large cookie persistence.</span>
@@ -1803,6 +1776,7 @@
                                     type="checkbox"
                                     checked={settings.permanentSignIn}
                                     onchange={(e) => setPermanentSignIn((e.currentTarget as HTMLInputElement).checked)}
+                                    aria-label="Keep me signed in permanently"
                                     data-testid="settings-permanent-signin"
                                 />
                                 <span>{settings.permanentSignIn ? 'On' : 'Off'}</span>
@@ -2079,6 +2053,7 @@
                                     type="checkbox"
                                     checked={settings.proxyImages}
                                     onchange={(e) => setProxyImages((e.currentTarget as HTMLInputElement).checked)}
+                                    aria-label="Load images through the privacy proxy"
                                     data-testid="settings-proxy-images"
                                 />
                                 <span>{settings.proxyImages ? 'On' : 'Off'}</span>
@@ -2139,7 +2114,7 @@
 
                     <div class="card">
                         <h4><Icon name="shieldAlert" size={13} /> AI scam scan &amp; spam</h4>
-                        <div class="form-row" style="padding:0;border:none;background:none;">
+                        <div class="form-row bare">
                             <div class="row-text">
                                 <strong>AI scam scan: check every email for scams &amp; spam</strong>
                                 <span class="muted">
@@ -2155,6 +2130,7 @@
                                     type="checkbox"
                                     checked={settings.phishingScan}
                                     onchange={(e) => setPhishingScan((e.currentTarget as HTMLInputElement).checked)}
+                                    aria-label="AI scam scan: check every email for scams and spam"
                                     data-testid="settings-phishing-scan"
                                 />
                                 <span>{settings.phishingScan ? 'On' : 'Off'}</span>
@@ -2206,7 +2182,7 @@
                                     <span class="muted small">Prepended to the system prompt sent to the AI. Up to 500 chars.</span>
                                 </label>
 
-                                <div class="form-row" style="padding:0;border:none;background:none;margin-top:8px;">
+                                <div class="form-row bare" style="margin-top:8px;">
                                     <div class="row-text">
                                         <strong>OCR inline body images (enhanced scan)</strong>
                                         <span class="muted">
@@ -2225,13 +2201,14 @@
                                             checked={settings.phishingScanOcrInline}
                                             disabled={!settings.tesseractOcrInstalled}
                                             onchange={(e) => setPhishingScanOcrInline((e.currentTarget as HTMLInputElement).checked)}
+                                            aria-label="OCR inline body images (enhanced scan)"
                                             data-testid="settings-phishing-ocr-inline"
                                         />
                                         <span>{settings.phishingScanOcrInline ? 'On' : 'Off'}</span>
                                     </label>
                                 </div>
 
-                                <div class="form-row" style="padding:0;border:none;background:none;margin-top:10px;">
+                                <div class="form-row bare" style="margin-top:10px;">
                                     <div class="row-text">
                                         <strong>Suggest moving spam to Spam folder</strong>
                                         <span class="muted">
@@ -2245,6 +2222,7 @@
                                             type="checkbox"
                                             checked={settings.spamSuggest}
                                             onchange={(e) => setSpamSuggest((e.currentTarget as HTMLInputElement).checked)}
+                                            aria-label="Suggest moving spam to Spam folder"
                                             data-testid="settings-spam-suggest"
                                         />
                                         <span>{settings.spamSuggest ? 'On' : 'Off'}</span>
@@ -2275,7 +2253,7 @@
 
                     <div class="card">
                         <h4><Icon name="eye" size={13} /> Local OCR engine (tesseract.js)</h4>
-                        <div class="form-row" style="padding:0;border:none;background:none;">
+                        <div class="form-row bare">
                             <div class="row-text">
                                 <strong>Install + warm up tesseract.js</strong>
                                 <span class="muted">
@@ -2305,6 +2283,7 @@
                                             await teardownTesseract();
                                         }
                                     }}
+                                    aria-label="Install and warm up tesseract.js"
                                     data-testid="settings-tesseract-install"
                                 />
                                 <span>{settings.tesseractOcrInstalled ? 'On' : 'Off'}</span>
@@ -2341,7 +2320,7 @@
                                     normally, without a prompt.
                                 </p>
                             {/if}
-                            <div class="form-row" style="padding:0;border:none;background:none;">
+                            <div class="form-row bare">
                                 <div class="row-text">
                                     <strong>Check links before opening them</strong>
                                     <span class="muted">
@@ -2369,6 +2348,7 @@
                                         checked={settings.linkSafetyCheck}
                                         disabled={!settings.aiFeatures}
                                         onchange={(e) => setLinkSafetyCheck((e.currentTarget as HTMLInputElement).checked)}
+                                        aria-label="Check links before opening them"
                                         data-testid="settings-link-safety"
                                     />
                                     <span>{settings.linkSafetyCheck ? 'On' : 'Off'}</span>
@@ -2379,7 +2359,7 @@
 
                     <div class="card">
                         <h4><Icon name="shield" size={13} /> Trusted senders</h4>
-                        <div class="form-row" style="padding:0;border:none;background:none;flex-direction:column;align-items:stretch;gap:8px;">
+                        <div class="form-row bare" style="flex-direction:column;align-items:stretch;gap:8px;">
                             <div class="row-text">
                                 <strong>Skip the AI scan for people you trust</strong>
                                 <span class="muted">
@@ -2445,7 +2425,7 @@
 
                     <div class="card">
                         <h4><Icon name="spy" size={13} /> Invisible Tracker</h4>
-                        <div class="form-row" style="padding:0;border:none;background:none;">
+                        <div class="form-row bare">
                             <div class="row-text">
                                 <strong>Default new messages to tracked</strong>
                                 <span class="muted">
@@ -2459,6 +2439,7 @@
                                     type="checkbox"
                                     checked={settings.trackOpensDefault}
                                     onchange={(e) => setTrackOpensDefault((e.currentTarget as HTMLInputElement).checked)}
+                                    aria-label="Default new messages to tracked"
                                     data-testid="settings-track-default"
                                 />
                                 <span>{settings.trackOpensDefault ? 'On' : 'Off'}</span>
@@ -2468,7 +2449,7 @@
 
                     <div class="card">
                         <h4><Icon name="at" size={13} /> Default From address</h4>
-                        <div class="form-row" style="padding:0;border:none;background:none;">
+                        <div class="form-row bare">
                             <div class="row-text">
                                 <strong>Address</strong>
                                 <span class="muted">
@@ -2490,7 +2471,7 @@
 
                     <div class="card">
                         <h4><Icon name="user" size={13} /> Display name</h4>
-                        <div class="form-row" style="padding:0;border:none;background:none;">
+                        <div class="form-row bare">
                             <div class="row-text">
                                 <strong>Friendly name</strong>
                                 <span class="muted">
@@ -3014,7 +2995,7 @@
                                                                     {(aiRuleEditInstructions ?? s.instructions).length}/2000
                                                                 </span>
                                                             </div>
-                                                            <div class="form-row" style="padding:0;border:none;background:none;">
+                                                            <div class="form-row bare">
                                                                 <div class="row-text">
                                                                     <strong>Send confident replies automatically</strong>
                                                                     <span class="muted">
@@ -3028,12 +3009,13 @@
                                                                         checked={s.autoSend}
                                                                         disabled={takeover.sendersBusy}
                                                                         onchange={(e) => onAiRuleFlag(s, 'autoSend', (e.currentTarget as HTMLInputElement).checked)}
+                                                                        aria-label={`Send confident replies automatically for ${s.pattern}`}
                                                                         data-testid={`ai-rule-autosend-${s.id}`}
                                                                     />
                                                                     <span>{s.autoSend ? 'On' : 'Off'}</span>
                                                                 </label>
                                                             </div>
-                                                            <div class="form-row" style="padding:0;border:none;background:none;">
+                                                            <div class="form-row bare">
                                                                 <div class="row-text">
                                                                     <strong>Append the AI sign-off to replies</strong>
                                                                     <span class="muted">
@@ -3047,6 +3029,7 @@
                                                                         checked={s.signReplies}
                                                                         disabled={takeover.sendersBusy}
                                                                         onchange={(e) => onAiRuleFlag(s, 'signReplies', (e.currentTarget as HTMLInputElement).checked)}
+                                                                        aria-label={`Append the AI sign-off to replies for ${s.pattern}`}
                                                                         data-testid={`ai-rule-signreplies-${s.id}`}
                                                                     />
                                                                     <span>{s.signReplies ? 'On' : 'Off'}</span>
@@ -3119,6 +3102,7 @@
                             type="checkbox"
                             checked={settings.weatherChipOutlook}
                             onchange={(e) => setWeatherChipOutlook((e.currentTarget as HTMLInputElement).checked)}
+                            aria-label="Weather chip in the top bar (Outlook skin)"
                             data-testid="settings-weather-outlook"
                         />
                         <span>{settings.weatherChipOutlook ? 'On' : 'Off'}</span>
@@ -3282,6 +3266,7 @@
                                 type="checkbox"
                                 checked={!sounds.muted}
                                 onchange={(e) => setMuted(!(e.currentTarget as HTMLInputElement).checked)}
+                                aria-label="Sounds"
                                 data-testid="settings-sound-toggle"
                             />
                             <span>{sounds.muted ? 'Off' : 'On'}</span>
@@ -3422,6 +3407,7 @@
                                 type="checkbox"
                                 checked={settings.aiFeatures}
                                 onchange={(e) => setAiFeatures((e.currentTarget as HTMLInputElement).checked)}
+                                aria-label="AI features"
                                 data-testid="settings-ai-features"
                             />
                             <span>{settings.aiFeatures ? 'On' : 'Off'}</span>
@@ -3450,7 +3436,7 @@
                                     </span>
                                 </div>
                             {/if}
-                            <div class="form-row" style="padding:0;border:none;background:none;">
+                            <div class="form-row bare">
                                 <div class="row-text">
                                     <strong>Let the assistant answer mail</strong>
                                     <span class="muted">
@@ -3465,6 +3451,7 @@
                                         checked={takeover.status?.enabled ?? false}
                                         disabled={takeover.busy}
                                         onchange={(e) => onTakeoverEnabled((e.currentTarget as HTMLInputElement).checked)}
+                                        aria-label="Let the assistant answer mail"
                                         data-testid="settings-takeover-enabled"
                                     />
                                     <span>{takeover.status?.enabled ? 'On' : 'Off'}</span>
@@ -3474,7 +3461,7 @@
                                  into the per-sender rules under Settings →
                                  Cloud Replies — each rule carries its
                                  own behaviour now. -->
-                            <div class="form-row" style="padding:0;border:none;background:none;">
+                            <div class="form-row bare">
                                 <div class="row-text">
                                     <strong>Replies per hour (max)</strong>
                                     <span class="muted">
@@ -3492,7 +3479,7 @@
                                     data-testid="settings-takeover-rate"
                                 />
                             </div>
-                            <div class="form-row" style="padding:0;border:none;background:none;">
+                            <div class="form-row bare">
                                 <div class="row-text">
                                     <strong>Minimum delay (minutes)</strong>
                                     <span class="muted">
@@ -3512,7 +3499,7 @@
                                     data-testid="settings-takeover-delay"
                                 />
                             </div>
-                            <div class="form-row" style="padding:0;border:none;background:none;">
+                            <div class="form-row bare">
                                 <div class="row-text">
                                     <strong>Look-back (hours)</strong>
                                     <span class="muted">
@@ -3530,7 +3517,7 @@
                                     data-testid="settings-takeover-lookback"
                                 />
                             </div>
-                            <div class="form-row" style="padding:0;border:none;background:none;">
+                            <div class="form-row bare">
                                 <div class="row-text">
                                     <strong>Consider attachments</strong>
                                     <span class="muted">
@@ -3543,6 +3530,7 @@
                                         checked={takeover.status?.considerAttachments ?? false}
                                         disabled={takeover.busy}
                                         onchange={(e) => onTakeoverAttachments((e.currentTarget as HTMLInputElement).checked)}
+                                        aria-label="Consider attachments"
                                         data-testid="settings-takeover-attachments"
                                     />
                                     <span>{takeover.status?.considerAttachments ? 'On' : 'Off'}</span>
@@ -3610,6 +3598,7 @@
                             <select
                                 value={settings.llm.preset}
                                 onchange={(e) => applyPreset((e.currentTarget as HTMLSelectElement).value)}
+                                aria-label="Preset"
                                 data-testid="settings-preset"
                             >
                                 {#each PRESETS as p (p.value)}
@@ -3644,6 +3633,7 @@
                                     spellcheck="false"
                                     value={settings.llm.apiKey}
                                     oninput={(e) => setLlm({ apiKey: (e.currentTarget as HTMLInputElement).value })}
+                                    aria-label="API key"
                                     data-testid="settings-key"
                                 />
                             </div>
@@ -3659,6 +3649,7 @@
                                             : 'https://your-llm.example/v1'}
                                     value={settings.llm.baseUrl}
                                     oninput={(e) => setLlm({ baseUrl: (e.currentTarget as HTMLInputElement).value })}
+                                    aria-label="Base URL"
                                     data-testid="settings-base-url"
                                 />
                             </div>
@@ -3675,6 +3666,7 @@
                                     value={settings.llm.model}
                                     list="llm-model-suggestions"
                                     oninput={(e) => setLlm({ model: (e.currentTarget as HTMLInputElement).value })}
+                                    aria-label="Model"
                                     data-testid="settings-model"
                                 />
                                 <!-- Everything below the input spans the value
@@ -3841,6 +3833,7 @@
                             checked={settings.aiSuggestReply}
                             disabled={!aiAvailable()}
                             onchange={(e) => setAiSuggestReply((e.currentTarget as HTMLInputElement).checked)}
+                            aria-label="Suggest a reply when I hit Reply"
                             data-testid="settings-ai-suggest-reply"
                         />
                         <span>{settings.aiSuggestReply ? 'On' : 'Off'}</span>
@@ -3874,6 +3867,7 @@
                             checked={voicePrefs.enabled}
                             disabled={!isVoiceAvailable() && !isSttAvailable()}
                             onchange={(e) => setVoiceEnabled((e.currentTarget as HTMLInputElement).checked)}
+                            aria-label="Speak replies and auto-send dictation"
                             data-testid="settings-voice-toggle"
                         />
                         <span>{voicePrefs.enabled ? 'On' : 'Off'}</span>
@@ -4043,6 +4037,7 @@
                             type="checkbox"
                             checked={settings.groupThreads}
                             onchange={(e) => setGroupThreads((e.currentTarget as HTMLInputElement).checked)}
+                            aria-label="Group messages by thread"
                             data-testid="settings-group-threads"
                         />
                         <span>{settings.groupThreads ? 'On' : 'Off'}</span>
@@ -4100,6 +4095,7 @@
                                 type="checkbox"
                                 checked={gravatarPref.on}
                                 onchange={(e) => setGravatarEnabled((e.currentTarget as HTMLInputElement).checked)}
+                                aria-label="Gravatar avatars"
                                 data-testid="settings-avatars-toggle"
                             />
                             <span>{gravatarPref.on ? 'On' : 'Off'}</span>
@@ -4136,9 +4132,10 @@
                             <button
                                 type="button"
                                 class="btn btn-ghost small"
-                                onclick={() => {
+                                onclick={async () => {
                                     const text = `IMAP: mail.${deviceDomain}:993 SSL/TLS\nSMTP: mail.${deviceDomain}:587 STARTTLS\nUsername: ${deviceEmail}`;
-                                    navigator.clipboard.writeText(text).then(() => showToast('success', 'Settings copied to clipboard'));
+                                    if (await copyToClipboard(text)) showToast('success', 'Settings copied to clipboard');
+                                    else showToast('error', 'Copy failed');
                                 }}
                             >
                                 <Icon name="copy" size={11} /> Copy all
@@ -4151,7 +4148,7 @@
                 <section class="tab-section" data-testid="settings-sweep">
                     <h3>Sweep</h3>
                     <p class="muted small">Bulk spam &amp; phishing classification alongside AI sort.</p>
-                                <div class="form-row" style="padding:0;border:none;background:none;margin-top:10px;">
+                                <div class="form-row bare" style="margin-top:10px;">
                                     <div class="row-text">
                                         <strong>Sweep alongside AI sort</strong>
                                         <span class="muted">
@@ -4167,6 +4164,7 @@
                                             type="checkbox"
                                             checked={settings.aiSortSweepSpam}
                                             onchange={(e) => setAiSortSweepSpam((e.currentTarget as HTMLInputElement).checked)}
+                                            aria-label="Sweep alongside AI sort"
                                             data-testid="settings-ai-sort-sweep"
                                         />
                                         <span>{settings.aiSortSweepSpam ? 'On' : 'Off'}</span>
@@ -4204,7 +4202,7 @@
                     <p class="muted small">Client-side AI helpers — subject suggestions and the pre-send sanity check.</p>
                     <div class="card">
                         <h4><Icon name="sparkles" size={13} /> AI subject suggestion</h4>
-                        <div class="form-row" style="padding:0;border:none;background:none;">
+                        <div class="form-row bare">
                             <div class="row-text">
                                 <strong>Suggest a subject as I leave the body</strong>
                                 <span class="muted">
@@ -4219,6 +4217,7 @@
                                     type="checkbox"
                                     checked={settings.aiSuggestSubjectOnBlur}
                                     onchange={(e) => setAiSuggestSubjectOnBlur((e.currentTarget as HTMLInputElement).checked)}
+                                    aria-label="Suggest a subject as I leave the body"
                                     data-testid="settings-ai-subject-blur"
                                 />
                                 <span>{settings.aiSuggestSubjectOnBlur ? 'On' : 'Off'}</span>
@@ -4239,6 +4238,7 @@
                                 type="checkbox"
                                 checked={settings.preSendCheck}
                                 onchange={(e) => setPreSendCheck((e.currentTarget as HTMLInputElement).checked)}
+                                aria-label="Pre-send check"
                                 data-testid="settings-pre-send-check"
                             />
                             <span>{settings.preSendCheck ? 'On' : 'Off'}</span>
@@ -4257,6 +4257,7 @@
                                 type="checkbox"
                                 checked={settings.composeHistorySummary}
                                 onchange={(e) => setComposeHistorySummary((e.currentTarget as HTMLInputElement).checked)}
+                                aria-label="Compose history summary"
                                 data-testid="settings-history-summary"
                             />
                             <span>{settings.composeHistorySummary ? 'On' : 'Off'}</span>
@@ -4357,7 +4358,7 @@
                                 Your receiver verifies each POST with this. It is not stored
                                 anywhere you can read it back, so copy it now.
                             </p>
-                            <div class="form-row" style="padding:0;border:none;background:none;gap:8px;">
+                            <div class="form-row bare" style="gap:8px;">
                                 <input
                                     type="text"
                                     readonly
@@ -4368,7 +4369,10 @@
                                 <button
                                     type="button"
                                     class="btn"
-                                    onclick={() => { navigator.clipboard?.writeText(owNewSecret!.secret); showToast('success', 'Secret copied'); }}
+                                    onclick={async () => {
+                                        if (await copyToClipboard(owNewSecret!.secret)) showToast('success', 'Secret copied');
+                                        else showToast('error', 'Copy failed — select the field and copy it manually');
+                                    }}
                                     data-testid="ow-secret-copy"
                                 >Copy</button>
                                 <button
@@ -4668,7 +4672,7 @@
                     </p>
 
                     <div class="card">
-                        <div class="form-row" style="padding:0;border:none;background:none;">
+                        <div class="form-row bare">
                             <div class="row-text">
                                 <strong>Show the calendar ticker</strong>
                                 <span class="muted">Your next event, in the top bar.</span>
@@ -4678,6 +4682,7 @@
                                     type="checkbox"
                                     checked={settings.calendarTicker}
                                     onchange={(e) => setCalendarTicker(e.currentTarget.checked)}
+                                    aria-label="Show the calendar ticker"
                                     data-testid="settings-calendar-ticker"
                                 />
                                 <span>{settings.calendarTicker ? 'On' : 'Off'}</span>
@@ -4686,7 +4691,7 @@
                     </div>
 
                     <div class="card">
-                        <div class="form-row" style="padding:0;border:none;background:none;">
+                        <div class="form-row bare">
                             <div class="row-text">
                                 <strong>Show event titles</strong>
                                 <span class="muted">Off shows the time only.</span>
@@ -4696,6 +4701,7 @@
                                     type="checkbox"
                                     checked={settings.calendarTickerTitles}
                                     onchange={(e) => setCalendarTickerTitles(e.currentTarget.checked)}
+                                    aria-label="Show event titles"
                                     data-testid="settings-calendar-titles"
                                 />
                                 <span>{settings.calendarTickerTitles ? 'On' : 'Off'}</span>
@@ -4710,7 +4716,7 @@
 
                     <div class="card">
                         <h4>👨‍👩‍👧 VIP addresses</h4>
-                        <div class="form-row" style="padding:0;border:none;background:none;flex-direction:column;align-items:stretch;gap:6px;">
+                        <div class="form-row bare" style="flex-direction:column;align-items:stretch;gap:6px;">
                             <div class="row-text">
                                 <strong>Family / VIP address list</strong>
                                 <span class="muted">
@@ -5713,6 +5719,7 @@
         flex-wrap: wrap;
     }
     .form-row + .form-row { border-top: 1px solid var(--border-subtle); }
+    .form-row.bare { padding: 0; border: none; background: none; }
     /* The AI master switch leads the section and is the only control that
        removes most of the UI, so it gets a top rule of its own rather
        than borrowing the "another row in a list" treatment the .form-row

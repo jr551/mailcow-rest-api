@@ -61,7 +61,8 @@ writeFileSync(path.join(tmp, 'stubs.mjs'),
     + 'export const getTtsConfig = async () => null;\n'
     + 'export const apiUrl = (p) => p;\n'
     + 'export const getSession = () => null;\n'
-    + 'export const bearerHeader = () => ({});\n');
+    + 'export const bearerHeader = () => ({});\n'
+    + 'export const dropPermanentSession = () => {};\n');
 
 const stubsUrl = pathToFileURL(path.join(tmp, 'stubs.mjs')).href;
 const rewritten = readFileSync(path.join(tmp, 'settings.mjs'), 'utf8').replace(

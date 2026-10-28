@@ -228,3 +228,16 @@ test('pool: idle connection is closed after idleMs (sweepIdle)', async () => {
     assert.equal(pool.count(), 0, 'idle past idleMs should be evicted');
     assert.equal(f.created[0].closed, true, 'evicted client must be closed');
 });
+
+test('pool: waiter for a different user gets a slot when the released client goes idle', async () => {
+    const f = mockFactory();
+    const pool = createPool({ max: 1, idleMs: 10_000, createClient: f.create });
+    const a = await pool.acquire('hA', 'a', 'p');
+    const pending = pool.acquire('hB', 'b', 'p', { waitMs: 2000 });
+    pool.release('hA', a);
+    const b = await pending;
+    assert.equal(b.user, 'b');
+    assert.equal(a.closed, true, 'idle client of the other user must be evicted');
+    assert.equal(pool.count(), 1);
+    pool.release('hB', b);
+});

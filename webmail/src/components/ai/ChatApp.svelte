@@ -52,6 +52,7 @@
     // Pending write-tool approvals — chatTurn parks here until the user
     // clicks Approve or Deny. Multiple writes in one turn queue up.
     interface PendingWrite {
+        threadId: string;
         name: string;
         args: Record<string, unknown>;
         resolve: (ok: boolean) => void;
@@ -60,6 +61,7 @@
     /** Pending permission asks (the model called `request_permission`).
      *  Each card stays visible until the user clicks Allow or Deny. */
     interface PendingPermission {
+        threadId: string;
         capability: GrantableCapability;
         reason: string;
         resolve: (ok: boolean) => void;
@@ -164,28 +166,33 @@
         speakMessage(last.content);
     });
 
-    function answerWrite(idx: number, ok: boolean) {
-        const w = pendingWrites[idx];
-        if (!w) return;
-        w.resolve(ok);
-        pendingWrites = pendingWrites.filter((_, i) => i !== idx);
+    function answerWrite(p: PendingWrite, ok: boolean) {
+        p.resolve(ok);
+        pendingWrites = pendingWrites.filter((x) => x !== p);
     }
-    function answerPermission(idx: number, ok: boolean) {
-        const p = pendingPermissions[idx];
-        if (!p) return;
+    function answerPermission(p: PendingPermission, ok: boolean) {
         // On Allow we flip the toggle here so the *next* model step already
         // sees the new capability — saves the model from having to ask again.
         if (ok) setTools({ [p.capability]: true });
         p.resolve(ok);
-        pendingPermissions = pendingPermissions.filter((_, i) => i !== idx);
+        pendingPermissions = pendingPermissions.filter((x) => x !== p);
     }
-    function describeArgs(args: Record<string, unknown>): string {
-        const entries = Object.entries(args).slice(0, 4);
-        if (!entries.length) return '(no arguments)';
-        return entries.map(([k, v]) => {
-            const s = typeof v === 'string' ? v : JSON.stringify(v);
-            return `${k}: ${s.length > 60 ? s.slice(0, 60) + '…' : s}`;
-        }).join(' · ');
+    // Deny every open card (Stop pressed) so the parked turn can unwind.
+    function denyAllPending() {
+        for (const w of pendingWrites) w.resolve(false);
+        for (const p of pendingPermissions) p.resolve(false);
+        pendingWrites = [];
+        pendingPermissions = [];
+    }
+    // The approval card is the only consent gate for irreversible tools, so
+    // show every argument in full, with the recipients and body readable.
+    function formatArgValue(v: unknown): string {
+        if (typeof v === 'string') return v;
+        if (Array.isArray(v) && v.every((x) => typeof x === 'string')) return v.join('\n');
+        return JSON.stringify(v, null, 2) ?? String(v);
+    }
+    function describeArgs(args: Record<string, unknown>): { key: string; value: string }[] {
+        return Object.entries(args).map(([key, v]) => ({ key, value: formatArgValue(v) }));
     }
 
     // Filtered thread list — search across titles + message bodies.
@@ -418,11 +425,11 @@
                 modelOverride,
                 threadId,
                 confirmWrite: (call) => new Promise<boolean>((resolve) => {
-                    pendingWrites = [...pendingWrites, { name: call.name, args: call.args, resolve }];
+                    pendingWrites = [...pendingWrites, { threadId, name: call.name, args: call.args, resolve }];
                     scrollToBottom();
                 }),
                 confirmPermission: (req) => new Promise<boolean>((resolve) => {
-                    pendingPermissions = [...pendingPermissions, { capability: req.capability, reason: req.reason, resolve }];
+                    pendingPermissions = [...pendingPermissions, { threadId, capability: req.capability, reason: req.reason, resolve }];
                     scrollToBottom();
                 })
             })) {
@@ -549,6 +556,7 @@
 
     function stop() {
         if (abortCtrl) abortCtrl.abort();
+        denyAllPending();
     }
 
     function pickThread(id: string) {
@@ -834,7 +842,7 @@
                 {/each}
             {/if}
 
-            {#each pendingWrites as p, i (i)}
+            {#each pendingWrites.filter((w) => w.threadId === aiState.activeId) as p (p)}
                 {@const ptd = toolDisplay(p.name)}
                 <div class="confirm-card" role="dialog" aria-label="Confirm action" data-testid={`confirm-${p.name}`}>
                     <div class="confirm-head">
@@ -845,19 +853,26 @@
                     <div class="confirm-body muted small">
                         The assistant wants to make a change. Review and approve to continue, or deny to skip.
                     </div>
-                    <div class="confirm-args"><code>{describeArgs(p.args)}</code></div>
+                    <dl class="confirm-args">
+                        {#each describeArgs(p.args) as arg (arg.key)}
+                            <dt>{arg.key}</dt>
+                            <dd><pre>{arg.value}</pre></dd>
+                        {:else}
+                            <dd class="muted">(no arguments)</dd>
+                        {/each}
+                    </dl>
                     <div class="confirm-actions">
-                        <button type="button" class="btn btn-ghost" onclick={() => answerWrite(i, false)} data-testid="confirm-deny">
+                        <button type="button" class="btn btn-ghost" onclick={() => answerWrite(p, false)} data-testid="confirm-deny">
                             <Icon name="close" size={12} /> Deny
                         </button>
-                        <button type="button" class="btn btn-primary" onclick={() => answerWrite(i, true)} data-testid="confirm-approve">
+                        <button type="button" class="btn btn-primary" onclick={() => answerWrite(p, true)} data-testid="confirm-approve">
                             <Icon name="check" size={12} /> Approve
                         </button>
                     </div>
                 </div>
             {/each}
 
-            {#each pendingPermissions as p, i (i)}
+            {#each pendingPermissions.filter((x) => x.threadId === aiState.activeId) as p (p)}
                 {@const meta = CAP_META[p.capability]}
                 <div class="permission-card" role="dialog" aria-label="Permission request" data-testid={`permission-${p.capability}`}>
                     <div class="permission-head">
@@ -891,10 +906,10 @@
                     </div>
 
                     <div class="confirm-actions">
-                        <button type="button" class="btn btn-ghost" onclick={() => answerPermission(i, false)} data-testid="permission-deny">
+                        <button type="button" class="btn btn-ghost" onclick={() => answerPermission(p, false)} data-testid="permission-deny">
                             <Icon name="close" size={12} /> Not now
                         </button>
-                        <button type="button" class="btn btn-primary" onclick={() => answerPermission(i, true)} data-testid="permission-allow">
+                        <button type="button" class="btn btn-primary" onclick={() => answerPermission(p, true)} data-testid="permission-allow">
                             <Icon name="check" size={12} /> Allow
                         </button>
                     </div>
@@ -1491,14 +1506,31 @@
     .confirm-tool { margin-left: auto; }
     .confirm-body { line-height: 1.5; }
     .confirm-args {
+        margin: 0;
         padding: 8px 10px;
         background: var(--bg-base);
         border: 1px solid var(--border-subtle);
         border-radius: var(--radius-sm);
         font-size: 11.5px;
         word-break: break-word;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
     }
-    .confirm-args code {
+    .confirm-args dt {
+        margin-top: 4px;
+        font-size: 10.5px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--text-tertiary);
+    }
+    .confirm-args dd { margin: 0; }
+    .confirm-args pre {
+        margin: 0;
+        max-height: 180px;
+        overflow: auto;
+        white-space: pre-wrap;
         font-family: var(--font-mono);
         color: var(--text-primary);
     }

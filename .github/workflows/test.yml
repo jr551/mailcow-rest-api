@@ -4,6 +4,8 @@ on:
   push:
     branches: [master]
   pull_request:
+  # publish-image runs this same suite as a gate before it pushes an image.
+  workflow_call:
 
 # Public repo: never run on self-hosted home hardware for fork PRs (untrusted code).
 permissions:

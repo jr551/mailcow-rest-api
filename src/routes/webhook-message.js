@@ -2,8 +2,9 @@
 
 const { createReadStream } = require('node:fs');
 
-// Public, unguessable one-link download for the complete RFC822 message.
-// The GUID is 256 bits of randomness; the link expires after one hour.
+// Public, unguessable download link for the complete RFC822 message. The
+// GUID is 256 bits of randomness; the link can be fetched repeatedly until
+// it expires (one hour by default).
 // No mailbox credentials or signature are needed because the GUID is the
 // capability and it is not derivable from the message or mailbox.
 module.exports = async function webhookMessageRoutes(app, { config, stager }) {
@@ -11,7 +12,7 @@ module.exports = async function webhookMessageRoutes(app, { config, stager }) {
         config: { public: true, rateLimit: false },
         schema: {
             tags: ['webhooks'],
-            summary: 'Download the complete RFC822 message via its one-time link'
+            summary: 'Download the complete RFC822 message via its expiring link'
         }
     }, async (req, reply) => {
         try {

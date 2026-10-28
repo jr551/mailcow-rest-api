@@ -5,7 +5,7 @@
 // dropping it in the map below.
 
 import {
-    Inbox, Star, FilePen, Send, Trash2, ShieldAlert, Folder, Mail,
+    Inbox, Star, FilePen, Send, ShieldAlert, Folder, Mail,
     Paperclip, Search, RefreshCw, Moon, Sun, Monitor, Sparkles, WandSparkles, Camera, EyeOff,
     Reply, Archive, FolderInput, X, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Plus,
     Download, Eye, User, LogOut, Info, Settings, CalendarDays,

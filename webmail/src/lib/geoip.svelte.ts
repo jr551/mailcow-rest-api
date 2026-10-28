@@ -38,9 +38,13 @@ function writeCache(c: Cache) {
     } catch { /* quota */ }
 }
 
-function isPrivateOrSpecial(ip: string): boolean {
-    if (!ip) return true;
-    return /^(10\.|192\.168\.|169\.254\.|127\.|0\.|172\.(1[6-9]|2\d|3[0-1])\.|fe80:|fc00:|fd[0-9a-f]{2}:|::1$|::$)/i.test(ip);
+function isPrivateOrSpecial(raw: string): boolean {
+    if (!raw) return true;
+    // Anything that is not made of IP characters is never sent anywhere.
+    if (!/^[0-9a-f:.]+$/i.test(raw)) return true;
+    // An IPv4-mapped IPv6 address is judged by the IPv4 inside it.
+    const ip = raw.replace(/^::ffff:/i, '');
+    return /^(10\.|192\.168\.|169\.254\.|127\.|0\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|172\.(1[6-9]|2\d|3[0-1])\.|fe[89ab][0-9a-f]:|f[cd][0-9a-f]{2}:|::1$|::$)/i.test(ip);
 }
 
 /** Convert ISO 3166-1 alpha-2 country code to a flag emoji. "GB" → 🇬🇧 */
@@ -66,11 +70,16 @@ export const geoipCache = _state;
 }
 
 const inflight = new Set<string>();
+// A rate limit or network error says nothing about the IP, so it is not
+// cached: just not retried for a while.
+const RETRY_AFTER_MS = 10 * 60 * 1000;
+const retryAt = new Map<string, number>();
 
 /** Kick off a lookup for an IP. Result lands in geoipCache.codes[ip]. */
 export function ensureCountry(ip: string | null | undefined): void {
     if (!ip || inflight.has(ip)) return;
     if (ip in _state.codes) return; // cached (success or null)
+    if ((retryAt.get(ip) ?? 0) > Date.now()) return;
     if (isPrivateOrSpecial(ip)) {
         _state.codes[ip] = null;
         return;
@@ -78,16 +87,16 @@ export function ensureCountry(ip: string | null | undefined): void {
     inflight.add(ip);
     fetch(`https://ipapi.co/${encodeURIComponent(ip)}/country/`, { mode: 'cors' })
         .then(async (r) => {
-            if (!r.ok) return null;
+            if (!r.ok) throw new Error(`geoip ${r.status}`);
             const txt = (await r.text()).trim();
             return /^[A-Z]{2}$/.test(txt) ? txt : null;
         })
-        .catch(() => null)
         .then((code) => {
             _state.codes[ip] = code;
             const c = readCache();
             c[ip] = { code, ts: Date.now() };
             writeCache(c);
         })
+        .catch(() => { retryAt.set(ip, Date.now() + RETRY_AFTER_MS); })
         .finally(() => { inflight.delete(ip); });
 }

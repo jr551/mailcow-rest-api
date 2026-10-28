@@ -4,7 +4,7 @@
 // also returns spam classification), and reports the candidates so
 // the user can move them in one click.
 
-import { listMailboxes, listMessages, getMessage, moveMessage, type Mailbox } from './api';
+import { listMailboxes, listMessages, getMessage, moveMessage, type Mailbox, type MessageListItem } from './api';
 import { scanEmailForPhishing, envelopeToHeaders } from './phishing-scan';
 import { settings } from './settings.svelte';
 
@@ -58,6 +58,8 @@ export function findArchiveFolder(mailboxes: Mailbox[]): string | null {
     return named ? named.path : null;
 }
 
+const LIST_PAGE_MAX = 100;
+
 interface SweepOptions {
     onProgress?: (p: SweepProgress) => void;
     signal?: AbortSignal;
@@ -79,10 +81,18 @@ export async function runSpamSweep(opts: SweepOptions = {}): Promise<{
     const trashPath = findTrashFolder(mailboxes);
 
     const batch = settings.spamSweepBatchSize || 50;
-    // The listing comes back newest-first (server-side INBOX view).
-    // Cap the page size at the requested batch.
-    const list = await listMessages(inboxPath, { pageSize: batch, page: 1 });
-    const messages = list.messages || [];
+    // The listing comes back newest-first (server-side INBOX view), pages
+    // are 0-based and the server caps pageSize at LIST_PAGE_MAX, so a
+    // bigger batch is read page by page.
+    const messages: MessageListItem[] = [];
+    for (let page = 0; messages.length < batch; page++) {
+        if (opts.signal?.aborted) break;
+        const want = Math.min(LIST_PAGE_MAX, batch - messages.length);
+        const list = await listMessages(inboxPath, { pageSize: want, page });
+        const got = list.messages || [];
+        messages.push(...got);
+        if (got.length < want) break;
+    }
 
     const candidates: SweepCandidate[] = [];
     let scanned = 0;
@@ -142,24 +152,24 @@ export async function runSpamSweep(opts: SweepOptions = {}): Promise<{
 }
 
 // Bulk move a list of (path, uid) → destination. Returns counts so
-// the UI can show "Moved 12 / 14 — 2 failed".
+// the UI can show "Moved 12 / 14 — 2 failed", plus the items that really
+// moved so callers only drop those rows.
 export async function bulkMove(
     items: { path: string; uid: number }[],
     destPath: string,
-    onProgress?: (done: number, total: number) => void
-): Promise<{ moved: number; failed: number }> {
-    let moved = 0;
+    onProgress?: (done: number, total: number, failed: number) => void
+): Promise<{ moved: number; failed: number; movedItems: { path: string; uid: number }[] }> {
+    const movedItems: { path: string; uid: number }[] = [];
     let failed = 0;
     for (let i = 0; i < items.length; i++) {
         const { path, uid } = items[i];
         try {
             await moveMessage(path, uid, destPath);
-            moved++;
+            movedItems.push(items[i]);
         } catch {
             failed++;
         }
-        onProgress?.(i + 1, items.length);
+        onProgress?.(i + 1, items.length, failed);
     }
-    return { moved, failed };
+    return { moved: movedItems.length, failed, movedItems };
 }
-

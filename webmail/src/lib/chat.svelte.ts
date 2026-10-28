@@ -662,13 +662,13 @@ async function execTool(name: string, args: Record<string, unknown>): Promise<un
             return rest(`/v1/mailboxes/${encodeURIComponent(String(args.path))}/messages${qs ? '?' + qs : ''}`);
         }
         case 'get_message':
-            return rest(`/v1/mailboxes/${encodeURIComponent(String(args.path))}/messages/${args.uid}`);
+            return rest(`/v1/mailboxes/${encodeURIComponent(String(args.path))}/messages/${uidSegment(args.uid)}`);
         case 'summarise_email': {
             // Fetch the message envelope + body, then ship the body
             // through the existing /v1/ai/summarize endpoint. Returns
             // { subject, from, summary } so the model can quote the
             // bits that matter without re-asking for envelope details.
-            const detail = await rest(`/v1/mailboxes/${encodeURIComponent(String(args.path))}/messages/${args.uid}`) as {
+            const detail = await rest(`/v1/mailboxes/${encodeURIComponent(String(args.path))}/messages/${uidSegment(args.uid)}`) as {
                 envelope?: { subject?: string; from?: { name?: string | null; address?: string | null }[] };
                 text?: string;
                 html?: string;
@@ -688,7 +688,7 @@ async function execTool(name: string, args: Record<string, unknown>): Promise<un
         }
         case 'move_message': {
             const path = encodeURIComponent(String(args.path));
-            return rest(`/v1/mailboxes/${path}/messages/${args.uid}/move`, {
+            return rest(`/v1/mailboxes/${path}/messages/${uidSegment(args.uid)}/move`, {
                 method: 'PUT',
                 body: JSON.stringify({ path: String(args.destination) })
             });
@@ -702,14 +702,14 @@ async function execTool(name: string, args: Record<string, unknown>): Promise<un
             else if (op === 'star') body.add = ['\\Flagged'];
             else if (op === 'unstar') body.remove = ['\\Flagged'];
             else throw new Error('op must be one of read | unread | star | unstar');
-            return rest(`/v1/mailboxes/${path}/messages/${args.uid}/flags`, {
+            return rest(`/v1/mailboxes/${path}/messages/${uidSegment(args.uid)}/flags`, {
                 method: 'PUT',
                 body: JSON.stringify(body)
             });
         }
         case 'delete_message': {
             const path = encodeURIComponent(String(args.path));
-            return rest(`/v1/mailboxes/${path}/messages/${args.uid}`, { method: 'DELETE' });
+            return rest(`/v1/mailboxes/${path}/messages/${uidSegment(args.uid)}`, { method: 'DELETE' });
         }
         case 'list_mail_rules':
             return rest('/v1/me/mail-rules');
@@ -1076,6 +1076,50 @@ export function resolveApiKey(): string {
     return settings.llm.apiKey;
 }
 
+/** A message uid is interpolated into a REST path, so it has to be a plain
+ *  positive integer — anything else could carry `/` or `..` segments. */
+function uidSegment(v: unknown): string {
+    const n = typeof v === 'number' ? v : Number(v);
+    if (!Number.isInteger(n) || n <= 0) throw new Error('uid must be a positive integer');
+    return String(n);
+}
+
+/** set_setting keys that only change how the webmail looks or lays out
+ *  content. Everything else is treated as a safety, privacy, or identity
+ *  setting. Text the assistant has just read must not be able to flip
+ *  those without the user seeing the change, so this is an allow-list:
+ *  a key added to set_setting later asks for consent until it is listed here. */
+const LOW_RISK_SETTING_KEYS = new Set([
+    'density', 'listFilter', 'accountChipDisplay', 'pageSize', 'groupThreads',
+    'aiSuggestSubjectOnBlur', 'composeHistorySummary', 'weatherChip', 'weatherUnits',
+    'weatherLatitude', 'weatherLongitude', 'calendarTicker', 'vipAddresses',
+    'voiceEnabled', 'voiceId', 'spamSweepBatchSize'
+]);
+
+/** True when the call must be put in front of the user before it runs:
+ *  everything in DESTRUCTIVE_TOOLS, deleting a calendar event, and any
+ *  set_setting key outside LOW_RISK_SETTING_KEYS. */
+export function needsConsent(name: string, args: Record<string, unknown>): boolean {
+    if (DESTRUCTIVE_TOOLS.has(name) || name === 'delete_event') return true;
+    return name === 'set_setting' && !LOW_RISK_SETTING_KEYS.has(String(args.key));
+}
+
+function abortError(): Error {
+    return new DOMException('The operation was aborted.', 'AbortError');
+}
+
+// A consent card the user never answers must not keep the turn parked once
+// the turn has been cancelled: resolve as "declined" when the signal fires.
+function awaitConsent(ask: Promise<boolean>, signal?: AbortSignal): Promise<boolean> {
+    if (!signal) return ask;
+    if (signal.aborted) return Promise.resolve(false);
+    return new Promise<boolean>((resolve, reject) => {
+        const onAbort = () => resolve(false);
+        signal.addEventListener('abort', onAbort, { once: true });
+        ask.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+    });
+}
+
 // Run one chat turn: send the conversation, follow tool calls until the
 // model emits a final assistant message or we hit the step cap.
 export async function* chatTurn(
@@ -1277,9 +1321,23 @@ export async function* chatTurn(
         });
 
         for (const tc of toolCalls) {
+            if (opts.signal?.aborted) throw abortError();
             let parsed: Record<string, unknown> = {};
             try { parsed = JSON.parse(tc.arguments || '{}'); } catch { /* tolerate empty */ }
             yield { type: 'tool_call', toolName: tc.name, toolArgs: parsed };
+
+            // Only run tools that were actually offered for this turn. A
+            // hallucinated or injected name must not reach execTool just
+            // because it exists there.
+            if (!toolCatalog.some((t) => t.function.name === tc.name)) {
+                messages.push({
+                    role: 'tool',
+                    tool_call_id: tc.id,
+                    name: tc.name,
+                    content: JSON.stringify({ error: `Tool "${tc.name}" is not available in this chat.` })
+                });
+                continue;
+            }
 
             // The model asks for a capability; the user grants it. This used
             // to auto-approve and flip the toggle itself, which meant text
@@ -1291,8 +1349,9 @@ export async function* chatTurn(
                 // No handler (background runner, ChatBot bubble) means there
                 // is no one to ask — deny rather than assume consent.
                 const granted = validCap && opts.confirmPermission
-                    ? await opts.confirmPermission({ capability: cap as GrantableCapability, reason })
+                    ? await awaitConsent(opts.confirmPermission({ capability: cap as GrantableCapability, reason }), opts.signal)
                     : false;
+                if (opts.signal?.aborted) throw abortError();
                 if (validCap && granted) {
                     // Actually flip the toggle so the capability takes effect
                     // (model swap to Sonar/`:online` for webSearch, prompt
@@ -1317,12 +1376,14 @@ export async function* chatTurn(
                 continue;
             }
 
-            // Irreversible tools ask first. Anything else — including the
-            // reversible writes — still runs unprompted.
-            if (DESTRUCTIVE_TOOLS.has(tc.name)) {
+            // Irreversible tools and safety-relevant settings ask first.
+            // Anything else — including the reversible writes — still runs
+            // unprompted.
+            if (needsConsent(tc.name, parsed)) {
                 const approved = opts.confirmWrite
-                    ? await opts.confirmWrite({ name: tc.name, args: parsed })
+                    ? await awaitConsent(opts.confirmWrite({ name: tc.name, args: parsed }), opts.signal)
                     : false;
+                if (opts.signal?.aborted) throw abortError();
                 if (!approved) {
                     messages.push({
                         role: 'tool',

@@ -6,6 +6,7 @@ const { problemSchema } = require('../schemas');
 const {
     ADDRESS_BOOK_MAILBOX,
     MAX_CONTACTS,
+    MAX_TIMESTAMP,
     newUid,
     buildVCardMessage,
     extractVCard,
@@ -119,7 +120,7 @@ const contactBodySchema = {
         address: { type: 'string', maxLength: 320 },
         name: { type: 'string', maxLength: 200 },
         note: { type: 'string', maxLength: 500 },
-        lastSeen: { type: 'integer', minimum: 0 },
+        lastSeen: { type: 'integer', minimum: 0, maximum: MAX_TIMESTAMP },
         count: { type: 'integer', minimum: 0 }
     }
 };

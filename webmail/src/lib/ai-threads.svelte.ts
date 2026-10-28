@@ -2,11 +2,15 @@
 // threads are also synced to a hidden IMAP folder (`.AI Conversations`) so
 // they survive browser switches and are available on mobile.
 
+import { untrack } from 'svelte';
 import type { ChatMessage } from './chat.svelte';
 import { parseEmailContext } from './email-context';
-import { getSession } from './auth.svelte';
+import { authState, getSession } from './auth.svelte';
 import { listMailboxes, createMailbox, listMessages, getMessage, appendRawMessage } from './api';
 
+// Every key carries the account it belongs to (`<base>.<user>`): chats hold
+// mail content and the IMAP sync copies them into the active mailbox, so a
+// shared key would hand one account's threads to the next one to sign in.
 const STORAGE_KEY = 'webmail.ai.threads.v1';
 const TOOLS_KEY = 'webmail.ai.tools.v1';
 const DELETED_KEY = 'webmail.ai.deleted.v1';
@@ -49,9 +53,16 @@ function uid(): string {
     return Math.random().toString(36).slice(2, 11) + Date.now().toString(36);
 }
 
+let scopeUser: string | null = authState.activeUser;
+
+function keyFor(base: string, user: string | null = scopeUser): string | null {
+    return user ? `${base}.${user}` : null;
+}
+
 function readThreads(): ChatThread[] {
     try {
-        const raw = localStorage.getItem(STORAGE_KEY);
+        const key = keyFor(STORAGE_KEY);
+        const raw = key && localStorage.getItem(key);
         if (!raw) return [];
         const arr = JSON.parse(raw) as ChatThread[];
         if (!Array.isArray(arr)) return [];
@@ -66,7 +77,8 @@ function readThreads(): ChatThread[] {
 
 function readDeletedIds(): string[] {
     try {
-        const raw = localStorage.getItem(DELETED_KEY);
+        const key = keyFor(DELETED_KEY);
+        const raw = key && localStorage.getItem(key);
         if (!raw) return [];
         const arr = JSON.parse(raw);
         return Array.isArray(arr) ? arr : [];
@@ -74,7 +86,9 @@ function readDeletedIds(): string[] {
 }
 
 function writeDeletedIds(ids: string[]) {
-    try { localStorage.setItem(DELETED_KEY, JSON.stringify(ids)); } catch { /* quota */ }
+    const key = keyFor(DELETED_KEY);
+    if (!key) return;
+    try { localStorage.setItem(key, JSON.stringify(ids)); } catch { /* quota */ }
 }
 
 function markDeleted(id: string) {
@@ -97,14 +111,16 @@ function writeThreads(threads: ChatThread[]) {
         if (trimmed.length > MAX_THREADS) {
             trimmed = [...threads].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, MAX_THREADS);
         }
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed));
+        const key = keyFor(STORAGE_KEY);
+        if (key) localStorage.setItem(key, JSON.stringify(trimmed));
     } catch { /* quota */ }
     if (!syncingFromImap) scheduleImapSync();
 }
 
 function readTools(): AiToolPrefs {
     try {
-        const raw = localStorage.getItem(TOOLS_KEY);
+        const key = keyFor(TOOLS_KEY);
+        const raw = key && localStorage.getItem(key);
         if (!raw) return { accessEmail: false, accessAllChats: false, webSearch: false };
         const p = JSON.parse(raw);
         return {
@@ -116,8 +132,17 @@ function readTools(): AiToolPrefs {
 }
 
 function writeTools(t: AiToolPrefs) {
-    try { localStorage.setItem(TOOLS_KEY, JSON.stringify(t)); } catch { /* quota */ }
+    const key = keyFor(TOOLS_KEY);
+    if (!key) return;
+    try { localStorage.setItem(key, JSON.stringify(t)); } catch { /* quota */ }
 }
+
+// Earlier builds used one global key for every account. Its contents cannot
+// be attributed to a user, so drop them (the IMAP copy restores a user's own
+// threads on the next sync).
+try {
+    for (const k of [STORAGE_KEY, TOOLS_KEY, DELETED_KEY]) localStorage.removeItem(k);
+} catch { /* storage disabled */ }
 
 const initialThreads = readThreads();
 const state = $state<State>({
@@ -137,11 +162,50 @@ export function clearAutoSend() {
 
 export const aiState = state;
 
+// Follow the active account: reload that account's threads and tool prefs,
+// and forget everything stored for an account that has signed out.
+function syncScope() {
+    const user = authState.activeUser;
+    if (user === scopeUser) return;
+    scopeUser = user;
+    if (syncTimer) { clearTimeout(syncTimer); syncTimer = null; }
+    imapSyncInited = false;
+    lastSyncAt = 0;
+    const threads = readThreads();
+    state.threads = threads;
+    state.activeId = threads[0]?.id ?? null;
+    state.tools = readTools();
+    state.pendingAutoSend = null;
+    if (user) void refreshImapSync();
+}
+
+function clearUserStorage(user: string) {
+    try {
+        for (const base of [STORAGE_KEY, TOOLS_KEY, DELETED_KEY]) {
+            localStorage.removeItem(`${base}.${user}`);
+        }
+    } catch { /* storage disabled */ }
+}
+
+let knownUsers = authState.sessions.map((s) => s.user);
+$effect.root(() => {
+    $effect(() => {
+        const users = authState.sessions.map((s) => s.user);
+        void authState.activeUser;
+        untrack(() => {
+            for (const u of knownUsers) if (!users.includes(u)) clearUserStorage(u);
+            knownUsers = users;
+            syncScope();
+        });
+    });
+});
+
 // `persist: true` forces the thread to be saved straight away — used when
 // something other than the composer creates it with content in mind.
 // The default is a draft: visible in the sidebar so the user can type into
 // it, but not written to storage until it actually holds a message.
 export function newThread(opts: { persist?: boolean } = {}): ChatThread {
+    syncScope();
     const t: ChatThread = {
         id: uid(),
         title: '💬 New chat',
@@ -159,10 +223,12 @@ export function newThread(opts: { persist?: boolean } = {}): ChatThread {
 }
 
 export function selectThread(id: string) {
+    syncScope();
     if (state.threads.find((t) => t.id === id)) state.activeId = id;
 }
 
 export function deleteThread(id: string) {
+    syncScope();
     state.threads = state.threads.filter((t) => t.id !== id);
     if (state.activeId === id) state.activeId = state.threads[0]?.id ?? null;
     writeThreads(state.threads);
@@ -170,6 +236,7 @@ export function deleteThread(id: string) {
 }
 
 export function renameThread(id: string, title: string, opts: { ai?: boolean } = {}) {
+    syncScope();
     state.threads = state.threads.map((t) =>
         t.id === id
             ? { ...t, title, updatedAt: Date.now(), ...(opts.ai ? { aiTitled: true } : {}) }
@@ -179,6 +246,7 @@ export function renameThread(id: string, title: string, opts: { ai?: boolean } =
 }
 
 export function appendMessage(id: string, msg: ChatMessage) {
+    syncScope();
     const idx = state.threads.findIndex((t) => t.id === id);
     if (idx < 0) return;
     const t = state.threads[idx];
@@ -212,6 +280,7 @@ export function appendMessage(id: string, msg: ChatMessage) {
 }
 
 export function patchLastAssistant(id: string, patch: Partial<ChatMessage>) {
+    syncScope();
     const idx = state.threads.findIndex((t) => t.id === id);
     if (idx < 0) return;
     const t = state.threads[idx];
@@ -230,6 +299,7 @@ export function patchLastAssistant(id: string, patch: Partial<ChatMessage>) {
 }
 
 export function setTools(patch: Partial<AiToolPrefs>) {
+    syncScope();
     state.tools = { ...state.tools, ...patch };
     writeTools(state.tools);
 }
@@ -276,12 +346,17 @@ async function ensureAiFolder() {
 
 async function syncThreadsToImap() {
     const session = getSession();
-    if (!session) return;
+    if (!session || session.user !== scopeUser) return;
+    const user = session.user;
     try {
         await ensureAiFolder();
+        if (authState.activeUser !== user) return;
         const threadsToSync = state.threads.filter((t) => t.updatedAt > lastSyncAt);
         if (!threadsToSync.length) return;
         for (const thread of threadsToSync) {
+            // The mailbox is whichever account is active when the append
+            // runs; never write this account's chats into another one.
+            if (authState.activeUser !== user) return;
             const rfc822 = buildRfc822(thread, session.user);
             await appendRawMessage(AI_FOLDER, rfc822, { flags: ['Seen'] });
         }
@@ -352,7 +427,9 @@ export async function initImapSync() {
 }
 
 export async function refreshImapSync() {
+    const user = authState.activeUser;
     const remote = await loadThreadsFromImap();
+    if (authState.activeUser !== user || scopeUser !== user) return;
     if (remote.length) {
         syncingFromImap = true;
         const merged = mergeThreads(state.threads, remote);

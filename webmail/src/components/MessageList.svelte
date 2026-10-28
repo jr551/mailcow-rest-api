@@ -1,6 +1,6 @@
 <script lang="ts">
-    import { tick } from 'svelte';
-    import { ui, toggleSelected, selectAllVisible, clearSelection } from '../lib/store.svelte';
+    import { tick, untrack } from 'svelte';
+    import { ui, toggleSelected, clearSelection } from '../lib/store.svelte';
     import { formatDate, senderShort, isTrackingEmail, isNotificationMessage, isSmsMessage } from '../lib/format';
     import { capabilities } from '../lib/settings.svelte';
     import Avatar from './Avatar.svelte';
@@ -615,6 +615,9 @@
     }
 
     function rowKey(e: KeyboardEvent, uid: number) {
+        // Keys from the nested select / star / archive / trash buttons bubble
+        // here; swallowing them would cancel the button's own click.
+        if (e.target !== e.currentTarget) return;
         if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
             selectRow(uid);
@@ -631,6 +634,17 @@
         if (f === 'starred') return ui.messages.filter((m) => m.flags.includes('\\Flagged'));
         if (f === 'attachments') return ui.messages.filter((m) => !!m.hasAttachments);
         return ui.messages;
+    });
+
+    // A message the active filter hides must not stay selected: BulkBar acts
+    // on ui.selected, so a hidden row would be trashed or archived unseen.
+    $effect(() => {
+        const visible = new Set(filtered.map((m) => m.uid));
+        untrack(() => {
+            if (ui.selected.size === 0) return;
+            const kept = [...ui.selected].filter((uid) => visible.has(uid));
+            if (kept.length !== ui.selected.size) ui.selected = new Set(kept);
+        });
     });
 
     // Threading: collapse multi-message conversations into single rows.
@@ -830,8 +844,28 @@
                 sweepDestSpam = out.spamPath;
                 sweepDestTrash = out.trashPath;
             })
-            .catch(() => { /* sweep is best-effort; sort already handled the user-visible error */ })
+            .catch((err) => {
+                if (err instanceof DOMException && err.name === 'AbortError') return;
+                showToast('error', `Spam sweep failed: ${err instanceof Error ? err.message : 'unknown error'}`);
+            })
             .finally(() => { sweepRunning = false; });
+    }
+
+    // A bulk run owns ui.bulkProgress until it finishes. The tail timer that
+    // hides the overlay carries the run's token, so it cannot wipe the
+    // overlay of an operation that started in the meantime.
+    let bulkProgressRun = 0;
+    function startBulkProgress(action: string, total: number): number {
+        ui.bulkProgress = { action, done: 0, total, failed: 0 };
+        return ++bulkProgressRun;
+    }
+    function reportBulkProgress(run: number, done: number, failed: number) {
+        if (run === bulkProgressRun && ui.bulkProgress) ui.bulkProgress = { ...ui.bulkProgress, done, failed };
+    }
+    // Brief tail so the user sees the bar hit 100% before it disappears —
+    // feels less abrupt than vanishing instantly.
+    function endBulkProgress(run: number, delay = 600) {
+        setTimeout(() => { if (run === bulkProgressRun) ui.bulkProgress = null; }, delay);
     }
 
     async function applySweep(kind: 'spam' | 'phishing') {
@@ -846,23 +880,13 @@
             .map((c) => ({ path: c.path, uid: c.uid }));
         if (items.length === 0) return;
         sweepBulkBusy = true;
-        ui.bulkProgress = {
-            action: kind === 'spam' ? `Moving to Spam` : `Moving to Trash`,
-            done: 0,
-            total: items.length,
-            failed: 0
-        };
+        const run = startBulkProgress(kind === 'spam' ? `Moving to Spam` : `Moving to Trash`, items.length);
         try {
-            const r = await bulkMove(items, dest, (done, total) => {
-                if (ui.bulkProgress) {
-                    ui.bulkProgress = { ...ui.bulkProgress, done, total };
-                }
-            });
-            // Brief tail so the user sees the bar hit 100% before it
-            // disappears — feels less abrupt than vanishing instantly.
-            setTimeout(() => { ui.bulkProgress = null; }, 600);
+            const r = await bulkMove(items, dest, (done, _total, failed) => reportBulkProgress(run, done, failed));
+            endBulkProgress(run);
             showToast('success', `Moved ${r.moved} message${r.moved === 1 ? '' : 's'} to ${dest}${r.failed ? ` (${r.failed} failed)` : ''}.`);
-            sweepResults = sweepResults.filter((c) => !items.some((i) => i.uid === c.uid));
+            const movedUids = new Set(r.movedItems.map((i) => i.uid));
+            sweepResults = sweepResults.filter((c) => !movedUids.has(c.uid));
             if (sweepResults.length === 0) sweepDismissed = true;
         } finally {
             sweepBulkBusy = false;
@@ -876,24 +900,19 @@
         const sel = Array.from(ui.selected);
         if (sel.length <= 1) return false;
         const items = sel.map((uid) => ({ path: ui.selectedPath, uid }));
-        ui.bulkProgress = {
-            action: `Moving to ${dest.split('/').pop() || dest}`,
-            done: 0,
-            total: items.length,
-            failed: 0
-        };
+        const run = startBulkProgress(`Moving to ${dest.split('/').pop() || dest}`, items.length);
         try {
-            const r = await bulkMove(items, dest, (done, total) => {
-                if (ui.bulkProgress) ui.bulkProgress = { ...ui.bulkProgress, done, total };
-            });
-            setTimeout(() => { ui.bulkProgress = null; }, 600);
+            const r = await bulkMove(items, dest, (done, _total, failed) => reportBulkProgress(run, done, failed));
+            endBulkProgress(run);
             showToast('success', `Moved ${r.moved} message${r.moved === 1 ? '' : 's'} to ${dest}${r.failed ? ` (${r.failed} failed)` : ''}.`);
-            // Drop them from the visible list immediately — server-side
-            // refresh will reconcile when the user navigates back.
-            ui.messages = ui.messages.filter((m) => !sel.includes(m.uid));
-            ui.selected = new Set();
+            // Drop what moved from the visible list immediately — server-side
+            // refresh will reconcile when the user navigates back. Failed
+            // rows stay, and stay selected so the move can be retried.
+            const movedUids = new Set(r.movedItems.map((i) => i.uid));
+            ui.messages = ui.messages.filter((m) => !movedUids.has(m.uid));
+            ui.selected = new Set(sel.filter((uid) => !movedUids.has(uid)));
         } catch {
-            ui.bulkProgress = null;
+            endBulkProgress(run, 0);
         }
         return true;
     }
@@ -1017,25 +1036,22 @@
 
         if (action === 'markRead') {
             categoryActionBusy = true;
-            ui.bulkProgress = {
-                action: `Marking ${meta.label.toLowerCase()} read`,
-                done: 0,
-                total: items.length,
-                failed: 0
-            };
+            const run = startBulkProgress(`Marking ${meta.label.toLowerCase()} read`, items.length);
             try {
-                let done = 0;
+                const marked = new Set<number>();
+                let failed = 0;
                 for (const { path, uid } of items) {
-                    try { await modifyFlags(path, uid, { add: ['\\Seen'] }); }
-                    catch { /* swallow per-uid; surfaced via failed count */ }
-                    done++;
-                    if (ui.bulkProgress) ui.bulkProgress = { ...ui.bulkProgress, done };
+                    try {
+                        await modifyFlags(path, uid, { add: ['\\Seen'] });
+                        marked.add(uid);
+                    } catch { failed++; }
+                    reportBulkProgress(run, marked.size + failed, failed);
                 }
-                setTimeout(() => { ui.bulkProgress = null; }, 600);
-                showToast('success', `Marked ${done} ${meta.label.toLowerCase()} message${done === 1 ? '' : 's'} read.`);
+                endBulkProgress(run);
+                showToast(failed ? 'error' : 'success', `Marked ${marked.size} ${meta.label.toLowerCase()} message${marked.size === 1 ? '' : 's'} read${failed ? ` (${failed} failed)` : ''}.`);
                 // Reflect locally without a refetch — the seen-flag flip is
                 // visible immediately in the row's bold/regular weight.
-                ui.messages = ui.messages.map((m) => uids.includes(m.uid)
+                ui.messages = ui.messages.map((m) => marked.has(m.uid)
                     ? { ...m, flags: m.flags.includes('\\Seen') ? m.flags : [...m.flags, '\\Seen'] }
                     : m);
             } finally {
@@ -1063,26 +1079,20 @@
         if (!ok) return;
 
         categoryActionBusy = true;
-        ui.bulkProgress = {
-            action: `${action === 'archive' ? 'Archiving' : 'Moving to Trash'} ${meta.label.toLowerCase()}`,
-            done: 0,
-            total: items.length,
-            failed: 0
-        };
+        const run = startBulkProgress(`${action === 'archive' ? 'Archiving' : 'Moving to Trash'} ${meta.label.toLowerCase()}`, items.length);
         try {
-            const r = await bulkMove(items, dest, (done, total) => {
-                if (ui.bulkProgress) ui.bulkProgress = { ...ui.bulkProgress, done, total };
-            });
-            setTimeout(() => { ui.bulkProgress = null; }, 600);
+            const r = await bulkMove(items, dest, (done, _total, failed) => reportBulkProgress(run, done, failed));
+            endBulkProgress(run);
             showToast('success', `${action === 'archive' ? 'Archived' : 'Trashed'} ${r.moved} message${r.moved === 1 ? '' : 's'}${r.failed ? ` (${r.failed} failed)` : ''}.`);
-            // Drop them from the visible list — the server view will catch up.
-            ui.messages = ui.messages.filter((m) => !uids.includes(m.uid));
+            // Drop what moved from the visible list — the server view will catch up.
+            const movedUids = new Set(r.movedItems.map((i) => i.uid));
+            ui.messages = ui.messages.filter((m) => !movedUids.has(m.uid));
             // Anything in the now-removed set should also leave the bulk selection.
             const nextSel = new Set<number>();
-            for (const id of ui.selected) if (!uids.includes(id)) nextSel.add(id);
+            for (const id of ui.selected) if (!movedUids.has(id)) nextSel.add(id);
             ui.selected = nextSel;
         } catch {
-            ui.bulkProgress = null;
+            endBulkProgress(run, 0);
         } finally {
             categoryActionBusy = false;
         }
@@ -1219,16 +1229,16 @@
             </button>
         </div>
         {/if}
-        {#if ui.messages.length > 0}
-            {@const allSelected = ui.selected.size > 0 && ui.selected.size >= ui.messages.length}
+        {#if filtered.length > 0}
+            {@const allSelected = ui.selected.size > 0 && filtered.every((m) => ui.selected.has(m.uid))}
             <button
                 type="button"
                 class="chip select-all-chip"
                 class:active={allSelected}
                 title={allSelected
                     ? `Clear selection (${ui.selected.size})`
-                    : `Select all ${ui.messages.length} visible messages`}
-                onclick={() => allSelected ? clearSelection() : selectAllVisible()}
+                    : `Select all ${filtered.length} visible messages`}
+                onclick={() => allSelected ? clearSelection() : (ui.selected = new Set(filtered.map((m) => m.uid)))}
                 data-testid="select-all-btn"
             >
                 <span class="check-mini" aria-hidden="true">

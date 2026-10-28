@@ -141,7 +141,25 @@ function createWebhookStager({ config, logger }) {
         }
     }
 
+    // Staged messages are private mail on disk, so they are swept on a timer
+    // as well as on each new staging: without it the last staged message
+    // would outlive its link indefinitely when no further one arrives.
+    let sweepTimer = null;
+    function startSweep() {
+        if (sweepTimer) return;
+        sweepTimer = setInterval(() => {
+            cleanupMessages().catch(() => {});
+        }, ttlMs > 0 ? Math.max(1000, Math.min(ttlMs, 10 * 60 * 1000)) : 10 * 60 * 1000);
+        if (sweepTimer.unref) sweepTimer.unref();
+    }
+
+    function close() {
+        if (sweepTimer) clearInterval(sweepTimer);
+        sweepTimer = null;
+    }
+
     async function stageMessage(account, uidvalidity, uid, source) {
+        startSweep();
         const guid = crypto.randomBytes(32).toString('hex');
         void account; void uidvalidity; void uid;
         const dir = messageDir(guid);
@@ -173,7 +191,7 @@ function createWebhookStager({ config, logger }) {
         return { path: file, size: stat.size };
     }
 
-    return { stage, write, url, resolve, stageMessage, resolveMessage, root };
+    return { stage, write, url, resolve, stageMessage, resolveMessage, close, root };
 }
 
 module.exports = { createWebhookStager };

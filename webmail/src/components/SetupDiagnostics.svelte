@@ -27,7 +27,11 @@
                 <p class="eyebrow">Setup check</p>
                 <h1 id="setup-title">Webmail cannot reach the API yet</h1>
                 <p class="muted">
-                    This static frontend is loading from <strong>{setupDiagnostics.origin}</strong>, but one or more required API routes are not reachable on the same origin.
+                    {#if setupDiagnostics.apiBase}
+                        This frontend is loading from <strong>{setupDiagnostics.origin}</strong> and expects the API at <strong>{setupDiagnostics.apiBase}</strong>, but one or more required API routes are not reachable there.
+                    {:else}
+                        This static frontend is loading from <strong>{setupDiagnostics.origin}</strong>, but one or more required API routes are not reachable on the same origin.
+                    {/if}
                 </p>
             </div>
 

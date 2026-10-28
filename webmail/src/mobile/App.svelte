@@ -3,7 +3,7 @@
     import { probeCapabilities } from '../lib/settings.svelte';
     import { initImapSync } from '../lib/ai-threads.svelte';
     import { doctor, installErrorDoctor } from '../lib/error-doctor.svelte';
-    import { mobileState, navigate, installAndroidBackHandler } from './lib/store.svelte';
+    import { mobileState, navigate, installAndroidBackHandler, resetMobileState } from './lib/store.svelte';
     import { setAppBadge, onResume } from './lib/native-bridge';
     import { onMount } from 'svelte';
     import LoginView from './components/LoginView.svelte';
@@ -44,6 +44,18 @@
             probeCapabilities();
             initImapSync();
         }
+    });
+
+    // Never let one account's lists / open message / drafts outlive its
+    // session (logout, expiry, account switch). A null → user login keeps
+    // state so a launch intent captured before sign-in survives.
+    let lastUser = authState.activeUser;
+    $effect(() => {
+        const user = authState.activeUser;
+        if (user === lastUser) return;
+        const hadUser = lastUser !== null;
+        lastUser = user;
+        if (hadUser) resetMobileState();
     });
 
     onMount(() => {
@@ -169,7 +181,7 @@
 {/if}
 
 {#if mobileState.toast}
-    <div class="mtoast {mobileState.toast.kind}">
+    <div class="mtoast {mobileState.toast.kind}" role={mobileState.toast.kind === 'error' ? 'alert' : 'status'} aria-live={mobileState.toast.kind === 'error' ? 'assertive' : 'polite'}>
         {mobileState.toast.message}
     </div>
 {/if}

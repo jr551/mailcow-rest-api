@@ -21,6 +21,14 @@ function makePoolStub(clientMethods) {
             return { release() {} };
         },
         async search() { return []; },
+        // Envelope fetch for the sender form. `fromByUid` maps uid -> From
+        // address; anything unmapped is treated as a match for the usual
+        // test sender so tests that don't care stay short.
+        async *fetch(uids) {
+            for (const uid of uids) {
+                yield { uid, envelope: { from: [{ address: (clientMethods.fromByUid || {})[uid] || 'noreply@example.com' }] } };
+            }
+        },
         ...clientMethods
     };
     return {
@@ -53,6 +61,7 @@ test('sender form searches the mailbox and expunges every match', async () => {
             searched = query;
             return [11, 12, 13];
         },
+        fromByUid: { 11: 'a@spam.example', 12: 'B@SPAM.example', 13: 'c@spam.example' },
         async messageDelete(uids, opts) {
             deleted = { uids, opts };
             return true;
@@ -72,7 +81,9 @@ test('sender form searches the mailbox and expunges every match', async () => {
         // so it cannot drift from what was actually expunged.
         assert.equal(body.matched, 3);
         assert.equal(body.deleted, 3);
-        assert.deepEqual(searched, { from: '*@spam.example' });
+        // IMAP FROM is a substring match, so only the literal run of the
+        // pattern can be searched — a literal '*' would match nothing.
+        assert.deepEqual(searched, { from: '@spam.example' });
         // UIDs, not sequence numbers — the pattern has to be applied by UID
         // or a concurrent expunge would delete the wrong messages.
         assert.deepEqual(deleted.uids, [11, 12, 13]);
@@ -253,6 +264,71 @@ test('an empty body is rejected — no silent whole-folder interpretation', asyn
             payload: {}
         });
         assert.equal(res.statusCode, 400);
+    } finally {
+        await app.close();
+    }
+});
+
+test('sender form keeps only exact From matches out of the substring search', async () => {
+    let deleted;
+    const pool = makePoolStub({
+        async search() { return [1, 2, 3, 4]; },
+        fromByUid: { 1: 'ann@x.com', 2: 'joann@x.com', 3: 'ann@x.com.au', 4: 'Ann@X.com' },
+        async messageDelete(uids) { deleted = uids; return true; }
+    });
+    const app = await buildApp(pool);
+    try {
+        const res = await app.inject({
+            method: 'DELETE',
+            url: '/v1/mailboxes/INBOX/messages',
+            payload: { sender: 'ann@x.com' }
+        });
+        assert.equal(res.statusCode, 200);
+        const body = JSON.parse(res.body);
+        assert.equal(body.matched, 2);
+        assert.equal(body.deleted, 2);
+        assert.deepEqual(deleted, [1, 4]);
+    } finally {
+        await app.close();
+    }
+});
+
+test('dryRun counts the same filtered set the delete would expunge', async () => {
+    const pool = makePoolStub({
+        async search() { return [1, 2, 3]; },
+        fromByUid: { 1: 'ann@x.com', 2: 'joann@x.com', 3: 'ann@x.com.au' },
+        async messageDelete() { throw new Error('must not be called'); }
+    });
+    const app = await buildApp(pool);
+    try {
+        const res = await app.inject({
+            method: 'DELETE',
+            url: '/v1/mailboxes/INBOX/messages',
+            payload: { sender: 'ann@x.com', dryRun: true }
+        });
+        assert.equal(res.statusCode, 200);
+        assert.equal(JSON.parse(res.body).matched, 1);
+    } finally {
+        await app.close();
+    }
+});
+
+test('a wildcard-only sender pattern matches nothing rather than everything', async () => {
+    let searched = false;
+    const pool = makePoolStub({
+        async search() { searched = true; return [1, 2]; },
+        async messageDelete() { throw new Error('must not be called'); }
+    });
+    const app = await buildApp(pool);
+    try {
+        const res = await app.inject({
+            method: 'DELETE',
+            url: '/v1/mailboxes/INBOX/messages',
+            payload: { sender: '***' }
+        });
+        assert.equal(res.statusCode, 200);
+        assert.equal(JSON.parse(res.body).matched, 0);
+        assert.equal(searched, false);
     } finally {
         await app.close();
     }

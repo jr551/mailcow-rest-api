@@ -8,7 +8,7 @@
     // spot.
 
     import { onMount, onDestroy } from 'svelte';
-    import { trapFocus } from '../lib/focus-trap';
+    import { trapFocus, captureOpener } from '../lib/focus-trap';
     import Icon from './Icon.svelte';
 
     interface Props {
@@ -19,6 +19,7 @@
         minWidth?: number;
         minHeight?: number;
         startMinimized?: boolean;
+        closeOnEscape?: boolean;
         onClose: () => void;
         children?: import('svelte').Snippet;
         footer?: import('svelte').Snippet;
@@ -35,6 +36,7 @@
         minWidth = 360,
         minHeight = 280,
         startMinimized = false,
+        closeOnEscape = true,
         onClose,
         children,
         footer,
@@ -109,12 +111,18 @@
         clampToViewport();
         const onResize = () => { clampToViewport(); };
         window.addEventListener('resize', onResize);
-        let stopFocusTrap: (() => void) | undefined;
-        if (dialogEl && !geo.minimized) stopFocusTrap = trapFocus(dialogEl);
+        const restoreOpener = dialogEl ? captureOpener(dialogEl) : () => {};
         return () => {
             window.removeEventListener('resize', onResize);
-            if (stopFocusTrap) stopFocusTrap();
+            restoreOpener();
         };
+    });
+
+    // The panel is non-modal, so it only traps Tab while it is expanded: a
+    // minimised title bar must never fence the keyboard off from the app.
+    $effect(() => {
+        if (!dialogEl || geo.minimized) return;
+        return trapFocus(dialogEl, false);
     });
 
     // Drag from header — and, when the gesture turns out to be a TAP rather
@@ -240,6 +248,13 @@
 
     onDestroy(() => persist());
 
+    function onWindowKey(e: KeyboardEvent) {
+        if (e.key !== 'Escape' || !closeOnEscape || geo.minimized || e.defaultPrevented) return;
+        const t = e.target as HTMLElement | null;
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+        close();
+    }
+
     // Computed style — maximized covers the viewport (with margin), minimized
     // becomes a small title bar pinned bottom-right.
     function styleString(): string {
@@ -255,8 +270,11 @@
 
 <!-- Escape closes the panel, but never while it is minimised: a minimised
      panel is a title bar the user deliberately parked, and the only thing
-     they can do with it is restore or close it deliberately. -->
-<svelte:window onkeydown={(e) => { if (e.key === 'Escape' && !geo.minimized) close(); }} />
+     they can do with it is restore or close it deliberately. It also ignores
+     an Escape that something inside already used (a suggestion list, a
+     picker) or that was typed into a text field, so dismissing those never
+     throws the panel's contents away. -->
+<svelte:window onkeydown={onWindowKey} />
 
 <div
     bind:this={dialogEl}

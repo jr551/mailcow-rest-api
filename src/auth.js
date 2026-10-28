@@ -98,7 +98,14 @@ function isWebmailPath(url) {
 // whose password is an app password — auto-detected from the header.
 function createAuthHook({
     cache, imap, appPasswords = null, verifier = verifyWithDovecot, now = () => Date.now(),
-    authFailures = createAuthFailureLimiter()
+    authFailures = createAuthFailureLimiter(),
+    // Basic-auth failures per source IP. Each uncached attempt costs a real
+    // IMAP LOGIN, and the global rate limit alone still allows thousands of
+    // guesses an hour from one address. Keyed by IP, never by username, so
+    // nobody can lock a mailbox owner out by guessing at their address; the
+    // ceiling is high enough that a shared NAT with a few mistyped passwords
+    // is unaffected.
+    loginFailures = createAuthFailureLimiter({ max: 30 })
 }) {
     // An app password stands in for the mailbox password. The store hands back
     // the real one (decrypted) so IMAP still gets a credential it recognises;
@@ -220,13 +227,22 @@ function createAuthHook({
             // failing the request.
             req.log.warn({ err: err.message }, 'auth cache read failed; verifying against IMAP');
         }
-        if (cached) {
-            if (!cached.valid) {
-                reply.header('WWW-Authenticate', 'Bearer realm="imap-rest"');
-                throw unauthorized('Invalid credentials');
-            }
+        if (cached && cached.valid) {
             req.creds = { user: creds.user, pass: creds.pass, hash };
             return;
+        }
+
+        const loginKey = `ip:${req.ip}`;
+        const loginGate = loginFailures.check(loginKey, now());
+        if (loginGate.blocked) {
+            reply.header('retry-after', String(Math.max(1, Math.ceil(loginGate.retryAfterMs / 1000))));
+            throw problem(429, 'Too Many Requests', 'Too many failed sign-in attempts — retry later');
+        }
+
+        if (cached) {
+            loginFailures.fail(loginKey, now());
+            reply.header('WWW-Authenticate', 'Bearer realm="imap-rest"');
+            throw unauthorized('Invalid credentials');
         }
 
         let result;
@@ -248,6 +264,7 @@ function createAuthHook({
             req.log.warn({ err: err.message }, 'could not write auth cache entry');
         }
         if (!result.valid) {
+            loginFailures.fail(loginKey, now());
             reply.header('WWW-Authenticate', 'Bearer realm="imap-rest"');
             throw unauthorized('Invalid credentials');
         }

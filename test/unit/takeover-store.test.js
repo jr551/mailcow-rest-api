@@ -353,6 +353,31 @@ test('needs input: the queue round-trips what the assistant stopped on', () => {
     store.close();
 });
 
+test('needs input: sender and subject are sealed on disk, and legacy plaintext rows still read', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'takeover-store-'));
+    const filePath = path.join(dir, 'takeover.db');
+    const box = createSecretBox({
+        envValue: crypto.randomBytes(32).toString('hex'),
+        dataDir: dir,
+        logger: null
+    });
+    const store = createTakeoverStore({ filePath, secretBox: box });
+    const id = store.enqueueNeedsInput(USER, item({ subject: 'Your password reset code 482913' }));
+    assert.strictEqual(store.listNeedsInput(USER)[0].subject, 'Your password reset code 482913');
+
+    const raw = new Database(filePath);
+    const stored = raw.prepare('SELECT from_addr, subject FROM takeover_needs_input WHERE id = ?').get(id);
+    assert.ok(!stored.subject.includes('482913'), 'the subject is not in the clear');
+    assert.ok(!stored.from_addr.includes('alice@vendor.example'), 'the sender is not in the clear');
+    raw.prepare('UPDATE takeover_needs_input SET from_addr = ?, subject = ? WHERE id = ?').run('old@vendor.example', 'Old subject', id);
+    raw.close();
+    const row = store.listNeedsInput(USER)[0];
+    assert.strictEqual(row.from, 'old@vendor.example');
+    assert.strictEqual(row.subject, 'Old subject');
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('needs input: stopping twice on one message keeps one open item', () => {
     const store = freshStore();
     const first = store.enqueueNeedsInput(USER, item());

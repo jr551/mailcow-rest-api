@@ -11,8 +11,7 @@
 import { getSession } from './auth.svelte';
 import { showToast } from './store.svelte';
 import { apiUrl } from './api';
-
-const REMOTE_IMG_RE = /<img\b([^>]*?)\bsrc\s*=\s*("https?:[^"]*"|'https?:[^']*'|https?:[^\s>]+)/gi;
+import { remoteImgRegex } from './sanitize';
 
 let warnedThisSession = false;
 let proxyHealthy = true;
@@ -135,7 +134,7 @@ async function fetchAsDataUrl(url: string, signal?: AbortSignal): Promise<string
 }
 
 /**
- * For each `<img src="https://...">` in `html`, fetch via the privacy proxy
+ * For each remote `<img src>` (https://, http:// or //host) in `html`, fetch via the privacy proxy
  * and substitute the response as a data: URL. Sources that fail (proxy cap,
  * MIME blocked, network error) are left untouched so the user's mail client
  * still degrades to direct loading rather than rendering a broken image.
@@ -151,9 +150,9 @@ export async function proxyImagesInHtml(
     if (!html) return html;
     // Collect every unique remote URL so we only fetch each one once.
     const urls = new Set<string>();
-    REMOTE_IMG_RE.lastIndex = 0;
+    const scan = remoteImgRegex();
     let m: RegExpExecArray | null;
-    while ((m = REMOTE_IMG_RE.exec(html)) !== null) {
+    while ((m = scan.exec(html)) !== null) {
         urls.add(unquote(m[2]));
     }
     if (!urls.size) return html;
@@ -188,7 +187,8 @@ export async function proxyImagesInHtml(
             // to hold the message hostage.
             try {
                 const dataUrl = await withTimeout(
-                    fetchAsDataUrl(url, signal),
+                    // A protocol-relative src resolves to https inside the frame.
+                    fetchAsDataUrl(url.startsWith('//') ? `https:${url}` : url, signal),
                     PROXY_IMAGE_TIMEOUT_MS,
                     signal
                 );
@@ -203,7 +203,7 @@ export async function proxyImagesInHtml(
 
     // Rewrite. We do this with a re-scan so multiple references to the same
     // URL all get the same data: URL.
-    return html.replace(REMOTE_IMG_RE, (full, attrs, srcExpr) => {
+    return html.replace(remoteImgRegex(), (full, attrs, srcExpr) => {
         const original = unquote(srcExpr);
         const dataUrl = replacements.get(original);
         if (!dataUrl) return full;

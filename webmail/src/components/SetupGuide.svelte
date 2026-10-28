@@ -3,6 +3,7 @@
     import { authState } from '../lib/auth.svelte';
     import { showToast } from '../lib/store.svelte';
     import { trapFocus } from '../lib/focus-trap';
+    import { copyToClipboard } from '../lib/clipboard';
     import Icon from './Icon.svelte';
 
     interface Props {
@@ -54,13 +55,9 @@
     type Tab = 'apple' | 'android' | 'thunderbird' | 'outlook' | 'caldav' | 'manual';
     let tab = $state<Tab>('apple');
 
-    function copyText(text: string) {
-        try {
-            navigator.clipboard.writeText(text);
-            showToast('success', 'Copied');
-        } catch {
-            showToast('error', 'Copy failed');
-        }
+    async function copyText(text: string) {
+        if (await copyToClipboard(text)) showToast('success', 'Copied');
+        else showToast('error', 'Copy failed');
     }
 
     const PRESETS = {
@@ -106,7 +103,7 @@
             ]
         },
         caldav: {
-            label: 'Calendar &amp; Contacts',
+            label: 'Calendar & Contacts',
             steps: [
                 'Use the CalDAV / CardDAV URLs below to sync this account\'s calendars and address book.',
                 'Apple (iOS / macOS): Settings → Calendar → Accounts → Add Account → Other → Add CalDAV Account. Server = the host below; user = your email; password = mailbox or app password. iOS will discover Calendar automatically; for Contacts repeat with "Add CardDAV Account".',

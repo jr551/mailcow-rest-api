@@ -191,7 +191,9 @@ function createOutboundWebhookForwarder({
                     attachments.push(meta);
                     continue;
                 }
-                const buf = await streamToBuffer(dl.content);
+                // Capped while streaming: the declared IMAP size can be wrong
+                // or absent, and an over-limit part must not be buffered whole.
+                const buf = await streamToBuffer(dl.content, maxAttachmentBytes);
                 if (buf.length > maxAttachmentBytes || buf.length > attachmentBudget) {
                     meta.omittedReason = buf.length > maxAttachmentBytes
                         ? `larger than the ${Math.round(maxAttachmentBytes / 1024 / 1024)} MB per-attachment limit`
@@ -209,7 +211,9 @@ function createOutboundWebhookForwarder({
                 meta.instructions = encoded.instructions;
                 attachments.push(meta);
             } catch (err) {
-                meta.omittedReason = `fetch failed: ${err.message}`;
+                meta.omittedReason = err.code === 'ESTREAMLIMIT'
+                    ? `larger than the ${Math.round(maxAttachmentBytes / 1024 / 1024)} MB per-attachment limit`
+                    : `fetch failed: ${err.message}`;
                 attachments.push(meta);
                 logger?.warn({ err: err.message, uid, part: att.id }, 'outbound webhook attachment fetch failed');
             }

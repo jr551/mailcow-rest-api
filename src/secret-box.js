@@ -23,6 +23,8 @@ const path = require('node:path');
 
 const PREFIX = 'v1';
 const KEY_FILE = 'credential-key';
+const IV_BYTES = 12;
+const TAG_BYTES = 16;
 
 function deriveKey(secret) {
     // A 32-byte hex or base64 secret is used as-is; anything else is
@@ -88,8 +90,8 @@ function createSecretBox({ envValue, dataDir, logger } = {}) {
 
     function encrypt(plaintext) {
         if (!enabled || plaintext === null || plaintext === undefined) return plaintext;
-        const iv = crypto.randomBytes(12);
-        const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+        const iv = crypto.randomBytes(IV_BYTES);
+        const cipher = crypto.createCipheriv('aes-256-gcm', key, iv, { authTagLength: TAG_BYTES });
         const ct = Buffer.concat([cipher.update(String(plaintext), 'utf8'), cipher.final()]);
         const tag = cipher.getAuthTag();
         return `${PREFIX}:${iv.toString('base64')}:${tag.toString('base64')}:${ct.toString('base64')}`;
@@ -107,7 +109,10 @@ function createSecretBox({ envValue, dataDir, logger } = {}) {
             const iv = Buffer.from(parts[1], 'base64');
             const tag = Buffer.from(parts[2], 'base64');
             const ct = Buffer.from(parts[3], 'base64');
-            const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+            // Node accepts GCM tags as short as 4 bytes unless told otherwise,
+            // which would make a truncated tag far cheaper to forge.
+            if (iv.length !== IV_BYTES || tag.length !== TAG_BYTES) return null;
+            const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv, { authTagLength: TAG_BYTES });
             decipher.setAuthTag(tag);
             return Buffer.concat([decipher.update(ct), decipher.final()]).toString('utf8');
         } catch {

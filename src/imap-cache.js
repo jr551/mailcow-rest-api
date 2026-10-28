@@ -12,18 +12,26 @@ const Database = require('better-sqlite3');
 //   mailbox_tree  — serialized LIST result per user
 //   folder_uids   — ordered UID array per folder (keyed by uidvalidity)
 //   folder_status — cached STATUS result per folder
+//   msg_attachments — per-message has-attachment flags
 
 function createImapCache(opts) {
     const { filePath, ttlMs = 300_000, pruneIntervalMs = 60_000 } = opts || {};
     // The folder UID manifest gets its own, much longer TTL. It is keyed by
     // uidvalidity and its validity is decided by comparing its length with
-    // the mailbox's live EXISTS — never by the clock — so a stale-by-age
-    // manifest is still correct and simply saves the SEARCH. The TTL only
-    // bounds how long an unused manifest occupies the database, and 5 minutes
-    // (the generic ttlMs) re-ran SEARCH ALL on any folder the user visited
-    // less often than that. Mailbox tree and folder status keep ttlMs: those
-    // are read as authoritative for display, not as a hint to be verified.
+    // the mailbox's live EXISTS and UIDNEXT — never by the clock — so a
+    // stale-by-age manifest is still correct and simply saves the SEARCH. The
+    // TTL only bounds how long an unused manifest occupies the database, and 5
+    // minutes (the generic ttlMs) re-ran SEARCH ALL on any folder the user
+    // visited less often than that. The mailbox tree keeps ttlMs: it is read
+    // as authoritative for display, not as a hint to be verified.
     const uidsTtlMs = opts.uidsTtlMs || 86_400_000; // 24 h
+    // Folder status is displayed as-is (unread badges) and nothing
+    // invalidates it when mail is delivered or another client changes flags,
+    // so it must not live as long as the generic ttlMs.
+    const statusTtlMs = opts.statusTtlMs || Math.min(ttlMs, 15_000);
+    // Attachment flags are immutable per UID, so this only bounds how long
+    // rows for expunged messages and retired uidvalidity values linger.
+    const attachmentsTtlMs = opts.attachmentsTtlMs || 7 * 86_400_000;
     const maxMemTree = opts.maxMemTree || 500;
     const maxMemUids = opts.maxMemUids || 500;
     const maxMemStatus = opts.maxMemStatus || 500;
@@ -50,6 +58,7 @@ function createImapCache(opts) {
             uidvalidity INTEGER NOT NULL,
             uids TEXT NOT NULL,
             expires_at INTEGER NOT NULL,
+            uid_next INTEGER,
             PRIMARY KEY (user_hash, path, uidvalidity)
         );
 
@@ -68,6 +77,7 @@ function createImapCache(opts) {
             uidvalidity INTEGER NOT NULL,
             uid INTEGER NOT NULL,
             has_attachment INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (user_hash, path, uidvalidity, uid)
         );
 
@@ -80,6 +90,18 @@ function createImapCache(opts) {
         );
     `);
 
+    // Cache files written before these columns existed keep their rows; a
+    // manifest without uid_next is re-searched once, and attachment rows with
+    // expires_at 0 are pruned and relearned from the next list view.
+    for (const [table, column, ddl] of [
+        ['folder_uids', 'uid_next', 'uid_next INTEGER'],
+        ['msg_attachments', 'expires_at', 'expires_at INTEGER NOT NULL DEFAULT 0']
+    ]) {
+        if (!db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column)) {
+            db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+        }
+    }
+
     const treeGetStmt = db.prepare('SELECT tree FROM mailbox_tree WHERE user_hash = ? AND expires_at > ?');
     const treeSetStmt = db.prepare(
         'INSERT INTO mailbox_tree (user_hash, tree, expires_at) VALUES (?, ?, ?) ' +
@@ -89,14 +111,16 @@ function createImapCache(opts) {
     const treePruneStmt = db.prepare('DELETE FROM mailbox_tree WHERE expires_at < ?');
 
     const uidsGetStmt = db.prepare(
-        'SELECT uids FROM folder_uids WHERE user_hash = ? AND path = ? AND uidvalidity = ? AND expires_at > ?'
+        'SELECT uids, uid_next FROM folder_uids WHERE user_hash = ? AND path = ? AND uidvalidity = ? AND expires_at > ?'
     );
     const uidsSetStmt = db.prepare(
-        'INSERT INTO folder_uids (user_hash, path, uidvalidity, uids, expires_at) VALUES (?, ?, ?, ?, ?) ' +
-        'ON CONFLICT(user_hash, path, uidvalidity) DO UPDATE SET uids = excluded.uids, expires_at = excluded.expires_at'
+        'INSERT INTO folder_uids (user_hash, path, uidvalidity, uids, expires_at, uid_next) VALUES (?, ?, ?, ?, ?, ?) ' +
+        'ON CONFLICT(user_hash, path, uidvalidity) DO UPDATE SET uids = excluded.uids, ' +
+        'expires_at = excluded.expires_at, uid_next = excluded.uid_next'
     );
     const uidsDeleteStmt = db.prepare('DELETE FROM folder_uids WHERE user_hash = ? AND path = ?');
     const uidsPruneStmt = db.prepare('DELETE FROM folder_uids WHERE expires_at < ?');
+    const attPruneStmt = db.prepare('DELETE FROM msg_attachments WHERE expires_at < ?');
 
     const statusGetStmt = db.prepare('SELECT status FROM folder_status WHERE user_hash = ? AND path = ? AND expires_at > ?');
     const statusSetStmt = db.prepare(
@@ -198,30 +222,44 @@ function createImapCache(opts) {
         return `${userHash}\x00${path}\x00${uidvalidity}`;
     }
 
-    function getUids(userHash, path, uidvalidity) {
+    function readUids(userHash, path, uidvalidity) {
         const n = now();
         const key = _uidsKey(userHash, path, uidvalidity);
         const mem = memGet(uidsMem, key);
         if (mem && mem.expiresAt > n) {
-            return mem.uids;
+            return mem;
         }
         const row = missOrNull(() => uidsGetStmt.get(userHash, path, uidvalidity, n));
         if (!row) return null;
         try {
             const uids = JSON.parse(row.uids);
             if (!Array.isArray(uids)) return null;
-            memSet(uidsMem, key, { uids, expiresAt: n + uidsTtlMs }, maxMemUids);
-            return uids;
+            const entry = { uids, uidNext: row.uid_next ?? null, expiresAt: n + uidsTtlMs };
+            memSet(uidsMem, key, entry, maxMemUids);
+            return entry;
         } catch {
             return null;
         }
     }
 
-    function setUids(userHash, path, uidvalidity, uids) {
+    function getUids(userHash, path, uidvalidity) {
+        return readUids(userHash, path, uidvalidity)?.uids ?? null;
+    }
+
+    // UIDNEXT the manifest was built against, or null when unknown. A manifest
+    // is only as current as the mailbox's UIDNEXT: a matching EXISTS alone
+    // cannot tell an unchanged folder from one that lost a message and gained
+    // another.
+    function getUidNext(userHash, path, uidvalidity) {
+        return readUids(userHash, path, uidvalidity)?.uidNext ?? null;
+    }
+
+    function setUids(userHash, path, uidvalidity, uids, uidNext = null) {
         const n = now();
         const expiresAt = n + uidsTtlMs;
-        bestEffort(() => uidsSetStmt.run(userHash, path, uidvalidity, JSON.stringify(uids), expiresAt));
-        memSet(uidsMem, _uidsKey(userHash, path, uidvalidity), { uids, expiresAt }, maxMemUids);
+        const next = uidNext ?? null;
+        bestEffort(() => uidsSetStmt.run(userHash, path, uidvalidity, JSON.stringify(uids), expiresAt, next));
+        memSet(uidsMem, _uidsKey(userHash, path, uidvalidity), { uids, uidNext: next, expiresAt }, maxMemUids);
     }
 
     function invalidateFolderUids(userHash, path) {
@@ -247,7 +285,7 @@ function createImapCache(opts) {
         if (!row) return null;
         try {
             const status = JSON.parse(row.status);
-            memSet(statusMem, `${userHash}\x00${path}`, { status, expiresAt: n + ttlMs }, maxMemStatus);
+            memSet(statusMem, `${userHash}\x00${path}`, { status, expiresAt: n + statusTtlMs }, maxMemStatus);
             return status;
         } catch {
             return null;
@@ -256,7 +294,7 @@ function createImapCache(opts) {
 
     function setStatus(userHash, path, status) {
         const n = now();
-        const expiresAt = n + ttlMs;
+        const expiresAt = n + statusTtlMs;
         bestEffort(() => statusSetStmt.run(userHash, path, JSON.stringify(status), expiresAt));
         memSet(statusMem, `${userHash}\x00${path}`, { status, expiresAt }, maxMemStatus);
     }
@@ -274,9 +312,10 @@ function createImapCache(opts) {
         'WHERE user_hash = ? AND path = ? AND uidvalidity = ?'
     );
     const attSetStmt = db.prepare(
-        'INSERT INTO msg_attachments (user_hash, path, uidvalidity, uid, has_attachment) ' +
-        'VALUES (?, ?, ?, ?, ?) ' +
-        'ON CONFLICT(user_hash, path, uidvalidity, uid) DO UPDATE SET has_attachment = excluded.has_attachment'
+        'INSERT INTO msg_attachments (user_hash, path, uidvalidity, uid, has_attachment, expires_at) ' +
+        'VALUES (?, ?, ?, ?, ?, ?) ' +
+        'ON CONFLICT(user_hash, path, uidvalidity, uid) DO UPDATE SET ' +
+        'has_attachment = excluded.has_attachment, expires_at = excluded.expires_at'
     );
     const attDeleteFolderStmt = db.prepare(
         'DELETE FROM msg_attachments WHERE user_hash = ? AND path = ?'
@@ -298,9 +337,10 @@ function createImapCache(opts) {
     // entries: iterable of [uid, hasAttachment]. UIDs are immutable for a
     // given uidvalidity, so an entry never needs revisiting.
     function setAttachmentFlags(userHash, path, uidvalidity, entries) {
+        const expiresAt = now() + attachmentsTtlMs;
         const run = db.transaction((list) => {
             for (const [uid, has] of list) {
-                attSetStmt.run(userHash, path, uidvalidity, uid, has ? 1 : 0);
+                attSetStmt.run(userHash, path, uidvalidity, uid, has ? 1 : 0, expiresAt);
             }
         });
         bestEffort(() => run([...entries]));
@@ -339,6 +379,7 @@ function createImapCache(opts) {
         bestEffort(() => treePruneStmt.run(n));
         bestEffort(() => uidsPruneStmt.run(n));
         bestEffort(() => statusPruneStmt.run(n));
+        bestEffort(() => attPruneStmt.run(n));
         treeMem.clear();
         uidsMem.clear();
         statusMem.clear();
@@ -357,7 +398,7 @@ function createImapCache(opts) {
 
     return {
         getTree, setTree, invalidateTree,
-        getUids, setUids, invalidateFolderUid: invalidateFolderUids,
+        getUids, getUidNext, setUids, invalidateFolderUid: invalidateFolderUids,
         getStatus, setStatus, invalidateFolderStatus,
         invalidateFolder, invalidateUser,
         getAttachmentFlags, setAttachmentFlags,

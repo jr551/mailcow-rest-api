@@ -183,6 +183,10 @@ export async function applyMocks(page: Page) {
 
     // Bearer-token session endpoints (matches v0.2.0 server implementation).
     await page.route('**/v1/auth/session', (route, request) => {
+        if (request.method() === 'DELETE') {
+            route.fulfill({ status: 204, body: '' });
+            return;
+        }
         if (request.method() === 'POST') {
             route.fulfill({
                 status: 201,
@@ -202,10 +206,6 @@ export async function applyMocks(page: Page) {
                 })
             });
         }
-    });
-
-    await page.route('**/v1/auth/logout', (route) => {
-        route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' });
     });
 
     await page.route('**/v1/me/shortcuts', (route) => {

@@ -87,8 +87,10 @@
     const tree = $derived(buildTree(mobileState.mailboxes));
 
     let expanded = $state<Set<string>>(new Set());
+    let autoExpanded = false;
 
-    // Auto-expand all parents by default
+    // Auto-expand all parents by default, once — collapsing every branch
+    // afterwards must stay collapsed.
     $effect(() => {
         const allParents = new Set<string>();
         function collect(nodes: TreeNode[]) {
@@ -100,7 +102,8 @@
             }
         }
         collect(tree);
-        if (allParents.size > 0 && expanded.size === 0) {
+        if (allParents.size > 0 && !autoExpanded) {
+            autoExpanded = true;
             expanded = allParents;
         }
     });
@@ -115,6 +118,13 @@
     function selectFolder(path: string) {
         mobileState.selectedPath = path;
         mobileState.search = '';
+        // The inbox mounts straight into a fetch; drop the previous
+        // folder's rows and any all-folders scope so they never show under
+        // the new title (or linger if the fetch fails).
+        mobileState.messages = [];
+        mobileState.messagesTotal = 0;
+        mobileState.messagesError = null;
+        mobileState.searchScope = 'folder';
         navigate('inbox');
     }
 
@@ -170,37 +180,45 @@
                     {@const mb = node.mailbox}
                     {@const isLast = i === flatTree.length - 1}
                     {@const hasChildren = node.children.length > 0}
-                    <button
-                        type="button"
-                        class="ios-row"
+                    <div
+                        class="tree-row"
                         class:active={mobileState.selectedPath === mb.path}
                         class:last={isLast}
-                        style="padding-left: calc(16px + {node.depth * 20}px)"
-                        onclick={() => {
-                            if (hasChildren) {
-                                toggleExpand(mb.path);
-                            }
-                            selectFolder(mb.path);
-                        }}
+                        style="padding-left: calc(8px + {node.depth * 20}px)"
                     >
                         {#if hasChildren}
-                            <span class="expand-icon" class:expanded={expanded.has(mb.path)}>
-                                <Icon name="chevronRight" size={14} />
-                            </span>
+                            <button
+                                type="button"
+                                class="expand-btn"
+                                aria-expanded={expanded.has(mb.path)}
+                                aria-label={`${expanded.has(mb.path) ? 'Collapse' : 'Expand'} ${mb.name || mb.path}`}
+                                onclick={() => toggleExpand(mb.path)}
+                            >
+                                <span class="expand-icon" class:expanded={expanded.has(mb.path)}>
+                                    <Icon name="chevronRight" size={14} />
+                                </span>
+                            </button>
                         {:else}
                             <span class="spacer"></span>
                         {/if}
-                        <span class="folder-icon">
-                            <Icon name={folderIcon(mb.specialUse, mb.name) as IconName} size={20} />
-                        </span>
-                        <span class="folder-name">{mb.name || mb.path}</span>
-                        {#if typeof mb.unseen === 'number' && mb.unseen > 0}
-                            <span class="folder-badge">{mb.unseen}</span>
-                        {/if}
-                        <span class="chevron">
-                            <Icon name="chevronRight" size={14} />
-                        </span>
-                    </button>
+                        <button
+                            type="button"
+                            class="ios-row last"
+                            class:active={mobileState.selectedPath === mb.path}
+                            onclick={() => selectFolder(mb.path)}
+                        >
+                            <span class="folder-icon">
+                                <Icon name={folderIcon(mb.specialUse, mb.name) as IconName} size={20} />
+                            </span>
+                            <span class="folder-name">{mb.name || mb.path}</span>
+                            {#if typeof mb.unseen === 'number' && mb.unseen > 0}
+                                <span class="folder-badge">{mb.unseen}</span>
+                            {/if}
+                            <span class="chevron">
+                                <Icon name="chevronRight" size={14} />
+                            </span>
+                        </button>
+                    </div>
                 {/each}
             </div>
         {/if}
@@ -263,6 +281,33 @@
     }
     .ios-row:active { background: var(--bg-hover); }
     .ios-row.active { background: var(--accent-soft); }
+    .tree-row {
+        display: flex;
+        align-items: center;
+        padding-right: 0;
+    }
+    .tree-row:not(.last) {
+        border-bottom: 0.5px solid var(--border-subtle);
+    }
+    .tree-row.active { background: var(--accent-soft); }
+    .tree-row .ios-row {
+        flex: 1;
+        min-width: 0;
+        width: auto;
+        padding-left: 4px;
+    }
+    .expand-btn {
+        flex-shrink: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 36px;
+        min-height: 44px;
+        padding: 0;
+        border: none;
+        background: transparent;
+        cursor: pointer;
+    }
     .folder-icon {
         color: var(--accent);
         flex-shrink: 0;
@@ -303,14 +348,13 @@
         flex-shrink: 0;
         display: inline-flex;
         align-items: center;
-        width: 16px;
         transition: transform 150ms ease;
     }
     .expand-icon.expanded {
         transform: rotate(90deg);
     }
     .spacer {
-        width: 16px;
+        width: 36px;
         flex-shrink: 0;
     }
     .muted { color: var(--text-tertiary); }

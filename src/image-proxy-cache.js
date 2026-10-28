@@ -7,6 +7,10 @@ const Database = require('better-sqlite3');
 // SQLite-backed LRU cache for proxied images. Hard cap on total bytes
 // stored; insertions evict oldest entries until there is room.
 
+const NEG_MAX_ROWS = 20_000;
+const NEG_TRIM_EVERY = 100;
+const USAGE_RETAIN_DAYS = 31;
+
 function createImageProxyCache(opts) {
     const { filePath, maxBytes = 100 * 1024 * 1024 } = opts;
 
@@ -35,6 +39,7 @@ function createImageProxyCache(opts) {
             reason TEXT NOT NULL,
             cached_at INTEGER NOT NULL
         );
+        CREATE INDEX IF NOT EXISTS idx_ipn_cached_at ON image_proxy_negative(cached_at);
 
         CREATE TABLE IF NOT EXISTS image_proxy_usage (
             user TEXT NOT NULL,
@@ -81,6 +86,12 @@ function createImageProxyCache(opts) {
         'cached_at = excluded.cached_at'
     );
     const negDeleteStmt = db.prepare('DELETE FROM image_proxy_negative WHERE url = ?');
+    const negPruneStmt = db.prepare('DELETE FROM image_proxy_negative WHERE cached_at < ?');
+    const negCountStmt = db.prepare('SELECT COUNT(*) AS c FROM image_proxy_negative');
+    const negTrimStmt = db.prepare(
+        'DELETE FROM image_proxy_negative WHERE url IN ' +
+        '(SELECT url FROM image_proxy_negative ORDER BY cached_at ASC LIMIT ?)'
+    );
 
     // This whole module is a cache (positive entries, negative entries and
     // the usage counters stored alongside them): a full, read-only or corrupt
@@ -202,9 +213,29 @@ function createImageProxyCache(opts) {
         }
     }
 
+    function pruneNegative(beforeTs) {
+        try {
+            return negPruneStmt.run(beforeTs).changes;
+        } catch {
+            return 0;
+        }
+    }
+
+    // Negative rows are otherwise only removed when the same URL is looked up
+    // again after its TTL, so unique failing URLs would accumulate forever.
+    // Every NEG_TRIM_EVERY writes, drop whatever exceeds the row cap (oldest
+    // first) and usage counters for days nobody will read again.
+    let negWrites = 0;
+    function trimNegative(now) {
+        const excess = negCountStmt.get().c - NEG_MAX_ROWS;
+        if (excess > 0) negTrimStmt.run(excess + Math.floor(NEG_MAX_ROWS / 10));
+        usagePruneStmt.run(new Date(now - USAGE_RETAIN_DAYS * 86_400_000).toISOString().slice(0, 10));
+    }
+
     function setNegative(url, status, reason, now = Date.now()) {
         try {
             negSetStmt.run(url, status, String(reason || 'Fetch failed'), now);
+            if (++negWrites % NEG_TRIM_EVERY === 0) trimNegative(now);
         } catch {
             /* negative caching is best-effort */
         }
@@ -217,7 +248,7 @@ function createImageProxyCache(opts) {
     return {
         get, set, remove, totalSize, count,
         getUsage, incrementUsage, pruneUsage,
-        getNegative, setNegative, close
+        getNegative, setNegative, pruneNegative, close
     };
 }
 

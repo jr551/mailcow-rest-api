@@ -5,13 +5,13 @@ const path = require('node:path');
 
 // Append-only telemetry sink. The webmail's error doctor POSTs every
 // reportable incident here; we write a single JSON-line per error to
-// /data/error.log with timestamp + ip + user + structured fields. No
-// rotation yet — operator runs `logrotate` at the OS level if needed.
+// /data/error.log with timestamp + ip + user + structured fields. The file
+// rotates itself once it passes ROTATE_AT_BYTES (see below).
 //
 // We chose append-only JSON-lines (not pino) so this file is grep-
 // friendly without a tool, and a simple `tail -f` shows live errors.
 
-const MAX_BODY_BYTES = 64 * 1024;        // ignore >64 KB submissions
+const MAX_BODY_BYTES = 32 * 1024;        // ignore >32 KB submissions
 const MAX_FIELD_CHARS = 4000;            // cap individual fields
 
 function clip(s, max = MAX_FIELD_CHARS) {
@@ -35,6 +35,9 @@ const ROTATE_AT_BYTES = 16 * 1024 * 1024;
 // only gate used to be "authenticated", so every mailbox user could read
 // every other user's error reports. Operators who want the full view name
 // themselves here.
+//
+// The POST route is public, so most entries have no owner; those are visible
+// to admins only.
 const ADMIN_USERS = new Set(
     String(process.env.TELEMETRY_ADMIN_USERS || '')
         .split(',')
@@ -42,15 +45,11 @@ const ADMIN_USERS = new Set(
         .filter(Boolean)
 );
 
-// Non-admins see their own reports, plus anonymous ones (the login surface
-// reports before there is a user) with the IP removed.
+// Non-admins see only reports bound to their own mailbox. Anonymous entries
+// carry other people's page URLs, messages and stacks, so they stay hidden.
 function visibleTo(entry, caller) {
-    if (!entry) return null;
-    const owner = typeof entry.user === 'string' ? entry.user.toLowerCase() : null;
-    if (owner && owner !== caller) return null;
-    if (owner === caller) return entry;
-    const { ip, ...rest } = entry;
-    return rest;
+    if (!entry || typeof entry.user !== 'string') return null;
+    return entry.user.toLowerCase() === caller ? entry : null;
 }
 
 async function readTail(file, maxBytes) {
@@ -126,9 +125,9 @@ module.exports = async function telemetryRoutes(app, { logPath }) {
 
     app.post('/v1/telemetry/error', {
         // Public so unauthenticated SPAs (login surface) can still
-        // report their own crashes. We still bind the auth user when
-        // we have one.
-        config: { public: true },
+        // report their own crashes. The auth hook skips public routes, so
+        // entries are written without an owner.
+        config: { public: true, rateLimit: { max: 60, timeWindow: '1 minute' } },
         schema: {
             tags: ['system'],
             summary: 'Submit a client-side error for the operator log',
@@ -144,7 +143,7 @@ module.exports = async function telemetryRoutes(app, { logPath }) {
         const entry = {
             ts: new Date().toISOString(),
             ip: req.ip || req.socket?.remoteAddress || null,
-            user: req.creds?.user || null,
+            user: null,
             type: typeof b.type === 'string' ? b.type : 'unknown',
             message: clip(b.message) || '(no message)',
             status: typeof b.status === 'number' ? b.status : null,

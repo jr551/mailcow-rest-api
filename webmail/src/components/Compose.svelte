@@ -343,9 +343,9 @@
     let preCheckSuggestion = $state<string | null>(null);
     let preCheckRationale = $state('');
     let preCheckBypass = $state(false);
-    // The submit event we held while running the check. After the user
-    // resolves the modal we replay the actual send via doSend().
-    let pendingSendArgs: { shiftKey: boolean } | null = null;
+    // Set by the Send button's click when Shift is held: a SubmitEvent
+    // raised through requestSubmit() carries no modifier keys of its own.
+    let skipReview = false;
 
     // "Review and send" combined flow. When the user clicks the
     // primary send button (and AI is available + not bypassed), we
@@ -440,7 +440,7 @@
         const text = replySuggest.accept();
         if (!text) return;
         const para = text.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean)
-            .map((p) => `<p>${p.replace(/\n/g, '<br>')}</p>`).join('');
+            .map((p) => `<p>${escapeHtml(p).replace(/\n/g, '<br>')}</p>`).join('');
         // Route through Tiptap, not `body = ...`. The bound variable is
         // only read by RichEditor on mount, so writing to it from here
         // updates the state and the visible document never — and the next
@@ -490,7 +490,7 @@
                 return;
             }
             const para = text.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean)
-                .map((p) => `<p>${p.replace(/\n/g, '<br>')}</p>`).join('');
+                .map((p) => `<p>${escapeHtml(p).replace(/\n/g, '<br>')}</p>`).join('');
             if (editorApi.insertHtml) {
                 trimTrailingEmptyParagraphs();
                 editorApi.insertHtml(para);
@@ -701,12 +701,11 @@
         e.preventDefault();
         if (!to.trim() || !smtpAvailable()) return;
 
-        const submitter = (e.submitter as HTMLElement | null);
-        const shiftBypass = !!(e as unknown as { shiftKey?: boolean }).shiftKey
-            || (submitter ? submitter.dataset.shift === 'true' : false);
+        const shiftBypass = skipReview;
+        skipReview = false;
 
-        // Shift-Send (or no AI configured) → straight to send. Empty
-        // subject is fine; the server will accept it.
+        // Shift-Send (or no AI configured) → straight to send. An empty
+        // subject goes out as "(no subject)" because the server requires one.
         if (shiftBypass || !aiAvailable() || preCheckBypass) {
             await doSend();
             return;
@@ -782,6 +781,7 @@
     async function doSend() {
         if (!to.trim() || !smtpAvailable()) return;
         sending = true;
+        const sentSubject = subject.trim() || '(no subject)';
         try {
             const toList = to.split(',').map((s) => s.trim()).filter(Boolean);
             const ccList = cc.split(',').map((s) => s.trim()).filter(Boolean);
@@ -800,7 +800,7 @@
                 bcc: bccList.length ? bccList : undefined,
                 from: from.trim() || undefined,
                 fromName: pickFromName(from || authState.activeUser || ''),
-                subject: subject.trim(),
+                subject: sentSubject,
                 html: body,
                 text: htmlToPlainText(body),
                 inReplyTo: replyTo?.envelope.messageId || undefined,
@@ -818,7 +818,7 @@
             // Layout.svelte which polls /v1/messages/send/:id/status with
             // backoff and updates the badge as the DSN lands.
             if (r?.messageId) {
-                trackSent({ messageId: r.messageId, subject: subject.trim(), to: toList.join(', ') });
+                trackSent({ messageId: r.messageId, subject: sentSubject, to: toList.join(', ') });
                 showToast('info', 'Sending… we\'ll let you know when it\'s delivered.');
             } else {
                 showToast('success', 'Message sent');
@@ -1298,7 +1298,7 @@
                             {/each}
                         </div>
                     {:else if !subject.trim()}
-                        <p class="presend-body muted small">Couldn't draft a subject — sending without one.</p>
+                        <p class="presend-body muted small">Couldn't draft a subject — sending it as (no subject).</p>
                     {/if}
 
                     {#if preCheckSuggestion}
@@ -1486,6 +1486,7 @@
                     type="submit"
                     class="btn btn-primary"
                     onclick={(e) => {
+                        skipReview = e.shiftKey;
                         const formEl = (e.currentTarget as HTMLButtonElement).closest('[role=dialog]')?.querySelector('form');
                         if (formEl) (formEl as HTMLFormElement).requestSubmit();
                     }}

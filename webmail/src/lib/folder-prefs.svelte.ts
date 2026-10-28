@@ -2,7 +2,7 @@
 // expand/collapse state for hierarchical folders. Lives entirely in
 // localStorage; no server round-trip needed.
 
-import { settings, capabilities, aiAuthKey } from './settings.svelte';
+import { settings, capabilities, aiAuthKey, resolveCustomBaseUrl, resolveCustomModel, extractChatText } from './settings.svelte';
 
 const ICON_KEY = 'webmail.folder-icons.v1';
 const EXPAND_KEY = 'webmail.folder-expanded.v1';
@@ -162,33 +162,11 @@ export function buildFolderTree<T extends { path: string; delimiter: string; nam
 
 function resolveBaseUrl(): string {
     if (capabilities.aiConfig?.configured) return capabilities.aiConfig.baseUrl.replace(/\/+$/, '');
-    const llm = settings.llm;
-    if (llm.baseUrl) return llm.baseUrl.replace(/\/+$/, '');
-    const presets: Record<string, string> = {
-        mistral: 'https://api.mistral.ai/v1',
-        openai: 'https://api.openai.com/v1',
-        groq: 'https://api.groq.com/openai/v1',
-        together: 'https://api.together.xyz/v1',
-        ollama: 'http://127.0.0.1:11434/v1',
-        perplexity: 'https://api.perplexity.ai',
-        openrouter: 'https://openrouter.ai/api/v1'
-    };
-    return presets[llm.preset] || presets.openai;
+    return resolveCustomBaseUrl();
 }
 function resolveModel(): string {
     if (capabilities.aiConfig?.configured) return capabilities.aiConfig.model;
-    const llm = settings.llm;
-    if (llm.model) return llm.model;
-    const defaults: Record<string, string> = {
-        mistral: 'mistral-small-latest',
-        openai: 'gpt-4o-mini',
-        groq: 'llama-3.1-70b-versatile',
-        together: 'meta-llama/Llama-3-8b-chat-hf',
-        ollama: 'llama3.1',
-        perplexity: 'llama-3.1-sonar-small-128k-chat',
-        openrouter: 'meta-llama/llama-3.1-8b-instruct'
-    };
-    return defaults[llm.preset] || defaults.openai;
+    return resolveCustomModel();
 }
 function resolveApiKey(): string {
     if (capabilities.aiConfig?.configured) return aiAuthKey();
@@ -271,13 +249,7 @@ export async function suggestFolderEmoji(
         try { const j = await res.json(); detail = j?.error?.message || j?.message || detail; } catch { /* */ }
         throw new Error(`Provider: ${detail}`);
     }
-    const r = await res.json();
-    const m = r?.choices?.[0]?.message || {};
-    const reasoning = typeof m.reasoning === 'string' ? m.reasoning : '';
-    const detailText = Array.isArray(m.reasoning_details)
-        ? m.reasoning_details.map((d: { text?: string }) => d?.text || '').join('')
-        : '';
-    const text = (m.content || reasoning || detailText || '').trim();
+    const text = extractChatText(await res.json());
     if (!text) throw new Error('Provider returned an empty reply.');
     // Take the first emoji-ish grapheme. Strip surrounding quotes/punctuation.
     const cleaned = text

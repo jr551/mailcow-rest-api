@@ -59,7 +59,7 @@ interface CacheEntry {
 }
 
 function makeCacheKey(path: string, uid: number): string {
-    return `${path}::${uid}`;
+    return `${getSession()?.user ?? ''}::${path}::${uid}`; // UIDs repeat across accounts
 }
 
 function loadCache(): Record<string, CacheEntry> {

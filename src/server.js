@@ -15,7 +15,7 @@ const { createOcrCache } = require('./ocr-cache');
 const { createImapCache } = require('./imap-cache');
 const { createPool } = require('./pool');
 const { createAuthHook } = require('./auth');
-const { createIpAllowHook } = require('./ip-allow');
+const { createIpAllowHook, isAllowed, LOOPBACK_RULES } = require('./ip-allow');
 const { createPushStore } = require('./push-store');
 const { createPushSender } = require('./push-sender');
 const { createWebhookStore } = require('./webhook-store');
@@ -207,6 +207,17 @@ function redactHeaders(headers) {
     return out;
 }
 
+// Several public routes are capability URLs: whoever holds the link can use
+// it. Request logs go to stdout and the container log driver, so the secret
+// segments must not reach them (the same reason redactHeaders exists).
+const CAPABILITY_PATH_RE = /(\/v1\/(?:public\/(?:ical|event)|messages\/(?:approve|deny)|webhook-inbox|webhook-message)\/|\/v1\/webhook-staging\/[^/?]+\/)[^/?#]+/;
+const SECRET_QUERY_RE = /([?&](?:sig|token|key)=)[^&#]*/gi;
+
+function redactUrl(url) {
+    if (typeof url !== 'string') return url;
+    return url.replace(CAPABILITY_PATH_RE, '$1[redacted]').replace(SECRET_QUERY_RE, '$1[redacted]');
+}
+
 function createLogger() {
     return {
         level: config.logLevel,
@@ -219,7 +230,7 @@ function createLogger() {
                 return {
                     id: req.id,
                     method: req.method,
-                    url: req.url,
+                    url: redactUrl(req.url),
                     version: req.httpVersion,
                     remoteAddress: req.ip || req.socket?.remoteAddress,
                     remotePort: req.socket?.remotePort,
@@ -369,7 +380,10 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         await app.register(require('@fastify/rate-limit'), {
             max: config.rateLimit.max,
             timeWindow: config.rateLimit.windowMs,
-            allowList: ['127.0.0.1', '::1']
+            // A function, not ['127.0.0.1', '::1']: the dual-stack listener
+            // reports an IPv4 loopback peer as '::ffff:127.0.0.1', which an
+            // exact string match never equals.
+            allowList: (req) => isAllowed(req.ip, LOOPBACK_RULES)
         });
     }
 
@@ -386,6 +400,17 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         dataDir: path.dirname(config.cache.path),
         logger: app.log
     });
+
+    // Stores that retain a mailbox password are inert without the secret box:
+    // the alternative would be keeping the password in the clear.
+    function whenSealed(label, enabled, create) {
+        if (!enabled) return null;
+        if (!secretBox.enabled) {
+            app.log.warn(`${label} disabled — no credential encryption key available`);
+            return null;
+        }
+        return create();
+    }
 
     // A corrupt or unreadable cache.db used to REJECT start(), which took the
     // whole service down: reads, writes, sending, everything. A cache exists to
@@ -476,6 +501,7 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         maxBytes: config.imageProxy.maxBytes
     }));
 
+    const ownsImapCache = !imapCache;
     imapCache = imapCache ?? openDisposableCache('IMAP', config.imapCache.path, (filePath) => createImapCache({
         filePath,
         ttlMs: config.cache.ttlValidMs,
@@ -532,44 +558,29 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
     // An app password stands in for a mailbox password, so the real one has to
     // be retrievable to talk to IMAP. Without the secret box that would mean
     // storing it in the clear, so the feature stays off instead.
-    const appPasswordStore = config.appPasswords.enabled && secretBox.enabled
-        ? createAppPasswordStore({
-            filePath: config.appPasswords.dbPath,
-            secretBox,
-            maxPerUser: config.appPasswords.maxPerUser
-        })
-        : null;
-    if (config.appPasswords.enabled && !secretBox.enabled) {
-        app.log.warn('app passwords disabled — no credential encryption key available');
-    }
+    const appPasswordStore = whenSealed('app passwords', config.appPasswords.enabled, () => createAppPasswordStore({
+        filePath: config.appPasswords.dbPath,
+        secretBox,
+        maxPerUser: config.appPasswords.maxPerUser
+    }));
 
     // Webhook inboxes retain the mailbox password for the same reason app
     // passwords do — the ingest route has to APPEND over IMAP — so the
     // feature is gated on the secret box in the same way.
-    const webhookInboxStore = config.webhookInboxes.enabled && secretBox.enabled
-        ? createWebhookInboxStore({
-            filePath: config.webhookInboxes.dbPath,
-            secretBox,
-            maxPerUser: config.webhookInboxes.maxPerUser
-        })
-        : null;
-    if (config.webhookInboxes.enabled && !secretBox.enabled) {
-        app.log.warn('webhook inboxes disabled — no credential encryption key available');
-    }
+    const webhookInboxStore = whenSealed('webhook inboxes', config.webhookInboxes.enabled, () => createWebhookInboxStore({
+        filePath: config.webhookInboxes.dbPath,
+        secretBox,
+        maxPerUser: config.webhookInboxes.maxPerUser
+    }));
 
     // Outbound webhooks ("email → webhook"). Same credential requirement as
     // webhook inboxes: the forwarder opens the owner's hidden mailbox over
     // IMAP, so it needs the mailbox password and therefore the secret box.
-    const outboundWebhookStore = config.outboundWebhooks.enabled && secretBox.enabled
-        ? createOutboundWebhookStore({
-            filePath: config.outboundWebhooks.dbPath,
-            secretBox,
-            maxPerUser: config.outboundWebhooks.maxPerUser
-        })
-        : null;
-    if (config.outboundWebhooks.enabled && !secretBox.enabled) {
-        app.log.warn('outbound webhooks disabled — no credential encryption key available');
-    }
+    const outboundWebhookStore = whenSealed('outbound webhooks', config.outboundWebhooks.enabled, () => createOutboundWebhookStore({
+        filePath: config.outboundWebhooks.dbPath,
+        secretBox,
+        maxPerUser: config.outboundWebhooks.maxPerUser
+    }));
     // Delivery state is shared with the operator forwarder's queue shape: both
     // are keyed by (address, uidvalidity, uid) and both need the same
     // attempts/backoff/delivered bookkeeping.
@@ -593,23 +604,18 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
     // and the blocked ("needs input") queue; the worker does the drafting.
     // Same gate as the other credential-holding stores above — inert without
     // the feature switch and the secret box.
-    const takeoverStore = config.takeover.enabled && secretBox.enabled
-        ? createTakeoverStore({
-            filePath: config.takeover.dbPath,
-            secretBox,
-            maxPerUser: config.takeover.maxPerUser,
-            // Initial per-user values before the user sets their own.
-            defaults: {
-                maxRepliesPerHour: config.takeover.maxRepliesPerHour,
-                minDelayMinutes: config.takeover.minDelayMinutes,
-                lookbackHours: config.takeover.lookbackHours,
-                considerAttachments: config.takeover.considerAttachments
-            }
-        })
-        : null;
-    if (config.takeover.enabled && !secretBox.enabled) {
-        app.log.warn('takeover disabled — no credential encryption key available');
-    }
+    const takeoverStore = whenSealed('takeover', config.takeover.enabled, () => createTakeoverStore({
+        filePath: config.takeover.dbPath,
+        secretBox,
+        maxPerUser: config.takeover.maxPerUser,
+        // Initial per-user values before the user sets their own.
+        defaults: {
+            maxRepliesPerHour: config.takeover.maxRepliesPerHour,
+            minDelayMinutes: config.takeover.minDelayMinutes,
+            lookbackHours: config.takeover.lookbackHours,
+            considerAttachments: config.takeover.considerAttachments
+        }
+    }));
 
     // The approval exit for an unsure draft — see createTakeoverDeliver above
     // for why it is a self-POST into the existing approval gate.
@@ -925,6 +931,7 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         if (aiCachePruneTimer) clearInterval(aiCachePruneTimer);
         if (aiCache) aiCache.close();
         await pool.closeAll();
+        if (ownsImapCache) imapCache.close();
         if (cache) cache.close();
         if (ocrCache) ocrCache.close();
         if (pushStore && pushStore.close) pushStore.close();
@@ -979,7 +986,7 @@ async function start() {
     }
 }
 
-module.exports = { build, start, getPublicBaseUrl, createTakeoverDeliver };
+module.exports = { build, start, getPublicBaseUrl, createTakeoverDeliver, redactUrl };
 
 if (require.main === module) {
     start();

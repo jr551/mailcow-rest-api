@@ -1,5 +1,4 @@
 import type { Mailbox, MessageDetail, MessageListItem } from '../../lib/api';
-import { playError } from '../../lib/sounds.svelte';
 import { vibrate } from './native-bridge';
 
 export type MobileView = 'inbox' | 'message' | 'compose' | 'folders' | 'ai' | 'drive' | 'settings';
@@ -37,7 +36,7 @@ export interface MobileState {
     resumeTick: number;
 }
 
-const initial: MobileState = {
+const createInitial = (): MobileState => ({
     view: 'inbox',
     previousView: 'inbox',
     mailboxes: [],
@@ -61,9 +60,17 @@ const initial: MobileState = {
     toast: null,
     filter: 'all',
     resumeTick: 0,
-};
+});
 
-export const mobileState = $state<MobileState>(initial);
+export const mobileState = $state<MobileState>(createInitial());
+
+/** Drops every piece of per-account state (lists, open message, drafts,
+ *  search) so a different account never sees the previous one's mail.
+ *  Keeps the resume counter and any toast in flight. */
+export function resetMobileState() {
+    const { resumeTick, toast } = mobileState;
+    Object.assign(mobileState, createInitial(), { resumeTick, toast });
+}
 
 // Internal flag set while a popstate event is dispatching so navigate()
 // doesn't push a redundant history entry while we're handling the OS
@@ -168,19 +175,18 @@ export function installAndroidBackHandler(): () => void {
     };
 }
 
-export function showToast(kind: 'info' | 'error' | 'success', message: string) {
-    // Per UX request: don't surface raw error toasts to the mobile user —
-    // backend strings like "listMessages failed: 502" are noise they
-    // can't act on. Log to console so we can still diagnose. Info /
-    // success still show as normal toasts.
-    if (kind === 'error') {
+/** Shows a toast. Pass friendly, user-actionable text as `message`; raw
+ *  backend/error strings belong in `detail`, which is only logged. */
+export function showToast(kind: 'info' | 'error' | 'success', message: string, detail?: unknown) {
+    if (detail !== undefined) {
         // eslint-disable-next-line no-console
-        console.warn('[mobile-toast suppressed]', message);
-        return;
+        console.warn('[mobile-toast]', message, detail);
     }
     mobileState.toast = { kind, message, ts: Date.now() };
     if (kind === 'success') {
         vibrate('success');
+    } else if (kind === 'error') {
+        vibrate('error');
     }
 }
 

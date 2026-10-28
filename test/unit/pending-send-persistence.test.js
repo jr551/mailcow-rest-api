@@ -47,6 +47,15 @@ function installSendRecorder() {
     };
 }
 
+// The send response no longer carries the approval token (it is a bearer
+// capability on a public route), so tests read it from the approval email the
+// owner would receive.
+function lastApprovalToken(recorder) {
+    const mails = recorder.sent.filter((m) => /^Approve sending:/.test(m.subject || ''));
+    const m = mails[mails.length - 1];
+    return (m.text.match(/\/v1\/messages\/approve\/([a-f0-9]{64})/) || [])[1];
+}
+
 async function buildApp() {
     const Fastify = require('fastify');
     const sensible = require('@fastify/sensible');
@@ -182,7 +191,8 @@ test('approve POST accepts form and empty body; unknown token returns HTML expir
                 text: 'draft for approval'
             }
         });
-        const { token } = held.json();
+        assert.equal(held.json().token, undefined, 'the approval token must not be returned to the caller');
+        const token = lastApprovalToken(recorder);
         const ok = await app.inject({
             method: 'POST',
             url: `/v1/messages/approve/${token}`,

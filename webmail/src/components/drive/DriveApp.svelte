@@ -116,7 +116,8 @@
     }
 
     async function ctxDelete(item: DriveItem) {
-        if (!confirm(`Delete "${item.name}"?`)) return;
+        const what = item.isFolder ? `folder "${item.name}" and everything in it` : `"${item.name}"`;
+        if (!confirm(`Delete ${what}?`)) return;
         await deleteItem(item.path, item.isFolder);
         closeCtxMenu();
     }
@@ -237,7 +238,9 @@
             <li><button type="button" role="menuitem" onclick={() => ctxDownload(ctxMenu!.item)}><Icon name="download" size={14} /> Download</button></li>
             <li><button type="button" role="menuitem" onclick={() => ctxCopyLink(ctxMenu!.item)}><Icon name="copy" size={14} /> Copy link</button></li>
             <li class="sep"></li>
-            <li><button type="button" role="menuitem" onclick={() => ctxRename(ctxMenu!.item)}><Icon name="type" size={14} /> Rename</button></li>
+            {#if !ctxMenu.item.isFolder}
+                <li><button type="button" role="menuitem" onclick={() => ctxRename(ctxMenu!.item)}><Icon name="type" size={14} /> Rename</button></li>
+            {/if}
             <li><button type="button" role="menuitem" class="danger" onclick={() => ctxDelete(ctxMenu!.item)}><Icon name="trash" size={14} /> Delete</button></li>
         </ul>
     {/if}

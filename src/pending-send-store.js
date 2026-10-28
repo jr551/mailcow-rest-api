@@ -9,6 +9,15 @@ const path = require('node:path');
 
 const DEFAULT_TTL_MS = 60 * 60 * 1000; // 1 hour
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+// Each held send can carry a multi-megabyte draft, so the live rows per user
+// are bounded.
+const MAX_LIVE_PER_USER = 25;
+
+function pendingLimitError() {
+    const err = new Error(`Too many sends are awaiting approval (max ${MAX_LIVE_PER_USER}). Approve or deny some, or wait for them to expire.`);
+    err.code = 'PENDING_LIMIT';
+    return err;
+}
 
 function payloadFromEntry(entry) {
     return JSON.stringify({
@@ -111,6 +120,11 @@ function createMapStore({ ttlMs, secretBox, logger, resendApproval }) {
     }
 
     function create(entry) {
+        let live = 0;
+        for (const stored of store.values()) {
+            if (stored.user === entry.user && !isExpired(stored)) live++;
+        }
+        if (live >= MAX_LIVE_PER_USER) throw pendingLimitError();
         const token = crypto.randomBytes(32).toString('hex');
         store.set(token, {
             ...entry,
@@ -214,6 +228,7 @@ function createSqliteStore({ ttlMs, filePath, secretBox, logger, resendApproval 
         VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
     const selectStmt = db.prepare('SELECT * FROM pending_sends WHERE token = ?');
+    const countLiveStmt = db.prepare('SELECT COUNT(*) AS n FROM pending_sends WHERE user = ? AND created_at >= ?');
     const deleteStmt = db.prepare('DELETE FROM pending_sends WHERE token = ?');
     const markForwardedStmt = db.prepare(`
         UPDATE pending_sends SET forwarded_at = ?, forwarded_to = ? WHERE token = ?
@@ -294,8 +309,9 @@ function createSqliteStore({ ttlMs, filePath, secretBox, logger, resendApproval 
     }
 
     function create(entry) {
-        const token = crypto.randomBytes(32).toString('hex');
         const now = Date.now();
+        if (countLiveStmt.get(entry.user, now - ttlMs).n >= MAX_LIVE_PER_USER) throw pendingLimitError();
+        const token = crypto.randomBytes(32).toString('hex');
         insertStmt.run(token, now, entry.user, sealPass(entry.pass), payloadFromEntry(entry), null, null);
         return token;
     }
@@ -369,6 +385,9 @@ function createPendingSendStore({
     baseUrl
 } = {}) {
     if (filePath) {
+        if (!(secretBox && secretBox.enabled)) {
+            logger?.warn?.({ filePath }, 'pending sends are stored with the mailbox password in plaintext: credential encryption is disabled');
+        }
         try {
             return createSqliteStore({ ttlMs, filePath, secretBox, logger, resendApproval, baseUrl });
         } catch (err) {

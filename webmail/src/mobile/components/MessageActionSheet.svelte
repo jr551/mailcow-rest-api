@@ -109,7 +109,7 @@
         {:else}
             <div class="sheet-header">
                 <h3>{msg.envelope.subject || '(no subject)'}</h3>
-                <button type="button" class="close-btn" onclick={onClose}>
+                <button type="button" class="close-btn" aria-label="Close" onclick={onClose}>
                     <Icon name="close" size={18} />
                 </button>
             </div>
@@ -197,8 +197,8 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        width: 32px;
-        height: 32px;
+        width: 44px;
+        height: 44px;
         border-radius: 50%;
         cursor: pointer;
     }

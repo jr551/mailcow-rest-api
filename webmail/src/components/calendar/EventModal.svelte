@@ -5,7 +5,7 @@
     import { showToast } from '../../lib/store.svelte';
     import {
         addEvent, updateEvent, deleteEvent, calendarStore, resolveDefaultCalendarId, getCalendar,
-        EVENT_COLORS, type CalEvent, type Recurrence
+        EVENT_COLORS, type CalEvent
     } from '../../lib/calendar.svelte';
     import { format, parseISO } from 'date-fns';
 
@@ -69,7 +69,6 @@
         src?.calendarId ?? resolveDefaultCalendarId()
     );
     let color = $state<string | undefined>(src?.color);
-    let recurrence = $state<Recurrence>(src?.recurrence ?? 'none');
     let saving = $state(false);
 
     const readOnly = $derived.by(() => {
@@ -95,7 +94,7 @@
         return {
             calendarId, title: t, location: location.trim() || undefined,
             description: description.trim() || undefined,
-            start: startISO, end: endISO, allDay, color, recurrence
+            start: startISO, end: endISO, allDay, color
         };
     }
 
@@ -174,17 +173,6 @@
                     </div>
                 </label>
             </div>
-
-            <label class="field">
-                <span>Repeat</span>
-                <select bind:value={recurrence} disabled={readOnly} data-testid="cal-evt-recurrence">
-                    <option value="none">Doesn't repeat</option>
-                    <option value="daily">Daily</option>
-                    <option value="weekly">Weekly</option>
-                    <option value="monthly">Monthly</option>
-                    <option value="yearly">Yearly</option>
-                </select>
-            </label>
 
             <label class="field">
                 <span>Location</span>

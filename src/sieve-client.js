@@ -6,14 +6,17 @@ const { isGroupCondition, ruleUsesEnvelope } = require('./mail-rule-condition');
 
 const SCRIPT_NAME = 'imap-rest-rules';
 const PRESERVED_MARKER = '# --- preserved rules ---';
+// Whole-line match: a rule name or value that merely contains the marker text
+// sits inside a `# name:` line and must not split the script.
+const PRESERVED_MARKER_RE = new RegExp(`^${PRESERVED_MARKER}[ \\t]*\\r?$`, 'm');
 const RULES_HEADER = '# mailcow-rest-api rules';
+const CONNECT_TIMEOUT_MS = 15000;
 
 // Hidden mailbox an outbound-webhook rule parks its message in.
 //
 // Sieve has no HTTP action, so a "send to webhook" rule cannot POST. It
 // redirects into this mailbox instead and the forwarder polls it. The name
-// lives here because it is part of the Sieve contract — the store imports it
-// rather than keeping a second copy that could drift.
+// lives here because it is part of the Sieve contract.
 const WEBHOOK_MAILBOX_PREFIX = '.wh-';
 
 function webhookMailbox(id) {
@@ -214,9 +217,9 @@ function compileRulesScript(rules, preservedContent) {
 function parseRules(content) {
     if (!content) return { rules: [], preservedContent: '' };
 
-    const markerIdx = content.indexOf(PRESERVED_MARKER);
-    const ourPart = markerIdx >= 0 ? content.substring(0, markerIdx) : content;
-    const preservedContent = markerIdx >= 0 ? content.substring(markerIdx + PRESERVED_MARKER.length).trim() : '';
+    const marker = PRESERVED_MARKER_RE.exec(content);
+    const ourPart = marker ? content.substring(0, marker.index) : content;
+    const preservedContent = marker ? content.substring(marker.index + marker[0].length).trim() : '';
 
     const rules = [];
     const ruleRe = /# rule: ([^\r\n]+)\r?\n# name: ([^\r\n]+)\r?\nif ([\s\S]*?)\{\r?\n([\s\S]*?)\r?\n\}/g;
@@ -366,24 +369,6 @@ function unescapeSieveString(s) {
     return String(s).replace(/\\([\s\S])/g, '$1');
 }
 
-// Backward compat helpers
-function buildBlockedRecipientsScript(recipients) {
-    const rules = recipients.map((r) => ({
-        id: `block-${r}`,
-        name: `Block ${r}`,
-        condition: { type: 'envelope-to-is', value: r },
-        action: { type: 'discard' }
-    }));
-    return compileRulesScript(rules);
-}
-
-function parseBlockedRecipients(content) {
-    const { rules } = parseRules(content);
-    return rules
-        .filter((r) => r.condition.type === 'envelope-to-is' && r.action.type === 'discard')
-        .map((r) => r.condition.value);
-}
-
 class ManageSieveClient {
     constructor({ host, port = 4190, rejectUnauthorized = true, tlsServername = '' }) {
         this.host = host;
@@ -402,14 +387,27 @@ class ManageSieveClient {
     async connect() {
         return new Promise((resolve, reject) => {
             const socket = net.createConnection({ host: this.host, port: this.port });
+            // Covers the TCP connect, the greeting and the TLS upgrade; the
+            // per-read timeouts below only start once the socket is up.
+            const timer = setTimeout(() => {
+                socket.destroy();
+                reject(new Error('ManageSieve connect timeout'));
+            }, CONNECT_TIMEOUT_MS);
+            const fail = (err) => {
+                clearTimeout(timer);
+                reject(err);
+            };
             socket.once('connect', async () => {
                 this.socket = socket;
                 try {
                     const greeting = await readResponse(socket, 10000);
                     const caps = parseCapabilities(greeting);
 
-                    // If no SASL mechanisms advertised, try STARTTLS
-                    if (caps.sasl.length === 0 && caps.starttls) {
+                    // Upgrade whenever the server offers it, even if it
+                    // already lists SASL mechanisms: a greeting is
+                    // unauthenticated, and acting on its SASL list is how an
+                    // on-path attacker gets AUTHENTICATE PLAIN sent in clear.
+                    if (caps.starttls) {
                         socket.write('STARTTLS\r\n');
                         const tlsRes = await readResponse(socket, 10000);
                         if (!isOk(tlsRes)) {
@@ -431,12 +429,13 @@ class ManageSieveClient {
                         // Read post-TLS capabilities
                         await readResponse(this.socket, 10000);
                     }
+                    clearTimeout(timer);
                     resolve();
                 } catch (err) {
-                    reject(err);
+                    fail(err);
                 }
             });
-            socket.once('error', reject);
+            socket.once('error', fail);
         });
     }
 
@@ -503,9 +502,6 @@ module.exports = {
     compileRulesScript,
     compileCondition,
     parseRules,
-    buildBlockedRecipientsScript,
-    parseBlockedRecipients,
     webhookMailbox,
-    webhookIdFromMailbox,
-    WEBHOOK_MAILBOX_PREFIX
+    webhookIdFromMailbox
 };

@@ -1,6 +1,6 @@
 <script lang="ts">
     import { onMount } from 'svelte';
-    import { mobileState, goBack, showToast } from '../lib/store.svelte';
+    import { mobileState, goBack, showToast, pushOverlay } from '../lib/store.svelte';
     import { authState } from '../../lib/auth.svelte';
     import { sendStub, getSendFromAddresses, type SendAttachment } from '../../lib/api';
     import { trackSent } from '../../lib/sent-status.svelte';
@@ -47,6 +47,21 @@
         input.click();
     }
 
+    // Registered with the back-button stack so Android Back closes the
+    // picker instead of leaving compose and discarding the draft.
+    let fromPickerDispose: (() => void) | null = null;
+    function openFromPicker() {
+        showFromPicker = true;
+        fromPickerDispose = pushOverlay('compose-from-picker', () => {
+            showFromPicker = false;
+            fromPickerDispose = null;
+        });
+    }
+    function closeFromPicker() {
+        showFromPicker = false;
+        if (fromPickerDispose) { fromPickerDispose(); fromPickerDispose = null; }
+    }
+
     function removeAttachment(idx: number) {
         attachments = attachments.filter((_, i) => i !== idx);
     }
@@ -72,6 +87,25 @@
         return fallback;
     }
 
+    // Reply-all Cc: everyone on the original To/Cc except the sender (already
+    // in To), the user and any of their send-from aliases, de-duplicated.
+    function buildReplyAllCc(): string {
+        if (!replyTo) return '';
+        const skip = new Set<string>();
+        const skipAddr = (addr?: string | null) => { if (addr) skip.add(addr.toLowerCase()); };
+        skipAddr(authState.activeUser);
+        skipAddr(settings.defaultFromAddress);
+        sendFromOptions.forEach(skipAddr);
+        replyTo.envelope.from?.forEach((a) => skipAddr(a.address));
+        const out: string[] = [];
+        for (const a of [...(replyTo.envelope.to || []), ...(replyTo.envelope.cc || [])]) {
+            if (!a.address || skip.has(a.address.toLowerCase())) continue;
+            skipAddr(a.address);
+            out.push(a.address);
+        }
+        return out.join(', ');
+    }
+
     $effect(() => {
         if (replyTo && mode !== 'new') {
             // Build the subject in a local and assign once at the end.
@@ -95,11 +129,9 @@
                 to = replyTo.envelope.from?.map((a) => a.address).filter(Boolean).join(', ') || '';
             }
             if (mode === 'replyAll') {
-                const all = [
-                    ...(replyTo.envelope.to || []),
-                    ...(replyTo.envelope.cc || [])
-                ].map((a) => a.address).filter(Boolean);
-                cc = all.join(', ');
+                cc = buildReplyAllCc();
+                // handleSend only sends Cc while the field is shown.
+                if (cc) showCc = true;
             }
             from = pickReplyFrom();
             subject = nextSubject;
@@ -133,7 +165,7 @@
                 showToast('error', 'Send failed');
             }
         } catch (err) {
-            showToast('error', err instanceof Error ? err.message : 'Send failed');
+            showToast('error', 'Send failed', err);
         } finally {
             sending = false;
         }
@@ -249,7 +281,7 @@
         <div class="field-group">
             <div class="field">
                 <span class="field-label">From</span>
-                <button type="button" class="from-select" onclick={() => showFromPicker = true}>
+                <button type="button" class="from-select" onclick={openFromPicker} aria-haspopup="dialog">
                     <span class="truncate">{from || authState.activeUser || 'Select…'}</span>
                     <Icon name="chevronDown" size={14} />
                 </button>
@@ -371,7 +403,7 @@
                     <div class="attach-chip">
                         <Icon name="paperclip" size={12} />
                         <span class="truncate">{att.filename}</span>
-                        <button type="button" class="attach-remove" onclick={() => removeAttachment(i)}>
+                        <button type="button" class="attach-remove" aria-label={`Remove ${att.filename}`} onclick={() => removeAttachment(i)}>
                             <Icon name="close" size={12} />
                         </button>
                     </div>
@@ -380,10 +412,10 @@
         {/if}
 
         <div class="compose-actions">
-            <button type="button" class="action-btn" onclick={() => pickImage('camera')} title="Take photo">
+            <button type="button" class="action-btn" onclick={() => pickImage('camera')} title="Take photo" aria-label="Take photo">
                 <Icon name="camera" size={18} />
             </button>
-            <button type="button" class="action-btn" onclick={() => pickImage('gallery')} title="Add photo">
+            <button type="button" class="action-btn" onclick={() => pickImage('gallery')} title="Add photo" aria-label="Add photo">
                 <Icon name="image" size={18} />
             </button>
             <button
@@ -392,6 +424,7 @@
                 class:on={trackOpens}
                 onclick={() => { trackOpens = !trackOpens; }}
                 title={trackOpens ? 'Tracking on — you\'ll be notified when this is opened' : 'Enable open-tracking pixel'}
+                aria-label="Open tracking"
                 aria-pressed={trackOpens}
                 data-testid="mobile-compose-spy"
             >
@@ -404,11 +437,11 @@
 {#if showFromPicker}
     <!-- Tap-outside-to-close is a pointer convenience; the sheet's close
          button is the accessible dismiss path. -->
-    <div class="sheet-backdrop" role="presentation" onclick={() => showFromPicker = false}></div>
-    <div class="picker-sheet slide-up">
+    <div class="sheet-backdrop" role="presentation" onclick={closeFromPicker}></div>
+    <div class="picker-sheet slide-up" role="dialog" aria-modal="true" aria-label="Send from">
         <div class="picker-header">
             <h2>From</h2>
-            <button type="button" class="mbtn mbtn-ghost" onclick={() => showFromPicker = false}>
+            <button type="button" class="mbtn mbtn-ghost" aria-label="Close" onclick={closeFromPicker}>
                 <Icon name="close" size={18} />
             </button>
         </div>
@@ -418,7 +451,7 @@
                     type="button"
                     class="picker-row"
                     class:active={from === addr}
-                    onclick={() => { from = addr; showFromPicker = false; }}
+                    onclick={() => { from = addr; closeFromPicker(); }}
                 >
                     <span class="truncate">{addr}</span>
                     {#if from === addr}<Icon name="check" size={16} />{/if}
@@ -604,6 +637,9 @@
         background: transparent;
         border: none;
         padding: 2px;
+        margin: -6px -8px -6px 0;
+        min-width: 32px;
+        min-height: 32px;
         cursor: pointer;
         color: var(--text-tertiary);
     }
@@ -612,14 +648,14 @@
         display: flex;
         align-items: center;
         gap: 4px;
-        padding: 8px 16px calc(8px + env(safe-area-inset-bottom));
+        padding: 8px 16px;
         background: var(--bg-surface);
         border-top: 0.5px solid var(--border-subtle);
         margin-top: auto;
     }
     .action-btn {
-        width: 36px;
-        height: 36px;
+        width: 44px;
+        height: 44px;
         border-radius: 50%;
         padding: 0;
         display: flex;

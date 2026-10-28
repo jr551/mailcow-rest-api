@@ -14,16 +14,27 @@ function formatIcalDate(isoString) {
     return d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
 }
 
+// Fold at 75 octets (RFC 5545 §3.1) without splitting a code point, so a
+// surrogate pair or multi-byte character at the boundary survives.
 function foldLine(line) {
-    if (line.length <= 75) return line;
-    let out = line.slice(0, 75);
-    let rest = line.slice(75);
-    while (rest.length > 0) {
-        const chunk = rest.slice(0, 74);
-        out += '\r\n ' + chunk;
-        rest = rest.slice(74);
+    if (Buffer.byteLength(line) <= 75) return line;
+    const parts = [];
+    let cur = '';
+    let curBytes = 0;
+    let limit = 75;
+    for (const ch of line) {
+        const n = Buffer.byteLength(ch);
+        if (curBytes + n > limit) {
+            parts.push(cur);
+            cur = '';
+            curBytes = 0;
+            limit = 74;
+        }
+        cur += ch;
+        curBytes += n;
     }
-    return out;
+    parts.push(cur);
+    return parts.join('\r\n ');
 }
 
 function escapeIcalText(text) {
@@ -31,7 +42,13 @@ function escapeIcalText(text) {
         .replace(/\\/g, '\\\\')
         .replace(/;/g, '\\;')
         .replace(/,/g, '\\,')
-        .replace(/\n/g, '\\n');
+        .replace(/\r\n|\r|\n/g, '\\n');
+}
+
+// One pass, so an escaped backslash followed by "n" ("\\n") is not
+// mistaken for an escaped newline.
+function unescapeIcalText(text) {
+    return String(text).replace(/\\([nN;,\\])/g, (_, c) => (c === 'n' || c === 'N' ? '\n' : c));
 }
 
 function generateIcal(event) {
@@ -64,7 +81,7 @@ function generateIcal(event) {
 }
 
 function parseIcal(icalText) {
-    const text = icalText.replace(/\r\n[ \t]/g, ''); // unfold
+    const text = icalText.replace(/\r?\n[ \t]/g, ''); // unfold
     const events = [];
     const veventRegex = /BEGIN:VEVENT\r?\n([\s\S]*?)END:VEVENT/g;
     let m;
@@ -72,12 +89,17 @@ function parseIcal(icalText) {
         const block = m[1];
         const event = {};
         const lines = block.split(/\r?\n/);
+        // Properties of a nested component (a VALARM's DESCRIPTION) are not
+        // the event's own.
+        let nested = 0;
         for (const line of lines) {
             const idx = line.indexOf(':');
             if (idx < 0) continue;
-            const key = line.slice(0, idx).split(';')[0];
-            let value = line.slice(idx + 1);
-            value = value.replace(/\\n/g, '\n').replace(/\\;/g, ';').replace(/\\,/g, ',').replace(/\\\\/g, '\\');
+            const key = line.slice(0, idx).split(';')[0].toUpperCase();
+            if (key === 'BEGIN') { nested++; continue; }
+            if (key === 'END') { if (nested > 0) nested--; continue; }
+            if (nested > 0) continue;
+            const value = unescapeIcalText(line.slice(idx + 1));
             if (key === 'DTSTART' || key === 'DTEND' || key === 'DTSTAMP') {
                 // Parse iCal date/time to ISO
                 const clean = value.replace(/Z$/, '');
@@ -212,7 +234,8 @@ class CaldavClient {
         return calendars;
     }
 
-    async listEvents(user, pass, calendar, start, end) {
+    // Raw VCALENDAR text of every resource with an event in the range.
+    async listCalendarData(user, pass, calendar, start, end) {
         const startStr = formatIcalDate(start);
         const endStr = formatIcalDate(end);
         const body = `<?xml version="1.0" encoding="utf-8"?>
@@ -235,16 +258,19 @@ class CaldavClient {
             user, pass
         });
         const doc = parseXml(xml);
-        const events = [];
+        const out = [];
         for (const resp of getResponses(doc)) {
             const prop = getProp(resp);
             if (!prop) continue;
             const calData = prop['C:calendar-data'] || prop['c:calendar-data'] || prop['calendar-data'];
-            if (!calData) continue;
-            const parsed = parseIcal(String(calData));
-            events.push(...parsed);
+            if (calData) out.push(String(calData));
         }
-        return events;
+        return out;
+    }
+
+    async listEvents(user, pass, calendar, start, end) {
+        const data = await this.listCalendarData(user, pass, calendar, start, end);
+        return data.flatMap((calData) => parseIcal(calData));
     }
 
     async getEvent(user, pass, calendar, uid) {
@@ -300,4 +326,4 @@ class CaldavClient {
     }
 }
 
-module.exports = { CaldavClient, generateIcal, parseIcal, formatIcalDate };
+module.exports = { CaldavClient, generateIcal, parseIcal, formatIcalDate, escapeIcalText, unescapeIcalText, foldLine };

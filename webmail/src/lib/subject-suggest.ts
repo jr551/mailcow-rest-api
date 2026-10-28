@@ -5,36 +5,8 @@
 // Same provider plumbing as email-actions; we avoid going through the
 // streaming chatTurn() because we only need a 6-token reply.
 
-import { settings, capabilities, aiAuthKey } from './settings.svelte';
+import { resolveProvider } from './llm-provider';
 import { cachedChatCompletion } from './ai-cache.svelte';
-
-const PRESETS: Record<string, { url: string; model: string }> = {
-    mistral:    { url: 'https://api.mistral.ai/v1',          model: 'mistral-small-latest' },
-    openai:     { url: 'https://api.openai.com/v1',          model: 'gpt-4o-mini' },
-    groq:       { url: 'https://api.groq.com/openai/v1',     model: 'llama-3.1-70b-versatile' },
-    together:   { url: 'https://api.together.xyz/v1',        model: 'meta-llama/Llama-3-8b-chat-hf' },
-    ollama:     { url: 'http://127.0.0.1:11434/v1',          model: 'llama3.1' },
-    perplexity: { url: 'https://api.perplexity.ai',          model: 'llama-3.1-sonar-small-128k-chat' },
-    openrouter: { url: 'https://openrouter.ai/api/v1',       model: 'meta-llama/llama-3.1-8b-instruct' }
-};
-
-function resolve(): { baseUrl: string; model: string; apiKey: string } | null {
-    if (capabilities.aiConfig?.configured) {
-        return {
-            baseUrl: capabilities.aiConfig.baseUrl.replace(/\/+$/, ''),
-            model: capabilities.aiConfig.model,
-            apiKey: aiAuthKey()
-        };
-    }
-    const llm = settings.llm;
-    if (!settings.useCustomLlm || !llm.apiKey) return null;
-    const preset = PRESETS[llm.preset] || PRESETS.openai;
-    return {
-        baseUrl: (llm.baseUrl || preset.url).replace(/\/+$/, ''),
-        model: llm.model || preset.model,
-        apiKey: llm.apiKey
-    };
-}
 
 const SYS = [
     'Suggest one short subject line for the email below.',
@@ -51,7 +23,7 @@ const SYS_PAIR = [
 ].join(' ');
 
 export async function suggestSubject(body: string, opts: { signal?: AbortSignal } = {}): Promise<string | null> {
-    const cfg = resolve();
+    const cfg = resolveProvider();
     if (!cfg) return null;
     const text = (body || '').trim();
     if (text.length < 5) return null;
@@ -113,7 +85,7 @@ export async function suggestSubject(body: string, opts: { signal?: AbortSignal 
 // LLM call. Used by Compose's "Review and send" button so the user
 // can pick the framing they prefer before the message ships.
 export async function suggestSubjects(body: string, opts: { signal?: AbortSignal } = {}): Promise<string[]> {
-    const cfg = resolve();
+    const cfg = resolveProvider();
     if (!cfg) return [];
     const text = (body || '').trim();
     if (text.length < 5) return [];

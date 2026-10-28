@@ -26,6 +26,9 @@ body {
     display: flex;
     flex-direction: column;
     padding-top: env(safe-area-inset-top);
+    /* The only place the bottom inset is applied for in-flow content; bars
+       inside #app (tab bar, compose / message toolbars, chat input) must not
+       add it again. Fixed-position sheets and the FAB add their own. */
     padding-bottom: env(safe-area-inset-bottom);
     padding-left: env(safe-area-inset-left);
     padding-right: env(safe-area-inset-right);
@@ -102,7 +105,12 @@ body {
     border-color: var(--border-soft);
     color: var(--text-primary);
 }
-.mbtn-ghost { color: var(--accent-text); background: transparent; }
+.mbtn-ghost {
+    color: var(--accent-text);
+    background: transparent;
+    min-width: 44px;
+    min-height: 44px;
+}
 /* Segmented control (iOS style) */
 .segments {
     display: flex;
@@ -122,7 +130,14 @@ body {
     background: transparent;
     border: none;
     cursor: pointer;
+    position: relative;
     transition: background-color 120ms, color 120ms;
+}
+/* Extends the tap area to 44px without making the control taller. */
+.segment::after {
+    content: '';
+    position: absolute;
+    inset: -8px 0;
 }
 .segment.active {
     background: var(--bg-surface);
@@ -138,7 +153,7 @@ body {
     align-items: center;
     justify-content: space-around;
     gap: 0;
-    padding: 4px 0 calc(4px + env(safe-area-inset-bottom));
+    padding: 4px 0;
     background: var(--bg-surface);
     border-top: 0.5px solid var(--border-subtle);
     backdrop-filter: saturate(180%) blur(20px);
@@ -149,8 +164,11 @@ body {
     flex-direction: column;
     align-items: center;
     gap: 1px;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
     padding: 4px 10px;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 500;
     color: var(--text-tertiary);
     background: transparent;
@@ -173,6 +191,8 @@ body {
     border-bottom: 0.5px solid var(--border-subtle);
     min-height: 48px;
 }
+/* 44px tap targets without growing the bar. */
+.mheader .mbtn-ghost { margin-block: -4px; }
 .mheader h1 {
     margin: 0;
     font-size: 17px;
@@ -225,6 +245,12 @@ body {
     border: 1px solid var(--border-subtle);
     border-radius: 999px;
     cursor: pointer;
+    position: relative;
+}
+.msearch .search-scope-btn::after {
+    content: '';
+    position: absolute;
+    inset: -9px -4px;
 }
 .msearch .search-scope-btn.active {
     background: var(--accent);
@@ -407,3 +433,21 @@ body {
     margin: 24px 16px 6px;
     padding: 0;
 }
+
+/* Trailing icon button inside a grouped-list row (remove / delete). */
+.ios-list .ios-row-btn {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    margin: -8px -10px -8px 0;
+    padding: 0;
+    border: none;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--danger);
+    cursor: pointer;
+}
+.ios-list .ios-row-btn:active { background: var(--danger-soft); }

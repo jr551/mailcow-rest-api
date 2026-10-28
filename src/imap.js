@@ -117,17 +117,30 @@ function countAttachments(node) {
     return isAttachment ? 1 : 0;
 }
 
-// Parse an Authentication-Results header blob into discrete SPF / DKIM /
-// DMARC verdicts. Strongest verdict wins when multiple hops appear, so
-// an early "pass" isn't downgraded by a later hop that didn't run the
-// check. Returns null when the header isn't present.
-function parseAuthResultsHeader(rawHeader) {
+// Parse the topmost Authentication-Results header into discrete SPF / DKIM /
+// DMARC verdicts (RFC 8601). Only the first one is read: the receiving MTA
+// prepends its own header above everything the message arrived with, so any
+// further Authentication-Results, and every ARC-Authentication-Results or
+// Received-SPF header, was written by the sender or an earlier hop and can
+// claim a pass the local checks never gave. Returns null when no header is
+// present; without `includeRaw` it is also null when the header carries none
+// of the three verdicts.
+function parseAuthResultsHeader(rawHeader, { includeRaw = false } = {}) {
     if (!rawHeader) return null;
-    const text = String(rawHeader);
+    const unfolded = String(rawHeader).replace(/\r?\n[ \t]+/g, ' ');
+    const line = unfolded.split(/\r?\n/).find((l) => /^authentication-results[ \t]*:/i.test(l));
+    if (!line) return null;
+    const raw = line.trim();
+    // A quoted string (smtp.mailfrom="x; dmarc=pass"@evil.example) or a
+    // comment is sender-influenced text, never a method result.
+    const body = raw
+        .slice(raw.indexOf(':') + 1)
+        .replace(/"(?:[^"\\]|\\.)*"/g, '""')
+        .replace(/\([^)]*\)/g, ' ');
     const findVerdict = (key) => {
-        const matches = [...text.matchAll(new RegExp(`(?:^|[\\s;])${key}\\s*=\\s*([a-z]+)`, 'gi'))];
-        if (matches.length === 0) return null;
-        const verdicts = matches.map((m) => m[1].toLowerCase());
+        const verdicts = [...body.matchAll(new RegExp(`(?:^|[\\s;])${key}\\s*=\\s*([a-z]+)`, 'gi'))]
+            .map((m) => m[1].toLowerCase());
+        if (verdicts.length === 0) return null;
         for (const v of ['pass', 'fail', 'softfail', 'neutral', 'permerror', 'temperror', 'none']) {
             if (verdicts.includes(v)) return v;
         }
@@ -136,6 +149,7 @@ function parseAuthResultsHeader(rawHeader) {
     const spf = findVerdict('spf');
     const dkim = findVerdict('dkim');
     const dmarc = findVerdict('dmarc');
+    if (includeRaw) return { spf, dkim, dmarc, raw };
     if (!spf && !dkim && !dmarc) return null;
     return { spf, dkim, dmarc };
 }
@@ -222,12 +236,23 @@ async function streamToBuffer(stream, maxBytes = 0) {
     return Buffer.concat(chunks);
 }
 
-async function downloadPartText(client, uid, part) {
+// With `maxBytes`, anything past the cap is read and discarded rather than
+// buffered, so the text comes back truncated but the FETCH literal is still
+// consumed and the connection is safe to hand back to the pool.
+async function downloadPartText(client, uid, part, maxBytes = 0) {
     if (!part) return null;
     const res = await client.download(uid, part, { uid: true });
     if (!res || !res.content) return null;
-    const buf = await streamToBuffer(res.content);
-    return buf.toString('utf8');
+    if (!(maxBytes > 0)) return (await streamToBuffer(res.content)).toString('utf8');
+    const chunks = [];
+    let kept = 0;
+    for await (const chunk of res.content) {
+        if (kept >= maxBytes) continue;
+        const piece = kept + chunk.length > maxBytes ? chunk.subarray(0, maxBytes - kept) : chunk;
+        chunks.push(piece);
+        kept += piece.length;
+    }
+    return Buffer.concat(chunks).toString('utf8');
 }
 
 module.exports = {

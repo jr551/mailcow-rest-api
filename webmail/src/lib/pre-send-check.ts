@@ -6,26 +6,8 @@
 // The user can bypass with the modal's "Send anyway" button OR by
 // holding Shift while clicking Send (skips the call entirely).
 
-import { settings, capabilities, aiAuthKey } from './settings.svelte';
+import { resolveProvider } from './llm-provider';
 import { cachedChatCompletion } from './ai-cache.svelte';
-
-interface ProviderCfg { baseUrl: string; model: string; apiKey: string; }
-function resolveProvider(): ProviderCfg | null {
-    if (capabilities.aiConfig?.configured) {
-        return {
-            baseUrl: capabilities.aiConfig.baseUrl.replace(/\/+$/, ''),
-            model: capabilities.aiConfig.model,
-            apiKey: aiAuthKey()
-        };
-    }
-    const llm = settings.llm;
-    if (!settings.useCustomLlm || !llm.apiKey) return null;
-    return {
-        baseUrl: (llm.baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, ''),
-        model: llm.model || 'gpt-4o-mini',
-        apiKey: llm.apiKey
-    };
-}
 
 export interface PreSendCheckInput {
     subject: string;

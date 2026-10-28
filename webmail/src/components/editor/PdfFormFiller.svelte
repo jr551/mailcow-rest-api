@@ -23,6 +23,13 @@
     let saving = $state(false);
     let error = $state<string | null>(null);
     let flatten = $state(false);
+    let initialValues: Record<string, string | boolean> = {};
+    const dirty = $derived(Object.keys(values).some((k) => values[k] !== initialValues[k]));
+
+    function requestClose() {
+        if (dirty && !confirm('Discard what you have filled in?')) return;
+        onClose();
+    }
 
     onMount(async () => {
         try {
@@ -30,6 +37,7 @@
             const init: Record<string, string | boolean> = {};
             for (const f of fields) init[f.name] = f.value;
             values = init;
+            initialValues = { ...init };
         } catch (err) {
             error = (err as Error).message || 'Failed to read PDF form';
         } finally {
@@ -93,13 +101,13 @@
     }
 
     function onKey(e: KeyboardEvent) {
-        if (e.key === 'Escape') onClose();
+        if (e.key === 'Escape') requestClose();
     }
 </script>
 
 <svelte:window onkeydown={onKey} />
 
-<div class="scrim" role="presentation" onclick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+<div class="scrim" role="presentation" onclick={(e) => { if (e.target === e.currentTarget) requestClose(); }}>
     <div
         class="dialog"
         role="dialog"
@@ -114,7 +122,7 @@
                 <span>Fill form</span>
                 <span class="muted small">{filename}</span>
             </div>
-            <button type="button" class="close" onclick={onClose} aria-label="Close">
+            <button type="button" class="close" onclick={requestClose} aria-label="Close">
                 <Icon name="close" size={14} />
             </button>
         </header>
@@ -197,7 +205,7 @@
         </div>
 
         <footer class="foot">
-            <button type="button" class="btn btn-ghost" onclick={onClose}>Cancel</button>
+            <button type="button" class="btn btn-ghost" onclick={requestClose}>Cancel</button>
             {#if onAttach && !loading && !error && fields.length}
                 <button type="button" class="btn btn-secondary" onclick={attachToReply} disabled={saving} data-testid="pdf-form-attach">
                     {#if saving}<span class="spinner"></span>{/if}

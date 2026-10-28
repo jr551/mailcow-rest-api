@@ -8,26 +8,8 @@
 // cachedChatCompletion — same drafting body → same summary.
 
 import { listMailboxes, listMessages, type Mailbox, type MessageListItem } from './api';
-import { settings, capabilities, aiAuthKey } from './settings.svelte';
+import { resolveProvider } from './llm-provider';
 import { cachedChatCompletion } from './ai-cache.svelte';
-
-interface ProviderCfg { baseUrl: string; model: string; apiKey: string; }
-function resolveProvider(): ProviderCfg | null {
-    if (capabilities.aiConfig?.configured) {
-        return {
-            baseUrl: capabilities.aiConfig.baseUrl.replace(/\/+$/, ''),
-            model: capabilities.aiConfig.model,
-            apiKey: aiAuthKey()
-        };
-    }
-    const llm = settings.llm;
-    if (!settings.useCustomLlm || !llm.apiKey) return null;
-    return {
-        baseUrl: (llm.baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, ''),
-        model: llm.model || 'gpt-4o-mini',
-        apiKey: llm.apiKey
-    };
-}
 
 function findInbox(boxes: Mailbox[]): string | null {
     return boxes.find((m) => m.specialUse === '\\Inbox')?.path || boxes.find((m) => /^inbox$/i.test(m.name))?.path || null;

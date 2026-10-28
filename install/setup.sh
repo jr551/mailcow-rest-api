@@ -16,22 +16,40 @@ fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 [ -f "$NGINX_SRC" ] || fail "nginx site file missing at $NGINX_SRC"
 
 if [ ! -f "$REPO_ROOT/.env" ]; then
-    cp "$REPO_ROOT/.env.example" "$REPO_ROOT/.env"
+    ( umask 077 && cp "$REPO_ROOT/.env.example" "$REPO_ROOT/.env" )
     log "created $REPO_ROOT/.env from .env.example"
 fi
+# .env holds the database password, the credential encryption key and API keys.
+chmod 600 "$REPO_ROOT/.env"
 
 log "Starting mailcow-rest-api from GHCR"
 ( cd "$REPO_ROOT" && docker compose pull && docker compose up -d )
 
+NGINX_BAK=""
+NGINX_CHANGED=0
 if [ -f "$NGINX_DST" ] && cmp -s "$NGINX_SRC" "$NGINX_DST"; then
     log "nginx config already current"
 else
     if [ -f "$NGINX_DST" ]; then
-        cp "$NGINX_DST" "$NGINX_DST.$(date +%Y%m%d%H%M%S).bak"
+        NGINX_BAK="$NGINX_DST.$(date +%Y%m%d%H%M%S).bak"
+        cp "$NGINX_DST" "$NGINX_BAK"
         log "backed up existing nginx config"
     fi
     cp "$NGINX_SRC" "$NGINX_DST"
+    NGINX_CHANGED=1
     log "installed nginx route at $NGINX_DST"
+fi
+
+if [ "$NGINX_CHANGED" = 1 ]; then
+    log "Testing the nginx configuration"
+    if ! ( cd "$MAILCOW_PATH" && docker compose exec -T nginx-mailcow nginx -t ); then
+        if [ -n "$NGINX_BAK" ]; then
+            cp "$NGINX_BAK" "$NGINX_DST"
+        else
+            rm -f "$NGINX_DST"
+        fi
+        fail "nginx rejected the new route, so it was rolled back and nginx-mailcow was not restarted"
+    fi
 fi
 
 log "Restarting nginx-mailcow"

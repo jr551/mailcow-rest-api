@@ -66,7 +66,9 @@ function writePersist(map: PersistShape) {
     const persisted = readPersist();
     const now = Date.now();
     for (const [email, rec] of Object.entries(persisted)) {
-        if (now - rec.ts < TTL_MS) memCache.set(email, rec);
+        // data: records are the user-upload override, which is read live from
+        // the my-avatars map and must never be served from this cache.
+        if (now - rec.ts < TTL_MS && !rec.url?.startsWith('data:')) memCache.set(email, rec);
     }
 }
 
@@ -239,6 +241,13 @@ export async function resolveAvatar(opts: { email: string; name?: string | null;
             ts: Date.now()
         };
     }
+    // User-uploaded override (always wins). Stored as data: URL, returned
+    // uncached so setMyAvatar / clearMyAvatar take effect immediately and the
+    // image is not duplicated into the avatar cache.
+    const mine = getMyAvatar(email);
+    if (mine) {
+        return { kind: 'gravatar', url: mine, initial: pickInitial(opts.name, email), color: pickColor(email), ts: Date.now() };
+    }
     const cached = memCache.get(email);
     if (cached && Date.now() - cached.ts < TTL_MS) return cached;
     if (inflight.has(email)) return inflight.get(email)!;
@@ -247,12 +256,6 @@ export async function resolveAvatar(opts: { email: string; name?: string | null;
         const initial = pickInitial(opts.name, email);
         const color = pickColor(email);
         const size = opts.size ?? 80;
-
-        // 0. User-uploaded override (always wins). Stored as data: URL.
-        const mine = getMyAvatar(email);
-        if (mine) {
-            return { kind: 'gravatar', url: mine, initial, color, ts: Date.now() };
-        }
 
         // 1. Gravatar (if enabled)
         if (_gravatarOn.on) {

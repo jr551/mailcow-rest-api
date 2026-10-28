@@ -116,13 +116,13 @@ test('include=attachments adds bodyStructure and the attachment fields, and noth
     assert.equal('auth' in m, false);
 });
 
-test('include=auth adds the two authentication-results headers only', async () => {
+test('include=auth adds the authentication-results header only', async () => {
     const pool = makePool();
     const { status, body } = await list(pool, '?include=auth');
     assert.equal(status, 200);
     const query = pool.calls.fetches[0].query;
     assert.equal(query.bodyStructure, undefined, 'attachments must not ride along with auth');
-    assert.deepEqual(query.headers, ['authentication-results', 'arc-authentication-results']);
+    assert.deepEqual(query.headers, ['authentication-results']);
     const [m] = body.messages;
     assert.equal('hasAttachments' in m, false);
     assert.deepEqual(m.auth, { spf: 'pass', dkim: 'pass', dmarc: 'pass' });
@@ -134,7 +134,7 @@ test('include=attachments,auth adds both', async () => {
     assert.equal(status, 200);
     const query = pool.calls.fetches[0].query;
     assert.equal(query.bodyStructure, true);
-    assert.deepEqual(query.headers, ['authentication-results', 'arc-authentication-results']);
+    assert.deepEqual(query.headers, ['authentication-results']);
     const [m] = body.messages;
     assert.equal(m.hasAttachments, true);
     assert.equal(m.attachmentCount, 1);
@@ -156,5 +156,5 @@ test('empty and whitespace tokens are ignored', async () => {
     assert.equal(status, 200);
     const query = pool.calls.fetches[0].query;
     assert.equal(query.bodyStructure, true);
-    assert.deepEqual(query.headers, ['authentication-results', 'arc-authentication-results']);
+    assert.deepEqual(query.headers, ['authentication-results']);
 });

@@ -54,6 +54,8 @@ test('select and delete file', async ({ page }) => {
     const item = page.getByTestId('drive-item-report.pdf');
     await item.locator('input[type="checkbox"]').click();
     await expect(page.getByText(/selected/)).toBeVisible();
+    // Bulk delete asks first; Playwright dismisses dialogs unless told otherwise.
+    page.once('dialog', (d) => { void d.accept(); });
     await page.getByRole('button', { name: /Delete/i }).click();
     // Wait for the selection bar to disappear (deleteSelected clears it).
     await expect(page.getByText(/selected/)).not.toBeVisible();

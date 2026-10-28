@@ -388,8 +388,8 @@ export const SKINS: Skin[] = [
                 }
                 .topbar .search-wrap:focus-within {
                     background: var(--bg-input) !important;
-                    border-color: var(--accent-soft) !important;
-                    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent) !important;
+                    border-color: var(--border-focus) !important;
+                    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent) !important;
                 }
                 .topbar .search-scope-btn {
                     color: var(--text-link) !important;

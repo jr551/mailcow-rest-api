@@ -17,6 +17,12 @@ function loadConfig() {
     return { baseUrl, user, pass, timeoutMs };
 }
 
+// Tool annotations let MCP clients decide which calls need a confirmation
+// prompt: anything that deletes, discards or forwards is destructive.
+const READ_ONLY = { readOnlyHint: true };
+const WRITES = { readOnlyHint: false, destructiveHint: false };
+const DESTRUCTIVE = { readOnlyHint: false, destructiveHint: true };
+
 function ok(value) {
     const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
     return { content: [{ type: 'text', text }] };
@@ -57,11 +63,13 @@ function buildServer({ client }) {
 
     server.registerTool('list_mailboxes', {
         description: 'List all IMAP mailboxes (folders) for the configured user.',
+        annotations: READ_ONLY,
         inputSchema: {}
     }, wrap(async () => client.listMailboxes()));
 
     server.registerTool('create_mailbox', {
         description: 'Create a new IMAP mailbox at the given hierarchical path (e.g. "Archive/2026").',
+        annotations: WRITES,
         inputSchema: {
             path: z.string().describe('Hierarchical mailbox path')
         }
@@ -69,6 +77,7 @@ function buildServer({ client }) {
 
     server.registerTool('rename_mailbox', {
         description: 'Rename an existing IMAP mailbox.',
+        annotations: WRITES,
         inputSchema: {
             path: z.string().describe('Current mailbox path'),
             newPath: z.string().describe('New mailbox path')
@@ -77,6 +86,7 @@ function buildServer({ client }) {
 
     server.registerTool('delete_mailbox', {
         description: 'Delete an IMAP mailbox. Fails if the mailbox is not empty on some servers.',
+        annotations: DESTRUCTIVE,
         inputSchema: {
             path: z.string().describe('Mailbox path to delete')
         }
@@ -84,6 +94,7 @@ function buildServer({ client }) {
 
     server.registerTool('list_messages', {
         description: 'List messages in a mailbox, paginated, optionally filtered by a free-text search across subject/from/body. Pass include="attachments" and/or "auth" to also get attachment counts and SPF/DKIM/DMARC verdicts per message — those cost an extra IMAP fetch per item, so they are off by default.',
+        annotations: READ_ONLY,
         inputSchema: {
             path: z.string().describe('Mailbox path'),
             page: z.number().int().min(0).optional().describe('Page index (0-based, default 0)'),
@@ -97,6 +108,7 @@ function buildServer({ client }) {
 
     server.registerTool('get_message', {
         description: 'Fetch a single message including envelope, flags, and inline text/HTML body parts.',
+        annotations: READ_ONLY,
         inputSchema: {
             path: z.string().describe('Mailbox path'),
             uid: z.number().int().describe('IMAP UID of the message')
@@ -105,6 +117,7 @@ function buildServer({ client }) {
 
     server.registerTool('get_raw_message', {
         description: 'Fetch the raw RFC822 source of a message (full headers + body).',
+        annotations: READ_ONLY,
         inputSchema: {
             path: z.string().describe('Mailbox path'),
             uid: z.number().int().describe('IMAP UID of the message')
@@ -113,6 +126,7 @@ function buildServer({ client }) {
 
     server.registerTool('download_attachment', {
         description: 'Download an attachment from a message. Returns base64-encoded content plus metadata (filename, content-type, size).',
+        annotations: READ_ONLY,
         inputSchema: {
             path: z.string().describe('Mailbox path'),
             uid: z.number().int().describe('IMAP UID of the message'),
@@ -122,6 +136,7 @@ function buildServer({ client }) {
 
     server.registerTool('ocr_attachment', {
         description: 'Run Mistral OCR on an attachment and return the extracted text. Requires MISTRAL_API_KEY on the REST server. Returns plain text by default, or the full structured Mistral response when format="json".',
+        annotations: READ_ONLY,
         inputSchema: {
             path: z.string().describe('Mailbox path'),
             uid: z.number().int().describe('IMAP UID of the message'),
@@ -134,6 +149,7 @@ function buildServer({ client }) {
 
     server.registerTool('flag_message', {
         description: 'Add, remove, or set IMAP flags on a message (\\Seen, \\Flagged, \\Answered, \\Deleted, etc).',
+        annotations: WRITES,
         inputSchema: {
             path: z.string().describe('Mailbox path'),
             uid: z.number().int().describe('IMAP UID'),
@@ -151,6 +167,7 @@ function buildServer({ client }) {
 
     server.registerTool('move_message', {
         description: 'Move a message to another mailbox.',
+        annotations: WRITES,
         inputSchema: {
             path: z.string().describe('Source mailbox path'),
             uid: z.number().int().describe('IMAP UID'),
@@ -162,6 +179,7 @@ function buildServer({ client }) {
 
     server.registerTool('delete_message', {
         description: 'Permanently delete a message. Some IMAP servers move it to Trash instead of expunging.',
+        annotations: DESTRUCTIVE,
         inputSchema: {
             path: z.string().describe('Mailbox path'),
             uid: z.number().int().describe('IMAP UID')
@@ -173,11 +191,13 @@ function buildServer({ client }) {
 
     server.registerTool('list_blocked_senders', {
         description: 'List senders blocked by the authenticated user. Requires mailcow DB to be configured on the REST server.',
+        annotations: READ_ONLY,
         inputSchema: {}
     }, wrap(async () => client.listBlockedSenders()));
 
     server.registerTool('block_sender', {
         description: 'Add a sender to the user\'s blocklist. Wildcards like *@domain.tld are supported. Requires mailcow DB to be configured on the REST server.',
+        annotations: WRITES,
         inputSchema: {
             sender: z.string().describe('Email address or pattern to block (e.g. spammer@example.com or *@example.com)')
         }
@@ -185,6 +205,7 @@ function buildServer({ client }) {
 
     server.registerTool('unblock_sender', {
         description: 'Remove a sender from the user\'s blocklist by prefid.',
+        annotations: DESTRUCTIVE,
         inputSchema: {
             prefid: z.number().int().describe('The prefid of the blocked sender entry')
         }
@@ -195,11 +216,13 @@ function buildServer({ client }) {
 
     server.registerTool('list_allowed_senders', {
         description: 'List senders explicitly allowed (whitelisted) by the authenticated user. Requires mailcow DB to be configured on the REST server.',
+        annotations: READ_ONLY,
         inputSchema: {}
     }, wrap(async () => client.listAllowedSenders()));
 
     server.registerTool('allow_sender', {
         description: 'Add a sender to the user\'s allowlist (whitelist). Wildcards like *@domain.tld are supported. Requires mailcow DB to be configured on the REST server.',
+        annotations: WRITES,
         inputSchema: {
             sender: z.string().describe('Email address or pattern to allow (e.g. important@example.com or *@example.com)')
         }
@@ -207,6 +230,7 @@ function buildServer({ client }) {
 
     server.registerTool('unallow_sender', {
         description: 'Remove a sender from the user\'s allowlist by prefid.',
+        annotations: DESTRUCTIVE,
         inputSchema: {
             prefid: z.number().int().describe('The prefid of the allowed sender entry')
         }
@@ -217,11 +241,13 @@ function buildServer({ client }) {
 
     server.registerTool('get_mailbox', {
         description: 'Get mailbox stats: quota, usage, message count, name, domain, auth source, etc. Requires mailcow DB to be configured on the REST server.',
+        annotations: READ_ONLY,
         inputSchema: {}
     }, wrap(async () => client.getMailbox()));
 
     server.registerTool('get_logins', {
         description: 'Get recent SASL login history (imap, smtp, pop3, sso). Requires mailcow DB to be configured.',
+        annotations: READ_ONLY,
         inputSchema: {
             limit: z.number().int().min(1).max(100).optional().describe('Number of recent logins to return (default 20, max 100)')
         }
@@ -229,16 +255,19 @@ function buildServer({ client }) {
 
     server.registerTool('get_aliases', {
         description: 'List aliases that forward to this mailbox. Requires mailcow DB to be configured.',
+        annotations: READ_ONLY,
         inputSchema: {}
     }, wrap(async () => client.getAliases()));
 
     server.registerTool('get_temp_aliases', {
         description: 'List active time-limited (disposable) aliases for this mailbox. Requires mailcow DB to be configured.',
+        annotations: READ_ONLY,
         inputSchema: {}
     }, wrap(async () => client.getTempAliases()));
 
     server.registerTool('create_temp_alias', {
         description: 'Create a random time-limited alias for this mailbox. Emails sent to the alias are forwarded to the mailbox. Requires mailcow DB to be configured.',
+        annotations: WRITES,
         inputSchema: {
             description: z.string().optional().describe('Optional description/note for the alias'),
             validityHours: z.number().int().min(1).max(87600).optional().describe('How many hours the alias remains active (default 720 = 30 days, max 87600)'),
@@ -250,6 +279,7 @@ function buildServer({ client }) {
 
     server.registerTool('delete_temp_alias', {
         description: 'Delete a time-limited alias by its address.',
+        annotations: DESTRUCTIVE,
         inputSchema: {
             address: z.string().describe('The full alias address to delete (e.g. abc123@domain.tld)')
         }
@@ -260,16 +290,19 @@ function buildServer({ client }) {
 
     server.registerTool('get_send_from_addresses', {
         description: 'Get all addresses this user can send from: their own email, aliases, and temp aliases. Useful for populating a "From" dropdown. Requires mailcow DB to be configured.',
+        annotations: READ_ONLY,
         inputSchema: {}
     }, wrap(async () => client.getSendFromAddresses()));
 
     server.registerTool('list_blocked_recipients', {
         description: 'List recipient (To) addresses the user has blocked via Sieve. Only addresses the user actually receives mail for can be blocked. Requires ManageSieve (Dovecot port 4190).',
+        annotations: READ_ONLY,
         inputSchema: {}
     }, wrap(async () => client.listBlockedRecipients()));
 
     server.registerTool('block_recipient', {
         description: 'Block a recipient (To) address via Sieve filter. Emails sent to this address will be discarded. You must actually receive mail at this address (mailbox, alias, or catch-all). Requires ManageSieve.',
+        annotations: WRITES,
         inputSchema: {
             recipient: z.string().describe('The recipient email address to block (e.g. spammer@yourdomain.com)')
         }
@@ -277,6 +310,7 @@ function buildServer({ client }) {
 
     server.registerTool('unblock_recipient', {
         description: 'Unblock a previously blocked recipient (To) address.',
+        annotations: DESTRUCTIVE,
         inputSchema: {
             recipient: z.string().describe('The recipient email address to unblock')
         }
@@ -287,6 +321,7 @@ function buildServer({ client }) {
 
     server.registerTool('list_mail_rules', {
         description: 'List all mail rules for the user: blocks, redirects, and copies. These are Sieve rules managed via ManageSieve.',
+        annotations: READ_ONLY,
         inputSchema: {}
     }, wrap(async () => client.listMailRules()));
 
@@ -300,6 +335,7 @@ function buildServer({ client }) {
 
     server.registerTool('add_mail_rule', {
         description: 'Add a mail rule (block, redirect, or copy). For "redirect" the original email is forwarded and not kept. For "copy" the email is forwarded AND kept in the inbox. Requires ManageSieve. Use a single condition object for simple rules, or { match: "all"|"any", conditions: [...] } to AND/OR multiple sub-conditions; set not: true on a sub-condition to negate it.',
+        annotations: DESTRUCTIVE,
         inputSchema: {
             name: z.string().describe('Human-readable name for the rule, e.g. "PagerDuty to Bot"'),
             condition: z.union([
@@ -320,6 +356,7 @@ function buildServer({ client }) {
 
     server.registerTool('remove_mail_rule', {
         description: 'Remove a mail rule by its ID.',
+        annotations: DESTRUCTIVE,
         inputSchema: {
             id: z.string().describe('The rule ID to remove')
         }
@@ -330,11 +367,13 @@ function buildServer({ client }) {
 
     server.registerTool('list_calendars', {
         description: 'List all CalDAV calendars for the configured user. Requires SOGO_URL to be configured on the REST server.',
+        annotations: READ_ONLY,
         inputSchema: {}
     }, wrap(async () => client.listCalendars()));
 
     server.registerTool('list_events', {
         description: 'List events in a calendar within a date range. Requires SOGO_URL to be configured on the REST server.',
+        annotations: READ_ONLY,
         inputSchema: {
             calendar: z.string().describe('Calendar ID (e.g. "personal")'),
             start: z.string().describe('ISO 8601 start datetime (e.g. "2026-05-01T00:00:00Z")'),
@@ -344,6 +383,7 @@ function buildServer({ client }) {
 
     server.registerTool('get_event', {
         description: 'Get a single calendar event by UID. Requires SOGO_URL to be configured on the REST server.',
+        annotations: READ_ONLY,
         inputSchema: {
             calendar: z.string().describe('Calendar ID'),
             uid: z.string().describe('Event UID')
@@ -352,6 +392,7 @@ function buildServer({ client }) {
 
     server.registerTool('create_event', {
         description: 'Create a calendar event. Requires SOGO_URL to be configured on the REST server.',
+        annotations: WRITES,
         inputSchema: {
             calendar: z.string().describe('Calendar ID to create the event in (e.g. "personal")'),
             summary: z.string().describe('Event title/summary'),
@@ -366,6 +407,7 @@ function buildServer({ client }) {
 
     server.registerTool('delete_event', {
         description: 'Delete a calendar event by UID. Requires SOGO_URL to be configured on the REST server.',
+        annotations: DESTRUCTIVE,
         inputSchema: {
             calendar: z.string().describe('Calendar ID'),
             uid: z.string().describe('Event UID to delete')
@@ -377,6 +419,7 @@ function buildServer({ client }) {
 
     server.registerTool('send_message', {
         description: 'Send an email via SMTP. Requires SMTP_HOST to be configured on the REST server. Uses the user\'s IMAP credentials for SMTP AUTH. When called via MCP (Basic Auth), the email is held pending and an approval link is emailed to the user\'s inbox. The user must click the link before the message is actually dispatched.',
+        annotations: WRITES,
         inputSchema: {
             to: z.array(z.string()).describe('Recipient email addresses'),
             subject: z.string().describe('Email subject'),
@@ -398,6 +441,7 @@ function buildServer({ client }) {
 
     server.registerTool('check_delivery_status', {
         description: 'Check delivery status of a sent email by its Message-ID. Scans INBOX for bounce/DSN messages. Returns pending, delivered, failed, or delayed.',
+        annotations: READ_ONLY,
         inputSchema: {
             messageId: z.string().describe('The Message-ID returned by send_message (e.g. "<uuid@domain>")')
         }

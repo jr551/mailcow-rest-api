@@ -114,6 +114,20 @@ function authHeaders(session?: Session): HeadersInit {
     return { authorization: bearerHeader(s) };
 }
 
+async function parseProblem(res: Response): Promise<ApiProblem> {
+    try {
+        const j = await res.json();
+        return {
+            type: j.type || 'about:blank',
+            title: j.title || res.statusText,
+            status: typeof j.status === 'number' ? j.status : res.status,
+            detail: j.detail
+        };
+    } catch {
+        return { type: 'about:blank', title: res.statusText, status: res.status };
+    }
+}
+
 async function request<T>(
     method: string,
     url: string,
@@ -166,6 +180,9 @@ async function request<T>(
             }).catch(() => { /* */ });
         }
     } catch (err) {
+        // A caller-initiated abort or timeout is not a network failure; it
+        // must not feed the latency graph, telemetry or the maintenance overlay.
+        if ((err as Error)?.name === 'AbortError' || init.signal?.aborted) throw err;
         const _ms = Math.round(performance.now() - _t0);
         const { recordLatency } = await import('./latency.svelte');
         recordLatency({ ms: _ms, ts: Date.now(), ok: false, method, url: target });
@@ -177,21 +194,9 @@ async function request<T>(
         });
         throw err;
     }
-    if (init.raw) return res as unknown as T;
-    if (res.status === 204) return undefined as unknown as T;
+    if (res.status === 204 && !init.raw) return undefined as unknown as T;
     if (!res.ok) {
-        let problem: ApiProblem;
-        try {
-            const j = await res.json();
-            problem = {
-                type: j.type || 'about:blank',
-                title: j.title || res.statusText,
-                status: typeof j.status === 'number' ? j.status : res.status,
-                detail: j.detail
-            };
-        } catch {
-            problem = { type: 'about:blank', title: res.statusText, status: res.status };
-        }
+        const problem = await parseProblem(res);
         if (problem.status >= 500) {
             reportCriticalError({
                 type: 'api',
@@ -203,6 +208,7 @@ async function request<T>(
         }
         throw new ApiError(problem);
     }
+    if (init.raw) return res as unknown as T;
     const contentType = res.headers.get('content-type') || '';
     if (contentType.includes('application/json')) return res.json() as Promise<T>;
     return res.text() as unknown as Promise<T>;
@@ -247,18 +253,7 @@ export async function appendRawMessage(
         body: rfc822 as BodyInit
     });
     if (!res.ok) {
-        let problem: ApiProblem;
-        try {
-            const j = await res.json();
-            problem = {
-                type: j.type || 'about:blank',
-                title: j.title || res.statusText,
-                status: typeof j.status === 'number' ? j.status : res.status,
-                detail: j.detail
-            };
-        } catch {
-            problem = { type: 'about:blank', title: res.statusText, status: res.status };
-        }
+        const problem = await parseProblem(res);
         throw new ApiError(problem);
     }
     return res.json();
@@ -352,7 +347,7 @@ export async function getRawMessage(path: string, uid: number): Promise<string> 
 }
 
 export function attachmentUrl(path: string, uid: number, attachmentId: string): string {
-    return `/v1/mailboxes/${encodeURIComponent(path)}/messages/${uid}/attachments/${encodeURIComponent(attachmentId)}`;
+    return apiUrl(`/v1/mailboxes/${encodeURIComponent(path)}/messages/${uid}/attachments/${encodeURIComponent(attachmentId)}`);
 }
 
 export async function ocrAttachmentText(
@@ -825,18 +820,7 @@ async function calendarRequest<T>(method: string, url: string, init: { body?: un
     const res = await fetch(url, { method, headers, body });
     if (res.status === 204) return undefined as unknown as T;
     if (!res.ok) {
-        let problem: ApiProblem;
-        try {
-            const j = await res.json();
-            problem = {
-                type: j.type || 'about:blank',
-                title: j.title || res.statusText,
-                status: typeof j.status === 'number' ? j.status : res.status,
-                detail: j.detail
-            };
-        } catch {
-            problem = { type: 'about:blank', title: res.statusText, status: res.status };
-        }
+        const problem = await parseProblem(res);
         throw new ApiError(problem);
     }
     const ct = res.headers.get('content-type') || '';

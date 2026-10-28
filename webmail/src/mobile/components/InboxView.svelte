@@ -1,7 +1,7 @@
 <script lang="ts">
     import { onMount } from 'svelte';
     import { mobileState, navigate, showToast, pushOverlay } from '../lib/store.svelte';
-    import { authState, tryRenewSession } from '../../lib/auth.svelte';
+    import { tryRenewSession } from '../../lib/auth.svelte';
     import {
         listMailboxes,
         listMessages,
@@ -41,29 +41,35 @@
     // Client-side rule pop-away state — same protocol as desktop.
     let ruleAnimUids = $state(new Set<number>());
     let ruleDoneUids = $state(new Set<number>());
-    if (typeof window !== 'undefined') {
-        const onRule = (e: Event) => {
-            const ev = e as CustomEvent<{ path: string; uid: number; phase: 'start' | 'done' | 'error' }>;
-            if (!ev.detail) return;
-            const { uid, phase } = ev.detail;
-            if (phase === 'start') {
-                const next = new Set(ruleAnimUids); next.add(uid); ruleAnimUids = next;
-            } else if (phase === 'done') {
-                const next = new Set(ruleDoneUids); next.add(uid); ruleDoneUids = next;
-                setTimeout(() => {
-                    const a = new Set(ruleAnimUids); a.delete(uid); ruleAnimUids = a;
-                    const b = new Set(ruleDoneUids); b.delete(uid); ruleDoneUids = b;
-                }, 600);
-            } else {
+    function onRule(e: Event) {
+        const ev = e as CustomEvent<{ path: string; uid: number; phase: 'start' | 'done' | 'error' }>;
+        if (!ev.detail) return;
+        const { uid, phase } = ev.detail;
+        if (phase === 'start') {
+            const next = new Set(ruleAnimUids); next.add(uid); ruleAnimUids = next;
+        } else if (phase === 'done') {
+            const next = new Set(ruleDoneUids); next.add(uid); ruleDoneUids = next;
+            setTimeout(() => {
                 const a = new Set(ruleAnimUids); a.delete(uid); ruleAnimUids = a;
-            }
-        };
-        window.addEventListener('webmail:client-rule', onRule);
+                const b = new Set(ruleDoneUids); b.delete(uid); ruleDoneUids = b;
+            }, 600);
+        } else {
+            const a = new Set(ruleAnimUids); a.delete(uid); ruleAnimUids = a;
+        }
     }
 
-    function currentUser() {
-        return authState.activeUser || '';
-    }
+    // Rows from an all-folders search carry their source mailbox; every
+    // per-row action must target that folder, and uids only identify a
+    // row together with it.
+    const rowPath = (msg: MessageListItem) => msg.mailbox ?? mobileState.selectedPath;
+    const rowKey = (msg: MessageListItem) => `${msg.mailbox ?? ''}:${msg.uid}`;
+    const findRow = (msg: MessageListItem) => mobileState.messages.find((m) => rowKey(m) === rowKey(msg));
+    const dropRow = (msg: MessageListItem) => {
+        mobileState.messages = mobileState.messages.filter((m) => rowKey(m) !== rowKey(msg));
+        mobileState.messagesTotal = Math.max(0, mobileState.messagesTotal - 1);
+    };
+    const detailIsRow = (msg: MessageListItem) =>
+        mobileState.detail?.uid === msg.uid && rowPath(msg) === mobileState.selectedPath;
 
     async function refreshMailboxes() {
         mobileState.mailboxesLoading = true;
@@ -91,6 +97,9 @@
     }
 
     async function refreshMessages(reset = false) {
+        // An all-folders result set must not collapse to the single folder
+        // that happens to be selected.
+        if (mobileState.searchScope === 'all' && (mobileState.search || '').trim()) return searchAllFolders();
         if (reset) mobileState.messages = [];
         mobileState.messagesLoading = true;
         mobileState.messagesError = null;
@@ -147,26 +156,27 @@
         finally { appending = false; }
     }
 
-    async function selectMessage(uid: number) {
+    async function selectMessage(msg: MessageListItem) {
         playClick();
+        const uid = msg.uid;
         mobileState.selectedUid = uid;
         mobileState.detail = null;
         mobileState.detailError = null;
         mobileState.detailLoading = true;
         // In all-folders search the row carries its source mailbox; switch
         // selectedPath so detail/flags/move target the right folder.
-        const row = mobileState.messages.find((m) => m.uid === uid);
-        if (mobileState.searchScope === 'all' && row?.mailbox && mobileState.selectedPath !== row.mailbox) {
-            mobileState.selectedPath = row.mailbox;
+        if (mobileState.searchScope === 'all' && msg.mailbox && mobileState.selectedPath !== msg.mailbox) {
+            mobileState.selectedPath = msg.mailbox;
         }
+        const path = mobileState.selectedPath;
         navigate('message');
         try {
-            const fresh = await getMessage(mobileState.selectedPath, uid);
+            const fresh = await getMessage(path, uid);
             mobileState.detail = fresh;
             if (fresh.flags && !fresh.flags.includes('\\Seen')) {
-                const r = await modifyFlags(mobileState.selectedPath, uid, { add: ['\\Seen'] });
+                const r = await modifyFlags(path, uid, { add: ['\\Seen'] });
                 fresh.flags = r.flags;
-                const li = mobileState.messages.find((m) => m.uid === uid);
+                const li = findRow(msg);
                 if (li) li.flags = r.flags;
             }
         } catch (err) {
@@ -176,42 +186,39 @@
         }
     }
 
-    async function toggleStar(uid: number) {
-        const li = mobileState.messages.find((m) => m.uid === uid);
+    async function toggleStar(msg: MessageListItem) {
+        const li = findRow(msg);
         if (!li) return;
         const isFlagged = li.flags.includes('\\Flagged');
         try {
-            const r = await modifyFlags(mobileState.selectedPath, uid, isFlagged ? { remove: ['\\Flagged'] } : { add: ['\\Flagged'] });
+            const r = await modifyFlags(rowPath(li), li.uid, isFlagged ? { remove: ['\\Flagged'] } : { add: ['\\Flagged'] });
             li.flags = r.flags;
-            if (mobileState.detail && mobileState.detail.uid === uid) mobileState.detail.flags = r.flags;
+            if (mobileState.detail && detailIsRow(li)) mobileState.detail.flags = r.flags;
         } catch {
             showToast('error', "Couldn't update star");
         }
     }
 
-    async function trashMessage(uid: number) {
-        const from = mobileState.selectedPath;
+    async function trashMessage(msg: MessageListItem) {
+        const from = rowPath(msg);
         const trashBox = mobileState.mailboxes.find((m) => m.specialUse === '\\Trash')?.path || 'Trash';
         try {
-            if (from === trashBox) await deleteMessage(from, uid);
-            else await moveMessage(from, uid, trashBox);
-            mobileState.messages = mobileState.messages.filter((m) => m.uid !== uid);
-            mobileState.messagesTotal = Math.max(0, mobileState.messagesTotal - 1);
+            if (from === trashBox) await deleteMessage(from, msg.uid);
+            else await moveMessage(from, msg.uid, trashBox);
+            dropRow(msg);
             showToast('success', from === trashBox ? 'Deleted' : 'Moved to Trash');
-        } catch (err) {
+        } catch {
             showToast('error', 'Failed to delete');
         }
     }
 
-    async function archiveMessage(uid: number) {
-        const from = mobileState.selectedPath;
+    async function archiveMessage(msg: MessageListItem) {
         const archiveBox = mobileState.mailboxes.find((m) => m.specialUse === '\\Archive')?.path || 'Archive';
         try {
-            await moveMessage(from, uid, archiveBox);
-            mobileState.messages = mobileState.messages.filter((m) => m.uid !== uid);
-            mobileState.messagesTotal = Math.max(0, mobileState.messagesTotal - 1);
+            await moveMessage(rowPath(msg), msg.uid, archiveBox);
+            dropRow(msg);
             showToast('success', 'Archived');
-        } catch (err) {
+        } catch {
             showToast('error', 'Failed to archive');
         }
     }
@@ -452,7 +459,7 @@
             actionSheetDispose = null;
         });
         try {
-            const fresh = await getMessage(mobileState.selectedPath, msg.uid);
+            const fresh = await getMessage(rowPath(msg), msg.uid);
             actionSheetDetail = fresh;
         } catch {
             // Sheet stays open for the non-detail actions; Summarize is
@@ -474,9 +481,9 @@
     async function actionToggleRead(msg: MessageListItem) {
         const seen = msg.flags.includes('\\Seen');
         try {
-            const r = await modifyFlags(mobileState.selectedPath, msg.uid, seen ? { remove: ['\\Seen'] } : { add: ['\\Seen'] });
+            const r = await modifyFlags(rowPath(msg), msg.uid, seen ? { remove: ['\\Seen'] } : { add: ['\\Seen'] });
             msg.flags = r.flags;
-            if (mobileState.detail && mobileState.detail.uid === msg.uid) {
+            if (mobileState.detail && detailIsRow(msg)) {
                 mobileState.detail.flags = r.flags;
             }
             showToast('success', seen ? 'Marked unread' : 'Marked read');
@@ -487,9 +494,16 @@
 
     onMount(() => {
         refreshMailboxes();
-        refreshMessages();
+        // Coming back from a message keeps an all-folders result set as is.
+        if (!(mobileState.searchScope === 'all' && mobileState.messages.length > 0)) refreshMessages();
         const interval = setInterval(refreshMailboxes, 60_000);
-        return () => clearInterval(interval);
+        window.addEventListener('webmail:client-rule', onRule);
+        return () => {
+            clearInterval(interval);
+            window.removeEventListener('webmail:client-rule', onRule);
+            if (searchDebounce) clearTimeout(searchDebounce);
+            cancelGlobalSearch();
+        };
     });
 
     // Re-fetch inbox state every time the user returns to the app.
@@ -509,7 +523,7 @@
 <div class="inbox-view">
     <header class="mheader">
         <div class="header-left">
-            <button type="button" class="mbtn mbtn-ghost" onclick={() => { mobileState.selectedPath = 'INBOX'; refreshMessages(true); }}>
+            <button type="button" class="mbtn mbtn-ghost" aria-label="Refresh folder" title="Refresh" onclick={() => { refreshMessages(true); refreshMailboxes(); }}>
                 <Icon name="refresh" size={18} />
             </button>
             <LatencyChip />
@@ -520,7 +534,7 @@
                 <span class="badge">{unreadCount}</span>
             {/if}
         </h1>
-        <button type="button" class="mbtn mbtn-ghost" data-testid="compose-btn" onclick={() => {
+        <button type="button" class="mbtn mbtn-ghost" data-testid="compose-btn" aria-label="Compose new message" title="Compose" onclick={() => {
             mobileState.composeReplyTo = null;
             mobileState.composeMode = 'new';
             navigate('compose');
@@ -533,6 +547,7 @@
         <input
             type="search"
             placeholder="Search"
+            aria-label="Search mail"
             value={searchInput}
             oninput={(e) => onSearch((e.currentTarget as HTMLInputElement).value)}
         />
@@ -563,6 +578,7 @@
                 type="button"
                 class="segment"
                 class:active={mobileState.filter === f}
+                aria-pressed={mobileState.filter === f}
                 onclick={() => { mobileState.filter = f as any; }}
             >
                 {f === 'all' ? 'All' : f === 'unread' ? 'Unread' : f === 'starred' ? 'Starred' : 'AI sort'}
@@ -615,7 +631,7 @@
                     <p>{aiSortError}</p>
                 </div>
             {/if}
-            {#each filtered as msg (msg.uid)}
+            {#each filtered as msg (rowKey(msg))}
                 {@const isUnread = unread(msg.flags)}
                 {@const isStarred = flagged(msg.flags)}
                 {@const sender = senderShort(msg.envelope.from)}
@@ -624,12 +640,13 @@
                 {@const isTracked = isTrackingEmail(msg.envelope.subject)}
                 {@const dlevel = mobileState.filter === 'ai-sorted' ? dangerLevel(msg.uid) : 0}
                 <SwipeableRow
-                    onOpen={() => selectMessage(msg.uid)}
-                    onSwipeRight={() => toggleStar(msg.uid)}
-                    onSwipeLeft={() => trashMessage(msg.uid)}
+                    onOpen={() => selectMessage(msg)}
+                    onSwipeRight={() => toggleStar(msg)}
+                    onSwipeLeft={() => trashMessage(msg)}
                     onLongPress={() => openActionSheet(msg)}
                     rightLabel={isStarred ? 'Unstar' : 'Star'}
                     leftLabel="Trash"
+                    label={`${isUnread ? 'Unread, ' : ''}${isStarred ? 'Starred, ' : ''}${sender}, ${msg.envelope.subject || '(no subject)'}`}
                     rightColor="var(--star)"
                     leftColor="var(--danger)"
                 >
@@ -675,16 +692,16 @@
         detail={actionSheetDetail}
         isOpen={actionSheetOpen}
         onClose={closeActionSheet}
-        onOpen={() => selectMessage(sheetMsg.uid)}
+        onOpen={() => selectMessage(sheetMsg)}
         onReply={() => {
             mobileState.composeReplyTo = actionSheetDetail;
             mobileState.composeMode = 'reply';
             navigate('compose');
         }}
-        onToggleStar={() => toggleStar(sheetMsg.uid)}
+        onToggleStar={() => toggleStar(sheetMsg)}
         onToggleRead={() => actionToggleRead(sheetMsg)}
-        onArchive={() => archiveMessage(sheetMsg.uid)}
-        onTrash={() => trashMessage(sheetMsg.uid)}
+        onArchive={() => archiveMessage(sheetMsg)}
+        onTrash={() => trashMessage(sheetMsg)}
     />
 {/if}
 

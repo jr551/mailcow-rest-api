@@ -1,7 +1,7 @@
 <script lang="ts">
     import { untrack } from 'svelte';
     import { authState, upsertSession, setError, setPending, setAddingAccount, login as loginCall } from '../lib/auth.svelte';
-    import { rememberedUsers, recallCreds } from '../lib/keychain';
+    import { rememberedUsers, recallCreds, forgetCreds } from '../lib/keychain';
     import Icon from './Icon.svelte';
     import ThemeToggle from './ThemeToggle.svelte';
 
@@ -13,21 +13,13 @@
     let cardEl: HTMLElement | undefined = $state();
     let shake = $state(0); // bumped on each error so the keyed div re-mounts
     // Pre-flag autoLoggingIn before the first paint when we have any
-    // remembered credential AND we weren't just signed out — that way
-    // the form never even flashes for return visitors. The actual
-    // login attempt still runs in the $effect below; this just hides
-    // the form proactively.
+    // remembered credential — that way the form never even flashes for
+    // return visitors. The actual login attempt still runs in the $effect
+    // below; this just hides the form proactively. Signing out forgets the
+    // remembered credentials, so a deliberate sign-out never lands here.
     function hasRememberedReturnUser(): boolean {
         try {
-            // Same gate wasRecentlyLoggedOut() uses below — if the user
-            // explicitly signed out within the last 5s, don't auto-flip.
-            const raw = sessionStorage.getItem('webmail.logout.recent');
-            if (raw) {
-                const ts = Number(raw);
-                if (Number.isFinite(ts) && Date.now() - ts < 5000) return false;
-            }
-            const users = rememberedUsers();
-            return users.length > 0;
+            return rememberedUsers().length > 0;
         } catch { return false; }
     }
     // True when this Login is shown over an existing inbox to add a second account.
@@ -92,18 +84,8 @@
     function markInteracted() { interacted = true; }
     let captchaRequired = $derived(failCount >= 2 || (!interacted && failCount >= 1));
 
-    function wasRecentlyLoggedOut(): boolean {
-        try {
-            const raw = sessionStorage.getItem('webmail.logout.recent');
-            if (!raw) return false;
-            const ts = parseInt(raw, 10);
-            return Date.now() - ts < 5000; // 5-second grace period
-        } catch { return false; }
-    }
-
     async function tryAutoLogin() {
         if (autoTried || authState.activeUser || authState.addingAccount || authState.pending) return;
-        if (wasRecentlyLoggedOut()) return;
         const users = rememberedUsers();
         if (!users.length) return;
         autoTried = true;
@@ -133,7 +115,7 @@
             // stored creds on the very next cold start — which is exactly
             // what was kicking PWA users to manual sign-in repeatedly.
             if (status === 401) {
-                import('../lib/keychain').then((k) => k.forgetCreds(targetUser));
+                forgetCreds(targetUser);
             }
         } finally {
             autoLoggingIn = false;
@@ -266,9 +248,9 @@
                     />
                 </label>
 
-                <label class="field">
-                    <span class="lbl">
-                        Password
+                <div class="field">
+                    <div class="lbl">
+                        <label for="login-pass">Password</label>
                         <button
                             type="button"
                             class="toggle-pass"
@@ -278,8 +260,9 @@
                             <Icon name="eye" size={14} />
                             <span>{showPass ? 'Hide' : 'Show'}</span>
                         </button>
-                    </span>
+                    </div>
                     <input
+                        id="login-pass"
                         type={showPass ? 'text' : 'password'}
                         autocomplete="current-password"
                         placeholder="••••••••"
@@ -288,7 +271,7 @@
                         required
                         data-testid="login-pass"
                     />
-                </label>
+                </div>
 
                 {#if authState.error}
                     <div class="error" role="alert" data-testid="login-error">

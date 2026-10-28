@@ -115,7 +115,7 @@ async function ocrAttachment({ buffer, mimeType, filename, config, logger, cache
 
     const mapped = mapMistralStatus(status, body);
     if (status === 429) {
-        const retryAfter = res.headers && (res.headers['retry-after'] || res.headers['Retry-After']);
+        const retryAfter = res.headers && res.headers['retry-after'];
         if (retryAfter) mapped.retryAfter = String(retryAfter);
     }
     return { ok: false, ...mapped };

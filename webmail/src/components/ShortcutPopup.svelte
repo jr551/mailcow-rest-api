@@ -1,12 +1,14 @@
 <script lang="ts">
     import FloatingPanel from './FloatingPanel.svelte';
     import type { Shortcut } from '../lib/api';
+    import { safeShortcutUrl, shortcutSandbox } from '../lib/shortcuts-store';
 
     interface Props {
         shortcut: Shortcut;
         onClose: () => void;
     }
     let { shortcut, onClose }: Props = $props();
+    const safeUrl = $derived(safeShortcutUrl(shortcut.url));
 </script>
 
 <FloatingPanel
@@ -19,16 +21,21 @@
     onClose={onClose}
     testId={`shortcut-popup-${shortcut.title}`}
 >
-    <iframe
-        src={shortcut.url}
-        title={shortcut.title}
-        class="shortcut-frame"
-        sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox"
-        referrerpolicy="no-referrer"
-    ></iframe>
+    {#if safeUrl}
+        <iframe
+            src={safeUrl}
+            title={shortcut.title}
+            class="shortcut-frame"
+            sandbox={shortcutSandbox(safeUrl)}
+            referrerpolicy="no-referrer"
+        ></iframe>
+    {:else}
+        <p class="muted blocked">This shortcut has an unsupported link and cannot be shown.</p>
+    {/if}
 </FloatingPanel>
 
 <style>
+    .blocked { margin: 0; padding: 16px; font-size: 13px; }
     .shortcut-frame {
         flex: 1;
         width: 100%;

@@ -1,6 +1,6 @@
 'use strict';
 
-const { CaldavClient, generateIcal } = require('../caldav-client');
+const { CaldavClient } = require('../caldav-client');
 const { badRequest, problem } = require('../errors');
 const { problemSchema } = require('../schemas');
 const { IcalTokenStore } = require('../ical-token-store');
@@ -62,12 +62,14 @@ module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorize
     const client = new CaldavClient({ sogoUrl, rejectUnauthorized });
     const icalTokens = new IcalTokenStore(path.join(dataDir, 'ical-tokens.json'));
 
-    // Build a VCALENDAR feed from a list of parsed events. When
-    // editUrlFor is provided, each VEVENT picks up a URL: line whose
-    // target is the public anonymous-edit page; calendar apps surface
-    // that URL as a clickable link on the event so attendees (or
-    // anyone holding the feed URL) can adjust the event without an
-    // account.
+    // Build a VCALENDAR feed from the raw calendar-data of each resource.
+    // VTIMEZONE and VEVENT blocks are republished as stored, so recurrence
+    // rules, time zones and all-day dates survive; attendees and alarms are
+    // stripped (see ics-edit extractFeedComponents). When editUrlFor is
+    // provided, each VEVENT picks up a URL: line whose target is the public
+    // anonymous-edit page; calendar apps surface that URL as a clickable
+    // link on the event so attendees (or anyone holding the feed URL) can
+    // adjust the event without an account.
     //
     // Google Calendar challenge: Google's web event-preview popover
     // truncates DESCRIPTION aggressively and frequently drops both
@@ -79,55 +81,44 @@ module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorize
     // — Google auto-links http(s) URLs in the location field, which
     // is also surfaced in the popover. Apple/Outlook/Thunderbird
     // still get the dedicated URL: + X-ALT-DESC lines they prefer.
-    function buildIcsBody(events, editUrlFor) {
+    function buildIcsBody(calendarData, editUrlFor) {
+        const timezones = new Map();
+        const events = [];
+        for (const data of calendarData) {
+            const parts = icsEdit.extractFeedComponents(data);
+            for (const tz of parts.timezones) {
+                if (tz.tzid && !timezones.has(tz.tzid)) timezones.set(tz.tzid, tz.text);
+            }
+            for (const vevent of parts.events) {
+                const uid = icsEdit.readPropertyValue(vevent, 'UID');
+                const editUrl = (editUrlFor && uid && editUrlFor(uid)) || '';
+                events.push(editUrl ? icsEdit.addEditLink(vevent, editUrl) : vevent);
+            }
+        }
         const lines = [
             'BEGIN:VCALENDAR',
             'VERSION:2.0',
             'PRODID:-//mailcow-rest-api//EN',
             'CALSCALE:GREGORIAN',
-            'METHOD:PUBLISH'
+            'METHOD:PUBLISH',
+            ...timezones.values(),
+            ...events,
+            'END:VCALENDAR'
         ];
-        for (const ev of events) {
-            let description = ev.description || '';
-            let location = ev.location || '';
-            let editUrl = '';
-            if (editUrlFor && ev.uid) editUrl = editUrlFor(ev.uid) || '';
-            if (editUrl) {
-                const banner = [
-                    '── ✏️ Edit this event ──',
-                    'Click to update without signing in:',
-                    editUrl,
-                    ''
-                ].join('\n');
-                // Prepend so Google's truncated popover catches it.
-                description = banner + (description ? description.trim() : '');
-                // Only stamp location when the user hasn't set one —
-                // physical addresses must not be overwritten.
-                if (!location) location = `Edit: ${editUrl}`;
-            }
-            const evLines = generateIcal({
-                uid: ev.uid,
-                summary: ev.summary,
-                description,
-                location,
-                start: ev.dtstart,
-                end: ev.dtend
-            }).trim().split(/\r?\n/).filter((l) => !l.startsWith('BEGIN:VCALENDAR') && !l.startsWith('END:VCALENDAR') && !l.startsWith('VERSION:') && !l.startsWith('PRODID:') && !l.startsWith('CALSCALE:') && !l.startsWith('METHOD:'));
-            if (editUrl) {
-                const endIdx = evLines.findIndex((l) => l.trim().toUpperCase() === 'END:VEVENT');
-                // URL:<href> for Apple / Outlook / Thunderbird, plus
-                // an X-ALT-DESC HTML alternative so importers that
-                // honour rich descriptions render a real anchor.
-                const html = `<p>✏️ <a href="${editUrl.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}">Edit this event</a> — no sign-in required.</p>`;
-                const altDesc = `X-ALT-DESC;FMTTYPE=text/html:${html.replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/,/g, '\\,').replace(/;/g, '\\;')}`;
-                const inserts = [`URL:${editUrl}`, altDesc];
-                if (endIdx >= 0) evLines.splice(endIdx, 0, ...inserts);
-                else evLines.push(...inserts);
-            }
-            lines.push(...evLines);
+        return icsEdit.refoldVcalendar(lines.join('\r\n')) + '\r\n';
+    }
+
+    // Origin the public links are built on. Forwarded headers may carry a
+    // comma-separated chain; only the first hop is used, and anything that
+    // is not a plain scheme/host is refused rather than echoed into links.
+    function publicBaseUrl(req) {
+        const first = (v) => String(Array.isArray(v) ? v[0] : v || '').split(',')[0].trim();
+        const proto = first(req.headers['x-forwarded-proto']).toLowerCase() || 'https';
+        const host = first(req.headers['x-forwarded-host']) || first(req.headers.host);
+        if (!/^https?$/.test(proto) || !/^(?:[a-z0-9.-]+|\[[0-9a-f:]+\])(?::\d{1,5})?$/i.test(host)) {
+            throw badRequest('Invalid Host header');
         }
-        lines.push('END:VCALENDAR');
-        return lines.join('\r\n') + '\r\n';
+        return `${proto}://${host}`;
     }
 
     function requirePassword(req) {
@@ -289,10 +280,10 @@ module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorize
         const now = new Date();
         const start = new Date(now.getFullYear() - 2, now.getMonth(), 1).toISOString();
         const end = new Date(now.getFullYear() + 2, now.getMonth() + 1, 0, 23, 59, 59).toISOString();
-        const events = await client.listEvents(user, pass, calendar, start, end);
+        const calendarData = await client.listCalendarData(user, pass, calendar, start, end);
         reply.header('content-type', 'text/calendar; charset=utf-8');
         reply.header('content-disposition', `inline; filename="${calendar}.ics"`);
-        return buildIcsBody(events);
+        return buildIcsBody(calendarData);
     });
 
     // ── Public iCal subscription tokens ──────────────────────────────
@@ -322,9 +313,7 @@ module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorize
         const pass = req.creds.pass;
         const calendar = req.params.calendar;
         const { token, expiresAt } = icalTokens.issue({ user, pass, calendar });
-        const proto = req.headers['x-forwarded-proto'] || 'https';
-        const host = req.headers['x-forwarded-host'] || req.headers.host;
-        const url = `${proto}://${host}/v1/public/ical/${token}.ics`;
+        const url = `${publicBaseUrl(req)}/v1/public/ical/${token}.ics`;
         reply.code(200);
         return { token, url, createdAt: Date.now(), expiresAt };
     });
@@ -350,11 +339,9 @@ module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorize
         const calendar = req.params.calendar;
         const rec = icalTokens.findByUserCalendar(user, calendar);
         if (!rec) return { token: null, url: null, createdAt: null, expiresAt: null };
-        const proto = req.headers['x-forwarded-proto'] || 'https';
-        const host = req.headers['x-forwarded-host'] || req.headers.host;
         return {
             token: rec.token,
-            url: `${proto}://${host}/v1/public/ical/${rec.token}.ics`,
+            url: `${publicBaseUrl(req)}/v1/public/ical/${rec.token}.ics`,
             createdAt: rec.createdAt,
             expiresAt: rec.expiresAt
         };
@@ -383,21 +370,23 @@ module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorize
             reply.code(404);
             return { type: 'about:blank', title: 'Not Found', status: 404, detail: 'Token unknown or expired' };
         }
+        const base = publicBaseUrl(req);
         try {
             const now = new Date();
             const start = new Date(now.getFullYear() - 2, now.getMonth(), 1).toISOString();
             const end = new Date(now.getFullYear() + 2, now.getMonth() + 1, 0, 23, 59, 59).toISOString();
-            const events = await client.listEvents(rec.user, rec.pass, rec.calendar, start, end);
+            const calendarData = await client.listCalendarData(rec.user, rec.pass, rec.calendar, start, end);
             reply.header('content-type', 'text/calendar; charset=utf-8');
             reply.header('content-disposition', `inline; filename="${rec.calendar}.ics"`);
             // Conservative cache so feed apps don't hammer SOGo every minute.
-            reply.header('cache-control', 'public, max-age=600');
-            const base = publicBaseUrl(req);
+            // Private: the edit links in the body are built from the request
+            // Host, so a shared cache must not serve one Host's links to another.
+            reply.header('cache-control', 'private, max-age=600');
             // Signed per-event grant: the feed token stays in the .ics URL
             // and never reaches the event bodies that get re-published to
             // every attendee.
             const editUrlFor = (uid) => `${base}/v1/public/event/${makeEventGrant(rec, uid)}/edit`;
-            return buildIcsBody(events, editUrlFor);
+            return buildIcsBody(calendarData, editUrlFor);
         } catch (err) {
             req.log.warn({ err: err.message }, 'public ical fetch failed');
             reply.code(502);
@@ -428,12 +417,6 @@ module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorize
             }
         });
 
-    function publicBaseUrl(req) {
-        const proto = req.headers['x-forwarded-proto'] || 'https';
-        const host = req.headers['x-forwarded-host'] || req.headers.host;
-        return `${proto}://${host}`;
-    }
-
     function escHtml(s) {
         return String(s == null ? '' : s)
             .replace(/&/g, '&amp;')
@@ -451,6 +434,11 @@ module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorize
     // re-interpret as UTC on save (consistent with the input).
     function isoToInput(iso) {
         if (!iso) return '';
+        // Wall-clock strings (UTC, zoned or floating) are rendered as
+        // written; round-tripping them through Date would shift a floating
+        // value by the server's own offset.
+        const wall = /^(\d{4}-\d{2}-\d{2})(?:T(\d{2}:\d{2}))?(?::\d{2})?Z?$/.exec(iso);
+        if (wall) return `${wall[1]}T${wall[2] || '00:00'}`;
         const d = new Date(iso);
         if (Number.isNaN(d.getTime())) return '';
         const pad = (n) => String(n).padStart(2, '0');
@@ -475,7 +463,7 @@ module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorize
         const safeEnd = escHtml(isoToInput(fields.end));
         const safeCal = escHtml(calendar || '');
         const action = `/v1/public/event/${encodeURIComponent(grant)}/edit`;
-        const errorBlock = error ? `<div class="err">${escHtml(error)}</div>` : '';
+        const errorBlock = error ? `<div class="err" role="alert">${escHtml(error)}</div>` : '';
         return `<!doctype html>
 <html lang="en">
 <head>
@@ -486,11 +474,11 @@ module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorize
 <style>
   :root { color-scheme: light dark; }
   body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; background: #f4f4f6; color: #111; }
-  @media (prefers-color-scheme: dark) { body { background: #1a1a1f; color: #f4f4f6; } .card { background: #24242b !important; box-shadow: 0 8px 28px rgba(0,0,0,0.4) !important; } input, textarea { background: #1a1a1f !important; color: #f4f4f6 !important; border-color: #3a3a44 !important; } }
+  @media (prefers-color-scheme: dark) { body { background: #1a1a1f; color: #f4f4f6; } .card { background: #24242b !important; box-shadow: 0 8px 28px rgba(0,0,0,0.4) !important; } input, textarea { background: #1a1a1f !important; color: #f4f4f6 !important; border-color: #3a3a44 !important; } .sub, .hint { color: #a8a8b3; } .err { background: #4c1d1d; color: #fecaca; } }
   .wrap { max-width: 520px; margin: 32px auto; padding: 0 16px; }
   .card { background: #fff; border-radius: 14px; padding: 20px 22px; box-shadow: 0 4px 22px rgba(0,0,0,0.08); }
   h1 { font-size: 18px; margin: 0 0 4px; }
-  .sub { font-size: 12px; color: #888; margin-bottom: 18px; }
+  .sub { font-size: 12px; color: #6b6b75; margin-bottom: 18px; }
   label { display: block; font-size: 12px; font-weight: 600; margin: 12px 0 4px; letter-spacing: 0.02em; }
   input[type=text], input[type=datetime-local], textarea {
     width: 100%; box-sizing: border-box; padding: 8px 10px; font: inherit; border: 1px solid #d4d4dc; border-radius: 8px;
@@ -502,9 +490,8 @@ module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorize
   .btn { font: inherit; font-weight: 600; padding: 9px 16px; border-radius: 8px; border: none; cursor: pointer; }
   .btn.primary { background: #3b82f6; color: white; }
   .btn.primary:hover { background: #2563eb; }
-  .btn.ghost { background: transparent; color: #666; }
   .err { background: #fee2e2; color: #991b1b; padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; font-size: 13px; }
-  .hint { font-size: 11.5px; color: #888; margin-top: 6px; }
+  .hint { font-size: 11.5px; color: #6b6b75; margin-top: 6px; }
 </style>
 </head>
 <body>
@@ -514,25 +501,25 @@ module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorize
     <div class="sub">${safeCal} · anonymous edit</div>
     ${errorBlock}
     <form method="post" action="${escHtml(action)}" autocomplete="off">
-      <label>Title</label>
-      <input type="text" name="summary" value="${safeSummary}" required maxlength="200" />
+      <label for="ev-summary">Title</label>
+      <input type="text" id="ev-summary" name="summary" value="${safeSummary}" required maxlength="200" />
 
       <div class="row">
         <div>
-          <label>Start (UTC)</label>
-          <input type="datetime-local" name="start" value="${safeStart}" required />
+          <label for="ev-start">Start (UTC)</label>
+          <input type="datetime-local" id="ev-start" name="start" value="${safeStart}" required />
         </div>
         <div>
-          <label>End (UTC)</label>
-          <input type="datetime-local" name="end" value="${safeEnd}" required />
+          <label for="ev-end">End (UTC)</label>
+          <input type="datetime-local" id="ev-end" name="end" value="${safeEnd}" required />
         </div>
       </div>
 
-      <label>Location</label>
-      <input type="text" name="location" value="${safeLocation}" maxlength="300" />
+      <label for="ev-location">Location</label>
+      <input type="text" id="ev-location" name="location" value="${safeLocation}" maxlength="300" />
 
-      <label>Description</label>
-      <textarea name="description" maxlength="4000">${safeDescription}</textarea>
+      <label for="ev-description">Description</label>
+      <textarea id="ev-description" name="description" maxlength="4000">${safeDescription}</textarea>
 
       <div class="hint">Saving will email the organiser and every attendee a summary of what changed.</div>
       <div class="actions">
@@ -554,11 +541,11 @@ module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorize
 <style>
   :root { color-scheme: light dark; }
   body { font-family: system-ui, sans-serif; margin: 0; background: #f4f4f6; color: #111; }
-  @media (prefers-color-scheme: dark) { body { background: #1a1a1f; color: #f4f4f6; } .card { background: #24242b !important; } }
+  @media (prefers-color-scheme: dark) { body { background: #1a1a1f; color: #f4f4f6; } .card { background: #24242b !important; } .sub { color: #a8a8b3; } }
   .wrap { max-width: 480px; margin: 64px auto; padding: 0 16px; text-align: center; }
   .card { background: #fff; border-radius: 14px; padding: 28px 22px; box-shadow: 0 4px 22px rgba(0,0,0,0.08); }
   h1 { font-size: 22px; margin: 0 0 6px; }
-  .sub { color: #888; font-size: 13px; }
+  .sub { color: #6b6b75; font-size: 13px; }
   .ok { color: #059669; font-size: 36px; line-height: 1; margin-bottom: 8px; }
 </style></head><body>
 <div class="wrap"><div class="card">
@@ -568,13 +555,13 @@ module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorize
 </div></div></body></html>`;
     }
 
-    function renderErrorPage({ status, title, detail }) {
+    function renderErrorPage({ title, detail }) {
         return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <meta name="robots" content="noindex,nofollow" />
 <title>${escHtml(title)}</title>
-<style>body{font-family:system-ui,sans-serif;margin:0;background:#f4f4f6;color:#111}.wrap{max-width:480px;margin:64px auto;padding:0 16px;text-align:center}.card{background:#fff;border-radius:14px;padding:28px 22px;box-shadow:0 4px 22px rgba(0,0,0,0.08)}h1{font-size:22px;margin:0 0 6px}.sub{color:#888;font-size:13px}@media(prefers-color-scheme:dark){body{background:#1a1a1f;color:#f4f4f6}.card{background:#24242b}}</style>
+<style>body{font-family:system-ui,sans-serif;margin:0;background:#f4f4f6;color:#111}.wrap{max-width:480px;margin:64px auto;padding:0 16px;text-align:center}.card{background:#fff;border-radius:14px;padding:28px 22px;box-shadow:0 4px 22px rgba(0,0,0,0.08)}h1{font-size:22px;margin:0 0 6px}.sub{color:#6b6b75;font-size:13px}@media(prefers-color-scheme:dark){body{background:#1a1a1f;color:#f4f4f6}.card{background:#24242b}.sub{color:#a8a8b3}}</style>
 </head><body><div class="wrap"><div class="card"><h1>${escHtml(title)}</h1><div class="sub">${escHtml(detail)}</div></div></div></body></html>`;
     }
 
@@ -585,7 +572,7 @@ module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorize
         const claim = readEventGrant(icalTokens, req.params.grant);
         if (!claim) {
             reply.code(404).type('text/html');
-            return renderErrorPage({ status: 404, title: 'Not found', detail: 'This event link is unknown, expired, or not valid for this event.' });
+            return renderErrorPage({ title: 'Not found', detail: 'This event link is unknown, expired, or not valid for this event.' });
         }
         const { rec, uid } = claim;
         // getEventRaw returns null only on a genuine 404 and throws
@@ -598,39 +585,61 @@ module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorize
         } catch (err) {
             req.log.warn({ err: err.message }, 'public edit: fetch raw failed');
             reply.code(502).type('text/html');
-            return renderErrorPage({ status: 502, title: 'Could not load event', detail: 'The calendar server is unreachable. Try again in a moment.' });
+            return renderErrorPage({ title: 'Could not load event', detail: 'The calendar server is unreachable. Try again in a moment.' });
         }
         if (!raw) {
             reply.code(404).type('text/html');
-            return renderErrorPage({ status: 404, title: 'Event not found', detail: 'The event may have been deleted from the calendar.' });
+            return renderErrorPage({ title: 'Event not found', detail: 'The event may have been deleted from the calendar.' });
         }
         const unfolded = icsEdit.unfold(raw);
         const split = icsEdit.splitEventByUid(unfolded, uid);
         if (!split) {
             reply.code(404).type('text/html');
-            return renderErrorPage({ status: 404, title: 'Event not found', detail: 'The calendar resource does not contain an event with this ID.' });
+            return renderErrorPage({ title: 'Event not found', detail: 'The calendar resource does not contain an event with this ID.' });
         }
         const fields = icsEdit.readEventFields(split.vevent);
         reply.type('text/html').header('cache-control', 'no-store').header('x-robots-tag', 'noindex,nofollow');
         return renderEditPage({ grant: req.params.grant, fields, calendar: rec.calendar });
     });
 
+    // Every changed submission emails the owner and each attendee through
+    // the owner's SMTP account, so the link must not be a mail cannon: a
+    // per-IP route limit, a short per-event cooldown, hard field caps, and a
+    // bounded recipient list.
+    const EDIT_COOLDOWN_MS = 15 * 1000;
+    const MAX_NOTIFY_RECIPIENTS = 25;
+    const MAX_SUMMARY = 200;
+    const MAX_LOCATION = 300;
+    const MAX_DESCRIPTION = 4000;
+    const editCooldown = new Map(); // `${rec.id}:${uid}` -> last saved at
+
+    function editCooldownLeft(key) {
+        const now = Date.now();
+        for (const [k, at] of editCooldown) {
+            if (now - at >= EDIT_COOLDOWN_MS) editCooldown.delete(k);
+        }
+        const last = editCooldown.get(key);
+        return last ? Math.max(0, EDIT_COOLDOWN_MS - (now - last)) : 0;
+    }
+
     app.post('/v1/public/event/:grant/edit', {
-        config: { public: true },
+        config: { public: true, rateLimit: { max: 10, timeWindow: '1 minute' } },
         schema: { tags: ['calendar'], summary: 'Apply an anonymous event edit and notify attendees' }
     }, async (req, reply) => {
         const claim = readEventGrant(icalTokens, req.params.grant);
         if (!claim) {
             reply.code(404).type('text/html');
-            return renderErrorPage({ status: 404, title: 'Not found', detail: 'This event link is unknown, expired, or not valid for this event.' });
+            return renderErrorPage({ title: 'Not found', detail: 'This event link is unknown, expired, or not valid for this event.' });
         }
         const { rec, uid } = claim;
         const body = req.body && typeof req.body === 'object' ? req.body : {};
-        const summary = (body.summary || '').toString().trim();
+        // Browsers submit textarea newlines as CRLF; the stored text and the
+        // diff below use LF. Single-line fields cannot legitimately hold one.
+        const summary = (body.summary || '').toString().replace(/[\r\n]+/g, ' ').trim();
         const startLocal = (body.start || '').toString().trim();
         const endLocal = (body.end || '').toString().trim();
-        const location = (body.location || '').toString();
-        const description = (body.description || '').toString();
+        const location = (body.location || '').toString().replace(/[\r\n]+/g, ' ');
+        const description = (body.description || '').toString().replace(/\r\n?/g, '\n');
         const startIso = inputToIso(startLocal);
         const endIso = inputToIso(endLocal);
 
@@ -648,9 +657,19 @@ module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorize
             });
         };
         if (!summary) return renderWithError('Title is required.');
+        if (summary.length > MAX_SUMMARY) return renderWithError(`Title is too long (max ${MAX_SUMMARY} characters).`);
+        if (location.length > MAX_LOCATION) return renderWithError(`Location is too long (max ${MAX_LOCATION} characters).`);
+        if (description.length > MAX_DESCRIPTION) return renderWithError(`Description is too long (max ${MAX_DESCRIPTION} characters).`);
         if (!startIso || !endIso) return renderWithError('Start and end must both be valid date/times.');
         if (new Date(endIso).getTime() <= new Date(startIso).getTime()) {
             return renderWithError('End time must be after start time.');
+        }
+
+        const cooldownKey = `${rec.id}:${uid}`;
+        const waitMs = editCooldownLeft(cooldownKey);
+        if (waitMs > 0) {
+            reply.code(429).type('text/html').header('retry-after', String(Math.ceil(waitMs / 1000)));
+            return renderErrorPage({ title: 'Please wait', detail: 'This event was just saved. Try again in a few seconds.' });
         }
 
         let raw;
@@ -659,41 +678,45 @@ module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorize
         } catch (err) {
             req.log.warn({ err: err.message }, 'public edit: fetch raw failed');
             reply.code(502).type('text/html');
-            return renderErrorPage({ status: 502, title: 'Could not load event', detail: 'The calendar server is unreachable. Try again in a moment.' });
+            return renderErrorPage({ title: 'Could not load event', detail: 'The calendar server is unreachable. Try again in a moment.' });
         }
         if (!raw) {
             reply.code(404).type('text/html');
-            return renderErrorPage({ status: 404, title: 'Event not found', detail: 'The event may have been deleted.' });
+            return renderErrorPage({ title: 'Event not found', detail: 'The event may have been deleted.' });
         }
         const unfolded = icsEdit.unfold(raw);
         const split = icsEdit.splitEventByUid(unfolded, uid);
         if (!split) {
             reply.code(404).type('text/html');
-            return renderErrorPage({ status: 404, title: 'Event not found', detail: 'The calendar resource does not contain an event with this ID.' });
+            return renderErrorPage({ title: 'Event not found', detail: 'The calendar resource does not contain an event with this ID.' });
         }
 
         const before = icsEdit.readEventFields(split.vevent);
 
-        // applyEdits writes DTSTART/DTEND back as single UTC instants and
-        // drops the TZID. On a recurring master that silently reshapes the
-        // whole series — RRULE is preserved untouched and now evaluates
-        // against a different start, in a timezone that is no longer
-        // recorded. An anonymous link-holder should not be able to do that
-        // to a series, so refuse the time change and let the rest through.
-        if (icsEdit.hasRecurrence(split.vevent)) {
-            const timeChanged = startIso !== before.start || endIso !== before.end;
-            if (timeChanged) {
-                return renderWithError(
-                    'This is a repeating event. Its start and end times can only be changed ' +
-                    'by the calendar owner — other details can still be edited here.'
-                );
-            }
+        // The form renders start/end as wall-clock text, so a time counts
+        // as changed only when the submitted text differs from what was
+        // rendered. An untouched time keeps the original line (TZID, all-day
+        // date, seconds) instead of being rewritten as a UTC instant.
+        const sameTime = (local, original) => inputToIso(local) === inputToIso(isoToInput(original));
+        const startChanged = !sameTime(startLocal, before.start);
+        const endChanged = !sameTime(endLocal, before.end);
+
+        // A time change on a recurring event reshapes the whole series, with
+        // RRULE left untouched against a different start. An anonymous
+        // link-holder should not be able to do that, so refuse the time
+        // change and let the rest through.
+        if (icsEdit.hasRecurrence(split.vevent) && (startChanged || endChanged)) {
+            return renderWithError(
+                'This is a repeating event. Its start and end times can only be changed ' +
+                'by the calendar owner — other details can still be edited here.'
+            );
         }
 
         const attendees = icsEdit.readAttendeeEmails(split.vevent);
-        const updatedVevent = icsEdit.applyEdits(split.vevent, {
-            summary, start: startIso, end: endIso, location, description
-        });
+        const edits = { summary, location, description };
+        if (startChanged) edits.start = startIso;
+        if (endChanged) edits.end = endIso;
+        const updatedVevent = icsEdit.applyEdits(split.vevent, edits);
         const newCalendar = icsEdit.refoldVcalendar(split.before + updatedVevent + split.after);
 
         try {
@@ -701,8 +724,9 @@ module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorize
         } catch (err) {
             req.log.warn({ err: err.message }, 'public edit: put failed');
             reply.code(502).type('text/html');
-            return renderErrorPage({ status: 502, title: 'Could not save', detail: 'The calendar server rejected the update. Try again later.' });
+            return renderErrorPage({ title: 'Could not save', detail: 'The calendar server rejected the update. Try again later.' });
         }
+        editCooldown.set(cooldownKey, Date.now());
 
         // Fire the notification email; failure here must not block the
         // success page (the edit itself already landed).
@@ -710,10 +734,16 @@ module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorize
             await sendEditNotification({
                 ownerEmail: rec.user,
                 ownerPass: rec.pass,
-                attendees,
+                attendees: attendees.slice(0, MAX_NOTIFY_RECIPIENTS),
                 calendar: rec.calendar,
                 before,
-                after: { summary, start: startIso, end: endIso, location, description },
+                after: {
+                    summary,
+                    start: startChanged ? startIso : before.start,
+                    end: endChanged ? endIso : before.end,
+                    location,
+                    description
+                },
                 req
             });
         } catch (err) {
@@ -734,7 +764,9 @@ module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorize
 
         const fmtDate = (iso) => {
             if (!iso) return '';
-            const d = new Date(iso);
+            // Zoned and floating values are wall-clock text; read them as
+            // such rather than in the server's own zone.
+            const d = new Date(/^\d{4}-\d{2}-\d{2}T[\d:]+$/.test(iso) ? `${iso}Z` : iso);
             if (Number.isNaN(d.getTime())) return iso;
             return d.toUTCString();
         };
@@ -753,10 +785,6 @@ module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorize
         }
         if (diffRows.length === 0) return; // nothing actually changed
 
-        const escHtmlMail = (s) => String(s == null ? '' : s)
-            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-
         const subject = `Event edited: ${after.summary || before.summary || '(untitled)'}`;
         const textLines = [
             `An event on calendar "${calendar}" was edited via its public share link.`,
@@ -769,17 +797,17 @@ module.exports = async function calendarRoutes(app, { sogoUrl, rejectUnauthorize
         const text = textLines.join('\n');
         const htmlRows = diffRows.map((r) => `
             <tr>
-              <td style="padding:6px 10px;font-weight:600;color:#555;border-bottom:1px solid #eee;vertical-align:top">${escHtmlMail(r.label)}</td>
-              <td style="padding:6px 10px;color:#a33;border-bottom:1px solid #eee;text-decoration:line-through;vertical-align:top">${escHtmlMail(r.oldV)}</td>
-              <td style="padding:6px 10px;color:#0a7;border-bottom:1px solid #eee;vertical-align:top">${escHtmlMail(r.newV)}</td>
+              <td style="padding:6px 10px;font-weight:600;color:#555;border-bottom:1px solid #eee;vertical-align:top">${escHtml(r.label)}</td>
+              <td style="padding:6px 10px;color:#a33;border-bottom:1px solid #eee;text-decoration:line-through;vertical-align:top">${escHtml(r.oldV)}</td>
+              <td style="padding:6px 10px;color:#0a7;border-bottom:1px solid #eee;vertical-align:top">${escHtml(r.newV)}</td>
             </tr>`).join('');
         const html = `<!doctype html><html><body style="font-family:system-ui,sans-serif;color:#111">
-            <p>An event on calendar <strong>${escHtmlMail(calendar)}</strong> was edited via its public share link.</p>
+            <p>An event on calendar <strong>${escHtml(calendar)}</strong> was edited via its public share link.</p>
             <table style="border-collapse:collapse;width:100%;margin-top:8px">
-              <thead><tr><th style="text-align:left;padding:6px 10px;font-size:12px;color:#888">Field</th><th style="text-align:left;padding:6px 10px;font-size:12px;color:#888">Was</th><th style="text-align:left;padding:6px 10px;font-size:12px;color:#888">Now</th></tr></thead>
+              <thead><tr><th style="text-align:left;padding:6px 10px;font-size:12px;color:#6b6b75">Field</th><th style="text-align:left;padding:6px 10px;font-size:12px;color:#6b6b75">Was</th><th style="text-align:left;padding:6px 10px;font-size:12px;color:#6b6b75">Now</th></tr></thead>
               <tbody>${htmlRows}</tbody>
             </table>
-            <p style="font-size:12px;color:#888;margin-top:18px">If you didn't expect this, the calendar owner can rotate the share link to invalidate the edit URL.</p>
+            <p style="font-size:12px;color:#6b6b75;margin-top:18px">If you didn't expect this, the calendar owner can rotate the share link to invalidate the edit URL.</p>
         </body></html>`;
 
         await sendMessage({

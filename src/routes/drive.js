@@ -4,6 +4,7 @@ const { B2Client } = require('../b2-client');
 const { DriveUserStore } = require('../drive-user-store');
 const { problem, notFound } = require('../errors');
 const config = require('../config');
+const crypto = require('node:crypto');
 
 // Origins the browser will load the webmail from. Without at least one,
 // a provisioned bucket is unreachable from the SPA. Operators set
@@ -17,12 +18,25 @@ function driveCorsOrigins() {
         .filter((o) => /^https?:\/\//i.test(o));
 }
 
+// B2 bucket names: 6-50 chars, alphanumeric and hyphens only, must start
+// with a letter/number. The readable part is lossy (every other character
+// becomes '-', and long addresses are truncated), so john.doe@ and
+// john_doe@ would share a bucket, and with it a read/write/delete key. The
+// hash of the full address is what keeps names distinct per mailbox.
+const BUCKET_NAME_MAX = 50;
+const BUCKET_HASH_LEN = 10;
+
 function sanitizeBucketName(email) {
-    // B2 bucket names: 6-50 chars, alphanumeric and hyphens only, must start with letter/number
-    const local = email.split('@')[0].toLowerCase();
-    const domain = email.split('@')[1]?.replace(/\./g, '-') || 'user';
-    const base = `imr-${domain}-${local}`;
-    return base.replace(/[^a-z0-9-]/g, '-').slice(0, 50).replace(/^-+/, 'a');
+    const addr = String(email).toLowerCase();
+    const [local, host] = addr.split('@');
+    const domain = host ? host.replace(/\./g, '-') : 'user';
+    const hash = crypto.createHash('sha256').update(addr).digest('hex').slice(0, BUCKET_HASH_LEN);
+    const readable = `imr-${domain}-${local}`
+        .replace(/[^a-z0-9-]/g, '-')
+        .replace(/-+/g, '-')
+        .slice(0, BUCKET_NAME_MAX - BUCKET_HASH_LEN - 1)
+        .replace(/-+$/, '');
+    return `${readable}-${hash}`;
 }
 
 module.exports = async function driveRoutes(app, opts) {
@@ -66,10 +80,24 @@ module.exports = async function driveRoutes(app, opts) {
         }
     }
 
-    async function getOrProvisionB2User(email) {
-        const existing = userStore.get(email);
-        if (existing) return existing;
+    // /config and /quota both fire on a user's first Drive load; without
+    // sharing the in-flight call the second one races the first through
+    // listBuckets/createBucket/createKey.
+    const provisioning = new Map(); // email -> Promise<cfg>
 
+    function getOrProvisionB2User(email) {
+        const key = email.toLowerCase();
+        const existing = userStore.get(key);
+        if (existing) return Promise.resolve(existing);
+        let pending = provisioning.get(key);
+        if (!pending) {
+            pending = provisionB2User(key).finally(() => provisioning.delete(key));
+            provisioning.set(key, pending);
+        }
+        return pending;
+    }
+
+    async function provisionB2User(email) {
         if (!b2Client) {
             throw problem(500, 'Server Error', 'B2 drive not configured');
         }
@@ -104,6 +132,10 @@ module.exports = async function driveRoutes(app, opts) {
             throw err;
         }
 
+        if (typeof bucketId !== 'string' || !bucketId) {
+            throw problem(502, 'Bad Gateway', 'B2 did not return a bucket id');
+        }
+
         // Create a user-scoped application key
         let key;
         try {
@@ -136,6 +168,21 @@ module.exports = async function driveRoutes(app, opts) {
         return cfg;
     }
 
+    async function resolveUserCfg(req) {
+        if (!s3.enabled) {
+            throw notFound('S3 drive is not enabled');
+        }
+
+        const userCfg = s3.provider === 'b2'
+            ? await getOrProvisionB2User(req.creds.user)
+            : s3.users[req.creds.user.toLowerCase()];
+
+        if (!userCfg) {
+            throw notFound('No drive configuration for this user');
+        }
+        return userCfg;
+    }
+
     app.get('/v1/drive/config', {
         schema: {
             tags: ['drive'],
@@ -162,20 +209,7 @@ module.exports = async function driveRoutes(app, opts) {
             }
         }
     }, async (req) => {
-        if (!s3.enabled) {
-            throw notFound('S3 drive is not enabled');
-        }
-
-        let userCfg;
-        if (s3.provider === 'b2') {
-            userCfg = await getOrProvisionB2User(req.creds.user);
-        } else {
-            userCfg = s3.users[req.creds.user.toLowerCase()];
-        }
-
-        if (!userCfg) {
-            throw notFound('No drive configuration for this user');
-        }
+        const userCfg = await resolveUserCfg(req);
 
         return {
             enabled: true,
@@ -206,20 +240,7 @@ module.exports = async function driveRoutes(app, opts) {
             }
         }
     }, async (req) => {
-        if (!s3.enabled) {
-            throw notFound('S3 drive is not enabled');
-        }
-
-        let userCfg;
-        if (s3.provider === 'b2') {
-            userCfg = await getOrProvisionB2User(req.creds.user);
-        } else {
-            userCfg = s3.users[req.creds.user.toLowerCase()];
-        }
-
-        if (!userCfg) {
-            throw notFound('No drive configuration for this user');
-        }
+        const userCfg = await resolveUserCfg(req);
 
         // For B2 we need the bucketId to calculate usage. JSON provider doesn't track bucketId,
         // so we fall back to zero usage for static config.

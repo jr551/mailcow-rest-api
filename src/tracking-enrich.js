@@ -6,9 +6,31 @@
 // and falls back gracefully when offline / rate-limited so the
 // notification email always sends, just with less detail.
 
+const net = require('node:net');
 const { request } = require('undici');
 
 const GEO_TIMEOUT_MS = 3000;
+
+// Addresses that are not globally routable (RFC 1918, loopback, link-local,
+// CGNAT, ULA, multicast, ...). IPv4-mapped IPv6 addresses are checked against
+// the IPv4 rules. A third-party geo service must never be sent these.
+const NON_GLOBAL = new net.BlockList();
+for (const [net4, prefix] of [
+    ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16],
+    ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15],
+    ['224.0.0.0', 4], ['240.0.0.0', 4]
+]) NON_GLOBAL.addSubnet(net4, prefix, 'ipv4');
+for (const [net6, prefix] of [['::', 128], ['::1', 128], ['fc00::', 7], ['fe80::', 10], ['ff00::', 8]]) {
+    NON_GLOBAL.addSubnet(net6, prefix, 'ipv6');
+}
+
+function isPublicIp(ip) {
+    if (typeof ip !== 'string') return false;
+    const addr = ip.split('%')[0];
+    const family = net.isIP(addr);
+    if (!family) return false;
+    return !NON_GLOBAL.check(addr, family === 6 ? 'ipv6' : 'ipv4');
+}
 
 /** Country code ('GB') → flag emoji ('🇬🇧'). Returns '' for non-letter
  *  inputs so the formatter can omit the flag cleanly. */
@@ -21,9 +43,7 @@ function flagEmoji(cc) {
 }
 
 async function lookupGeo(ip) {
-    if (!ip || ip === 'unknown' || ip === '127.0.0.1' || ip.startsWith('::1') || ip.startsWith('192.168.') || ip.startsWith('10.')) {
-        return null;
-    }
+    if (!isPublicIp(ip)) return null;
     try {
         const res = await request(
             `http://ip-api.com/json/${encodeURIComponent(ip)}?fields=status,country,countryCode,regionName,city,isp,org,as,mobile,proxy,hosting`,
@@ -174,5 +194,6 @@ async function buildOpenNotice({ subject, recipient, openedAt, ip, ua }) {
 }
 
 module.exports = {
-    buildOpenNotice
+    buildOpenNotice,
+    isPublicIp
 };

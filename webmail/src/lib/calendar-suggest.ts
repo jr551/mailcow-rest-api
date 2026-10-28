@@ -145,8 +145,8 @@ export async function suggestEventFromEmail(input: SuggestInput, opts: { signal?
             const j = await res.json();
             detail = j?.error?.message || j?.message || detail;
         } catch { /* ignore */ }
-        const keyHint = apiKey ? `${apiKey.slice(0, 4)}...${apiKey.slice(-4)}` : 'none';
-        throw new Error(`Provider: ${detail} (url=${baseUrl}, model=${model}, key=${keyHint}, server=${capabilities.aiConfig?.configured})`);
+        console.debug(`[calendar-suggest] provider error ${res.status} (url=${baseUrl}, model=${model}, server=${capabilities.aiConfig?.configured})`);
+        throw new Error(`Provider: ${detail}`);
     }
 
     const r = await res.json();
@@ -243,8 +243,8 @@ export async function suggestCalendarOptions(
     if (!res.ok) {
         let detail = `${res.status} ${res.statusText}`;
         try { const j = await res.json(); detail = j?.error?.message || j?.message || detail; } catch { /* */ }
-        const keyHint = apiKey ? `${apiKey.slice(0, 4)}...${apiKey.slice(-4)}` : 'none';
-        throw new Error(`Provider: ${detail} (url=${baseUrl}, model=${model}, key=${keyHint}, server=${capabilities.aiConfig?.configured})`);
+        console.debug(`[calendar-suggest] provider error ${res.status} (url=${baseUrl}, model=${model}, server=${capabilities.aiConfig?.configured})`);
+        throw new Error(`Provider: ${detail}`);
     }
 
     const r = await res.json();

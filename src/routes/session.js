@@ -1,10 +1,9 @@
 'use strict';
 
-const { parseBasicAuth, verifyWithDovecot } = require('../auth');
-const { unauthorized, problem } = require('../errors');
+const { unauthorized, forbidden, problem } = require('../errors');
 const { problemSchema } = require('../schemas');
 
-module.exports = async function sessionRoutes(app, { cache, imap, sessionTtlMs, appPasswords = null, webhookInboxes = null, outboundWebhooks = null }) {
+module.exports = async function sessionRoutes(app, { cache, sessionTtlMs, appPasswords = null, webhookInboxes = null, outboundWebhooks = null }) {
     app.post('/v1/auth/session', {
         config: { public: false },
         schema: {
@@ -19,7 +18,8 @@ module.exports = async function sessionRoutes(app, { cache, imap, sessionTtlMs, 
                         expiresAt: { type: 'string', format: 'date-time' }
                     }
                 },
-                401: problemSchema
+                401: problemSchema,
+                403: problemSchema
             }
         }
     }, async (req, reply) => {
@@ -31,31 +31,18 @@ module.exports = async function sessionRoutes(app, { cache, imap, sessionTtlMs, 
         if (!cache) {
             throw problem(503, 'Service Unavailable', 'Session store unavailable — use Basic authentication');
         }
-        const creds = parseBasicAuth(req.headers.authorization);
-        if (!creds) {
+        // The auth hook has already verified the Basic credentials (and
+        // cached the result), so there is nothing left to check here. An app
+        // password is not a mailbox password: sealing it into a session would
+        // hand the session a token Dovecot has never heard of.
+        if (req.appPassword) {
+            throw forbidden('App passwords cannot create sessions — sign in with your mailbox password');
+        }
+        if (req.session) {
             throw unauthorized('Missing Basic credentials');
         }
-
-        const { hashCreds } = cache;
-        const hash = hashCreds(creds.user, creds.pass);
-        const cached = cache.get(hash);
-        let valid = cached && cached.valid;
-
-        if (!cached) {
-            let result;
-            try {
-                result = await verifyWithDovecot(imap, creds.user, creds.pass);
-            } catch (err) {
-                req.log.warn({ err }, 'imap backend unreachable during session creation');
-                throw problem(502, 'Bad Gateway', 'IMAP backend unavailable');
-            }
-            cache.set(hash, result.valid);
-            valid = result.valid;
-        }
-
-        if (!valid) {
-            throw unauthorized('Invalid credentials');
-        }
+        const creds = req.creds;
+        const hash = creds.hash;
 
         // Existing app passwords hold an encrypted copy of the mailbox
         // password so they can reach IMAP. A password change would leave every
@@ -118,10 +105,16 @@ module.exports = async function sessionRoutes(app, { cache, imap, sessionTtlMs, 
             description: 'Bearer authentication revokes the current token. Basic authentication revokes every token for that mailbox, intended for password changes or incident response.',
             response: {
                 204: { type: 'null' },
-                401: problemSchema
+                401: problemSchema,
+                403: problemSchema
             }
         }
     }, async (req, reply) => {
+        // An app password is a scoped, per-client credential; it must not be
+        // able to sign the owner out everywhere.
+        if (req.appPassword) {
+            throw forbidden('App passwords cannot revoke sessions — sign in with your mailbox password');
+        }
         // Nothing can be revoked from a session store that isn't there —
         // and nothing can be validated against it either, so every token it
         // ever issued is already unusable. 204 is the honest answer.

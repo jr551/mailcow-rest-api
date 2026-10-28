@@ -33,6 +33,14 @@
         onAutoReply
     }: Props = $props();
 
+    // The model picks each action's target message, so show which message
+    // that is next to the action before anything is archived or trashed.
+    let messageByUid = $derived(new Map(messages.map((m) => [m.uid, m])));
+    function targetLabel(uid?: number): string {
+        const m = typeof uid === 'number' ? messageByUid.get(uid) : undefined;
+        return m ? `${m.subject || '(no subject)'} — ${m.from}` : '';
+    }
+
     let canBulk = $derived(!!(onArchiveSelected || onTrashSelected || onMarkReadSelected || onStarSelected));
 
     let result = $state<InboxSummaryResult | null>(null);
@@ -199,6 +207,7 @@
 
     async function bulkTrash() {
         if (!onTrashSelected || !selectedCount || processing) return;
+        if (!confirm(`Move ${selectedCount} message${selectedCount === 1 ? '' : 's'} to trash?`)) return;
         processing = true;
         try {
             await onTrashSelected([...selected]);
@@ -382,6 +391,9 @@
                                 >
                                     <span class="label">{a.label}</span>
                                     <span class="detail muted small">{a.detail}</span>
+                                    {#if targetLabel(a.refUid)}
+                                        <span class="target muted small" title={targetLabel(a.refUid)}>Message: {targetLabel(a.refUid)}</span>
+                                    {/if}
                                 </div>
                                 {#if a.canAutoReply && typeof a.refUid === 'number' && onAutoReply && !actionDone.has(a.refUid) && !actionIgnored.has(a.refUid)}
                                     <button
@@ -475,7 +487,7 @@
                                         }}
                                     >
                                         <span class="info-label truncate">{a.label}</span>
-                                        <span class="info-detail truncate muted small">{a.detail}</span>
+                                        <span class="info-detail truncate muted small" title={targetLabel(a.refUid) || undefined}>{a.detail}</span>
                                     </div>
                                 </li>
                             {/each}
@@ -726,6 +738,13 @@
     .action-main:focus-visible { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent); }
     .label { font-weight: 600; font-size: 13.5px; }
     .detail { font-size: 12px; }
+    .target {
+        font-size: 11.5px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        max-width: 100%;
+    }
     .sev-pill {
         flex-shrink: 0;
         font-size: 10px;

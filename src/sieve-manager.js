@@ -6,8 +6,7 @@ const {
     ManageSieveClient,
     SCRIPT_NAME,
     compileRulesScript,
-    parseRules,
-    parseBlockedRecipients
+    parseRules
 } = require('./sieve-client');
 const { isValidEmail } = require('./utils/email');
 
@@ -35,25 +34,23 @@ function createSieveManager({ db, imapHost, rejectUnauthorized = true, tlsServer
         const domain = recipient.split('@')[1];
         if (!domain) return false;
 
-        // Check if there's an alias address = recipient that forwards to user
-        const [aliasRows] = await db.pool.execute(
-            `SELECT 1 FROM alias
-             WHERE address = ? AND address != goto
-               AND (goto = ? OR goto LIKE CONCAT('%,', ?, ',%') OR goto LIKE CONCAT(?, ',%') OR goto LIKE CONCAT('%,', ?))
-             LIMIT 1`,
-            [recipient, email, email, email, email]
-        );
-        if (aliasRows.length > 0) return true;
+        // goto is a comma-separated list; FIND_IN_SET matches whole entries,
+        // where LIKE would read '_' and '%' in an address as wildcards.
+        async function forwardsToUser(address) {
+            const [rows] = await db.pool.execute(
+                `SELECT 1 FROM alias
+                 WHERE address = ? AND address != goto
+                   AND FIND_IN_SET(?, REPLACE(goto, ' ', '')) > 0
+                 LIMIT 1`,
+                [address, email]
+            );
+            return rows.length > 0;
+        }
 
-        // Check if there's a catch-all alias @domain that forwards to user
-        const [catchAllRows] = await db.pool.execute(
-            `SELECT 1 FROM alias
-             WHERE address = ? AND address != goto
-               AND (goto = ? OR goto LIKE CONCAT('%,', ?, ',%') OR goto LIKE CONCAT(?, ',%') OR goto LIKE CONCAT('%,', ?))
-             LIMIT 1`,
-            [`@${domain}`, email, email, email, email]
-        );
-        if (catchAllRows.length > 0) return true;
+        // An alias address = recipient that forwards to user, or a catch-all
+        // alias @domain that does.
+        if (await forwardsToUser(recipient)) return true;
+        if (await forwardsToUser(`@${domain}`)) return true;
 
         // Check alias_domain: recipient domain might be an alias of a domain the user has access to
         const [aliasDomainRows] = await db.pool.execute(
@@ -62,16 +59,8 @@ function createSieveManager({ db, imapHost, rejectUnauthorized = true, tlsServer
             [domain]
         );
         if (aliasDomainRows.length > 0) {
-            const targetDomain = aliasDomainRows[0].target_domain;
             // Check catch-all on the target domain
-            const [catchAllTarget] = await db.pool.execute(
-                `SELECT 1 FROM alias
-                 WHERE address = ? AND address != goto
-                   AND (goto = ? OR goto LIKE CONCAT('%,', ?, ',%') OR goto LIKE CONCAT(?, ',%') OR goto LIKE CONCAT('%,', ?))
-                 LIMIT 1`,
-                [`@${targetDomain}`, email, email, email, email]
-            );
-            if (catchAllTarget.length > 0) return true;
+            return forwardsToUser(`@${aliasDomainRows[0].target_domain}`);
         }
 
         return false;

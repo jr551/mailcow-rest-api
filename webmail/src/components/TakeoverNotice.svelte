@@ -58,9 +58,11 @@
     }
 
     function handleKey(e: KeyboardEvent) {
-        // Escape always leaves. Enter is deliberately NOT hijacked: it has
-        // a real meaning inside the advice textarea.
-        if (e.key === 'Escape') {
+        // Escape always leaves, but only while a notice is actually showing:
+        // otherwise this always-mounted capture listener would swallow every
+        // Escape in the app. Enter is deliberately NOT hijacked: it has a
+        // real meaning inside the advice textarea.
+        if (e.key === 'Escape' && item) {
             e.preventDefault();
             close();
         }

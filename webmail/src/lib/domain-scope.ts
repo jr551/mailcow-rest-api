@@ -115,7 +115,7 @@ function normaliseDomain(domain: string): string | null {
     // Whitespace and the address delimiters mean this was never a bare host
     // (a full address, a display name, an unparseable header) — refuse it
     // rather than letting the URL parser invent something.
-    if (!raw || /[\s@,;<>"'\\]/.test(raw)) return null;
+    if (!raw || /[\s@,;<>"'\\/?#:%]/.test(raw)) return null;
     let hostname: string;
     try {
         hostname = new URL(`http://${raw}`).hostname;
@@ -130,7 +130,9 @@ function normaliseDomain(domain: string): string | null {
     // charset would happily store. Reject an empty label anywhere, which also
     // catches a leading dot.
     if (!host || host.split('.').some((l) => !l)) return null;
-    return host;
+    // Only what the server's pattern charset accepts (punycode output is
+    // always inside it); anything else would be a 400 at best.
+    return /^[a-z0-9._-]+$/.test(host) ? host : null;
 }
 
 /**
