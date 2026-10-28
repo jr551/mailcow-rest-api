@@ -17,30 +17,31 @@ jobs:
     outputs:
       label: ${{ steps.pick.outputs.label }}
     steps:
-      - id: pick
-        uses: actions/github-script@379587d6aa349658548d8df2da05927763b9fcb8 # v7.1.1
-        with:
-          script: |
-            try {
-              const { data } = await github.rest.actions.listSelfHostedRunnersForRepo({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                per_page: 100
-              });
-              const online = (data.runners || []).filter((r) => r.status === 'online');
-              const home = online.filter((r) => /^(alexpc|matthewpc)$/i.test(r.name));
-              const chosen = home[0] || online[0];
-              if (chosen) {
-                core.info(`Selected self-hosted runner: ${chosen.name}`);
-                core.setOutput('label', chosen.name);
-              } else {
-                core.info('No online self-hosted runners; falling back to ubuntu-latest');
-                core.setOutput('label', 'ubuntu-latest');
-              }
-            } catch (err) {
-              core.warning(`listSelfHostedRunnersForRepo failed (${err.message}); using ubuntu-latest`);
-              core.setOutput('label', 'ubuntu-latest');
-            }
+      - name: Pick runner label
+        id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          names="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runners" \
+            --jq '.runners[] | select(.status=="online") | .name' 2>/dev/null || true)"
+          chosen=""
+          for want in alexpc matthewpc; do
+            if echo "$names" | grep -iq "^${want}$"; then
+              chosen="$want"
+              break
+            fi
+          done
+          if [ -z "$chosen" ] && [ -n "$names" ]; then
+            chosen="$(echo "$names" | head -n1)"
+          fi
+          if [ -n "$chosen" ]; then
+            echo "Using self-hosted runner: $chosen"
+            echo "label=${chosen}" >> "$GITHUB_OUTPUT"
+          else
+            echo "No online self-hosted runners; using ubuntu-latest"
+            echo "label=ubuntu-latest" >> "$GITHUB_OUTPUT"
+          fi
 
   publish:
     needs: resolve-runner
