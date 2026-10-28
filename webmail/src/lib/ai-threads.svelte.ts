@@ -53,7 +53,10 @@ function uid(): string {
     return Math.random().toString(36).slice(2, 11) + Date.now().toString(36);
 }
 
-let scopeUser: string | null = authState.activeUser;
+// Not read from authState here: api.ts reaches this module through
+// settings and error-doctor while auth.svelte.ts is still evaluating, so
+// authState is not ready yet. The effect below sets both on its first run.
+let scopeUser: string | null = null;
 
 function keyFor(base: string, user: string | null = scopeUser): string | null {
     return user ? `${base}.${user}` : null;
@@ -187,7 +190,7 @@ function clearUserStorage(user: string) {
     } catch { /* storage disabled */ }
 }
 
-let knownUsers = authState.sessions.map((s) => s.user);
+let knownUsers: string[] = [];
 $effect.root(() => {
     $effect(() => {
         const users = authState.sessions.map((s) => s.user);

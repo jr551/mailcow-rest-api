@@ -32,7 +32,9 @@ const VIS_KEY = 'webmail.calendar.v1.visibility';
 const DEFAULT_KEY = 'webmail.calendar.v1.default';
 const ALL_KEYS = [CAL_CACHE, SUB_CACHE, EVT_CACHE, VIS_KEY, DEFAULT_KEY];
 
-let scopeUser: string | null = authState.activeUser;
+// Read lazily for the same reason as in ai-threads.svelte.ts: this module is
+// evaluated through an import cycle before authState is ready.
+let scopeUser: string | null = null;
 
 function scoped(base: string, user: string | null = scopeUser): string | null {
     return user ? `${base}.${user}` : null;
@@ -251,7 +253,7 @@ function resetForUser(user: string | null) {
     if (wasActive && user) void loadCalendar();
 }
 
-let knownUsers = authState.sessions.map((s) => s.user);
+let knownUsers: string[] = [];
 $effect.root(() => {
     $effect(() => {
         const users = authState.sessions.map((s) => s.user);
