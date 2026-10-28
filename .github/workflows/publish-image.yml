@@ -45,15 +45,12 @@ jobs:
           if [ -z "$chosen" ] && [ "${#names[@]}" -gt 0 ] && [ -n "${names[0]}" ]; then
             chosen="${names[0]}"
           fi
-          case "$chosen" in
-            alexpc|matthewpc|AlexPC|MatthewPC|ALEXPC|MATTHEWPC)
-              echo "Using self-hosted runner: $chosen"
-              echo "label=${chosen}" >> "$GITHUB_OUTPUT"
-              ;;
-            *)
-              pick_ubuntu
-              ;;
-          esac
+          if [ -n "$chosen" ] && [[ "$chosen" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "Using self-hosted runner: $chosen"
+            echo "label=${chosen}" >> "$GITHUB_OUTPUT"
+          else
+            pick_ubuntu
+          fi
 
   publish:
     needs: resolve-runner
