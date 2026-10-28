@@ -5,13 +5,78 @@ on:
     branches: [master]
   pull_request:
 
+# Public repo: never run on self-hosted home hardware for fork PRs (untrusted code).
 permissions:
+  actions: read
   contents: read
 
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  unit:
+  # Prefer an online self-hosted runner (alexpc / matthewpc when registered).
+  # If none are idle/online, fall back to GitHub-hosted so jobs never queue forever.
+  resolve-runner:
     runs-on: ubuntu-latest
+    outputs:
+      label: ${{ steps.pick.outputs.label }}
     steps:
+      - name: Pick runner label
+        id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          pick_ubuntu() {
+            echo "No online self-hosted runners; using ubuntu-latest"
+            echo "label=ubuntu-latest" >> "$GITHUB_OUTPUT"
+          }
+          if [ "${{ github.event_name }}" = "pull_request" ] \
+            && [ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]; then
+            pick_ubuntu
+            exit 0
+          fi
+          if ! body="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runners" 2>&1)"; then
+            echo "listSelfHostedRunnersForRepo failed: ${body}"
+            pick_ubuntu
+            exit 0
+          fi
+          mapfile -t names < <(echo "$body" | jq -r '.runners[]? | select(.status=="online") | .name')
+          chosen=""
+          for want in alexpc matthewpc; do
+            for n in "${names[@]:-}"; do
+              if [ -n "$n" ] && [ "$(echo "$n" | tr '[:upper:]' '[:lower:]')" = "$want" ]; then
+                chosen="$n"
+                break 2
+              fi
+            done
+          done
+          if [ -z "$chosen" ] && [ "${#names[@]}" -gt 0 ] && [ -n "${names[0]}" ]; then
+            chosen="${names[0]}"
+          fi
+          if [ -n "$chosen" ] && [[ "$chosen" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "Using self-hosted runner: $chosen"
+            echo "label=${chosen}" >> "$GITHUB_OUTPUT"
+          else
+            pick_ubuntu
+          fi
+
+  unit:
+    needs: resolve-runner
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ${{ needs.resolve-runner.outputs.label }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Runner context
+        run: |
+          echo "requested_label=${{ needs.resolve-runner.outputs.label }}"
+          echo "runner_name=${RUNNER_NAME}"
+          echo "runner_os=${RUNNER_OS}"
+          echo "runner_arch=${RUNNER_ARCH}"
+          echo "runner_labels=${RUNNER_LABELS}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -26,11 +91,20 @@ jobs:
   # The image builds the SPA, so a webmail type error or broken build has to
   # fail here rather than at publish time.
   webmail:
-    runs-on: ubuntu-latest
+    needs: resolve-runner
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ${{ needs.resolve-runner.outputs.label }}
     defaults:
       run:
-        working-directory: webmail
+        shell: bash
     steps:
+      - name: Runner context
+        run: |
+          echo "requested_label=${{ needs.resolve-runner.outputs.label }}"
+          echo "runner_name=${RUNNER_NAME}"
+          echo "runner_os=${RUNNER_OS}"
+          echo "runner_arch=${RUNNER_ARCH}"
+          echo "runner_labels=${RUNNER_LABELS}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -38,9 +112,14 @@ jobs:
           cache: npm
           cache-dependency-path: webmail/package-lock.json
       - run: npm ci
+        working-directory: webmail
       - run: npm run check
+        working-directory: webmail
       - run: npm run build
+        working-directory: webmail
       - run: npm run test:unit
+        working-directory: webmail
       # The webmail tree is the larger dependency surface (tldraw, tiptap,
       # pdfjs, pdf-lib, tesseract) — audit it too.
       - run: npm audit --audit-level=high
+        working-directory: webmail
