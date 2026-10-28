@@ -456,7 +456,9 @@ Before a release, all of these must be green, and they must be green
 | Build | `cd webmail && npm run build` | ~10s |
 | E2E | `cd webmail && npm run test:e2e` | ~3min |
 
-CI runs the same set. The e2e job is the slow one and the one that
+CI runs the same set on **self-hosted** repository runners (see
+[`.github/SELF_HOSTED_RUNNERS.md`](.github/SELF_HOSTED_RUNNERS.md)); fork PRs are
+not built on those machines. The e2e job is the slow one and the one that
 matters most: a suite that passes against a stale build is worse than no
 suite, which is why `playwright.config.ts` builds first and never reuses
 an existing preview server.

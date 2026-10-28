@@ -12,8 +12,17 @@ permissions:
 
 jobs:
   publish:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
+    defaults:
+      run:
+        shell: bash
     steps:
+      - name: Runner context
+        run: |
+          echo "runner_name=${RUNNER_NAME}"
+          echo "runner_os=${RUNNER_OS}"
+          echo "runner_arch=${RUNNER_ARCH}"
+          echo "runner_labels=${RUNNER_LABELS}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1

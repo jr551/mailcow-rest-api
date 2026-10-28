@@ -5,13 +5,28 @@ on:
     branches: [master]
   pull_request:
 
+# Public repo: never run on self-hosted home hardware for fork PRs (untrusted code).
 permissions:
   contents: read
 
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   unit:
-    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: self-hosted
+    defaults:
+      run:
+        shell: bash
     steps:
+      - name: Runner context
+        run: |
+          echo "runner_name=${RUNNER_NAME}"
+          echo "runner_os=${RUNNER_OS}"
+          echo "runner_arch=${RUNNER_ARCH}"
+          echo "runner_labels=${RUNNER_LABELS}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -26,11 +41,19 @@ jobs:
   # The image builds the SPA, so a webmail type error or broken build has to
   # fail here rather than at publish time.
   webmail:
-    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: self-hosted
     defaults:
       run:
+        shell: bash
         working-directory: webmail
     steps:
+      - name: Runner context
+        run: |
+          echo "runner_name=${RUNNER_NAME}"
+          echo "runner_os=${RUNNER_OS}"
+          echo "runner_arch=${RUNNER_ARCH}"
+          echo "runner_labels=${RUNNER_LABELS}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
