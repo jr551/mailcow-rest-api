@@ -3,6 +3,22 @@
 All notable changes to this project are documented here. Version numbers follow
 [Semantic Versioning](https://semver.org/) and match `package.json`.
 
+## v0.26.7 — security hardening, webmail trust, CI fallback
+
+### Security & correctness (from #76)
+
+- Telemetry list scoped to authenticated owners; public POST rate-limited with body cap.
+- App passwords cannot create/revoke sessions or use session exchange endpoints.
+- Basic-auth brute-force throttling per IP; capability URLs redacted in logs.
+- Secret-box decrypt pins IV/tag lengths; public ICS feed uses property allow-list.
+- Webmail: trusted-sender and AI consent paths tightened; install path guard in quickstart.
+- Many backend/webmail fixes with expanded unit coverage (911 server tests, 127 webmail unit tests).
+
+### CI (#75)
+
+- **`resolve-runner`** prefers online self-hosted runners (alexpc/matthewpc) when listable, else **ubuntu-latest** so jobs do not queue forever.
+- Fork PRs skip self-hosted test jobs on this public repo.
+
 ## v0.26.6 — mailcow DB hardening, CI, and webhook staging fix
 
 ### Fixed
