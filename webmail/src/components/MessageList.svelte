@@ -5,7 +5,8 @@
     import { capabilities } from '../lib/settings.svelte';
     import Avatar from './Avatar.svelte';
     import VipBadge from './VipBadge.svelte';
-    import { settings, setListFilter, setInboxTab, isVipAddress, type ListFilter } from '../lib/settings.svelte';
+    import { settings, setListFilter, setInboxTab, setReadingPaneLayout, isVipAddress, type ListFilter } from '../lib/settings.svelte';
+    import { READING_PANE_LAYOUTS } from '../lib/reading-pane-layout';
     import { filterMessagesByInboxTab } from '../lib/focused-inbox';
     import { getCachedScan } from '../lib/phishing-scan';
     import Icon from './Icon.svelte';
@@ -1174,6 +1175,19 @@
             {#if !ui.messagesLoading}
                 <span data-testid="msg-count">{ui.messagesTotal} {ui.messagesTotal === 1 ? 'message' : 'messages'}</span>
             {/if}
+            <div class="reading-pane-quick seg compact" role="radiogroup" aria-label="Reading pane" data-testid="reading-pane-layout-quick">
+                {#each READING_PANE_LAYOUTS as layout (layout.id)}
+                    <button
+                        type="button"
+                        role="radio"
+                        class:active={settings.readingPaneLayout === layout.id}
+                        aria-checked={settings.readingPaneLayout === layout.id}
+                        title={layout.outlookLabel}
+                        onclick={() => setReadingPaneLayout(layout.id)}
+                        data-testid={`reading-pane-layout-${layout.id}`}
+                    >{layout.label}</button>
+                {/each}
+            </div>
         </div>
     </header>
 
@@ -2135,6 +2149,28 @@
         align-items: center;
         gap: 12px;
         font-size: 12px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+    }
+    .reading-pane-quick {
+        display: inline-flex;
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-sm);
+        overflow: hidden;
+    }
+    .reading-pane-quick button {
+        border: none;
+        background: transparent;
+        padding: 3px 8px;
+        font-size: 11px;
+        color: var(--text-secondary);
+        cursor: pointer;
+    }
+    .reading-pane-quick button:hover { background: var(--bg-hover); }
+    .reading-pane-quick button.active {
+        background: color-mix(in srgb, var(--accent) 18%, transparent);
+        color: var(--text-primary);
+        font-weight: 600;
     }
     .inbox-tabs {
         flex: 0 0 auto;

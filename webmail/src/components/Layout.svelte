@@ -51,7 +51,8 @@
     import BulkBar from './BulkBar.svelte';
     import { getShortcuts, blockSender as apiBlockSender, bulkDeleteMessages, type Shortcut } from '../lib/api';
     import { shortcutsItems, embeddedShortcut, popupShortcut, safeShortcutUrl } from '../lib/shortcuts-store';
-    import { probeCapabilities, settings, setHideSidebar } from '../lib/settings.svelte';
+    import { probeCapabilities, settings, setHideSidebar, setReadingPaneLayout } from '../lib/settings.svelte';
+    import { readingPaneLayoutFromKeyboard } from '../lib/reading-pane-layout';
     import { findThreadForUid } from '../lib/conversation-view';
     import { SKINS, skinState } from '../lib/skins.svelte';
     import { initImapSync, newThread as newAiThread, appendMessage as appendAiMessage, requestAutoSend as requestAutoSendAi } from '../lib/ai-threads.svelte';
@@ -270,7 +271,8 @@
     // pane absorbs whatever's left. Bounded so neither goes unusable.
     const PANE_KEYS = {
         sidebar: 'webmail.layout.sidebar-width',
-        list: 'webmail.layout.list-width'
+        list: 'webmail.layout.list-width',
+        listHeight: 'webmail.layout.list-height'
     };
     const SIDEBAR_MIN = 180;
     const SIDEBAR_MAX = 360;
@@ -287,6 +289,12 @@
     let listWidth = $state(loadWidth(PANE_KEYS.list, 380, LIST_MIN, LIST_MAX));
     $effect(() => { try { localStorage.setItem(PANE_KEYS.sidebar, String(sidebarWidth)); } catch { /* noop */ } });
     $effect(() => { try { localStorage.setItem(PANE_KEYS.list, String(listWidth)); } catch { /* noop */ } });
+
+    const LIST_HEIGHT_MIN = 160;
+    const LIST_HEIGHT_MAX = 720;
+    const LIST_HEIGHT_DEFAULT = 320;
+    let listHeight = $state(loadWidth(PANE_KEYS.listHeight, LIST_HEIGHT_DEFAULT, LIST_HEIGHT_MIN, LIST_HEIGHT_MAX));
+    $effect(() => { try { localStorage.setItem(PANE_KEYS.listHeight, String(listHeight)); } catch { /* noop */ } });
 
     let dragging = $state(false);
     function makeDragger(getCurrent: () => number, setCurrent: (n: number) => void, lo: number, hi: number) {
@@ -348,6 +356,61 @@
 
     const startSidebarDrag = makeDragger(() => sidebarWidth, (n) => (sidebarWidth = n), SIDEBAR_MIN, SIDEBAR_MAX);
     const startDrag = makeDragger(() => listWidth, (n) => (listWidth = n), LIST_MIN, LIST_MAX);
+
+    function makeVerticalDragger(getCurrent: () => number, setCurrent: (n: number) => void, lo: number, hi: number) {
+        return (e: PointerEvent) => {
+            dragging = true;
+            const startY = e.clientY;
+            const startH = getCurrent();
+            (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+            const move = (ev: PointerEvent) => {
+                const h = startH + (ev.clientY - startY);
+                setCurrent(Math.min(hi, Math.max(lo, h)));
+            };
+            const up = (ev: PointerEvent) => {
+                dragging = false;
+                (e.target as HTMLElement).releasePointerCapture?.(ev.pointerId);
+                window.removeEventListener('pointermove', move);
+                window.removeEventListener('pointerup', up);
+            };
+            window.addEventListener('pointermove', move);
+            window.addEventListener('pointerup', up);
+        };
+    }
+
+    function splitterKeysVertical(
+        e: KeyboardEvent,
+        get: () => number,
+        set: (n: number) => void,
+        min: number,
+        max: number,
+        dflt: number
+    ) {
+        const step = e.shiftKey ? 48 : 16;
+        let next: number | null = null;
+        if (e.key === 'ArrowDown') next = get() + step;
+        else if (e.key === 'ArrowUp') next = get() - step;
+        else if (e.key === 'Home') next = min;
+        else if (e.key === 'End') next = max;
+        else if (e.key === 'Enter' || e.key === ' ') next = dflt;
+        if (next === null) return;
+        e.preventDefault();
+        set(Math.max(min, Math.min(max, next)));
+    }
+
+    const startListHeightDrag = makeVerticalDragger(() => listHeight, (n) => (listHeight = n), LIST_HEIGHT_MIN, LIST_HEIGHT_MAX);
+
+    const dockedReadingPane = $derived(settings.readingPaneLayout !== 'hidden');
+    const readingFlyoutOpen = $derived(
+        settings.readingPaneLayout === 'hidden'
+        && (ui.detail !== null || ui.detailLoading || !!ui.detailError)
+    );
+
+    function closeReadingFlyout() {
+        ui.selectedUid = null;
+        ui.detail = null;
+        ui.detailError = null;
+    }
 
     // --- Mailbox CRUD (right-click in Sidebar) -------------------------
     async function createFolder(parent: string | null) {
@@ -1441,6 +1504,13 @@
             return;
         }
         if (target?.closest?.(OVERLAY_SELECTOR)) return;
+        const paneFromKey = readingPaneLayoutFromKeyboard(e);
+        if (paneFromKey) {
+            setReadingPaneLayout(paneFromKey);
+            showToast('success', `Reading pane: ${paneFromKey === 'hidden' ? 'Hidden' : paneFromKey === 'bottom' ? 'Bottom' : 'Right'}`);
+            e.preventDefault();
+            return;
+        }
         // Only Escape and arrow navigation stay live — the single-key
         // shortcut layer (j/k/r/a/c/s/u/#/?/etc.) was removed.
         const idx = ui.messages.findIndex((m) => m.uid === ui.selectedUid);
@@ -1455,6 +1525,11 @@
             // The compose window closes itself (FloatingPanel) and a
             // minimised one is deliberately parked, so it is left alone here.
             if (ui.composeOpen) return;
+            if (readingFlyoutOpen) {
+                closeReadingFlyout();
+                e.preventDefault();
+                return;
+            }
             if (ui.settingsOpen) ui.settingsOpen = false;
             else if (ui.aiPanelOpen) ui.aiPanelOpen = false;
             else if (ui.selected.size > 0) clearSelection();
@@ -2090,7 +2165,14 @@
         <main
             class="content"
             class:no-selection={!ui.detail}
-            style={`--list-width: ${listWidth}px`}
+            class:layout-right={settings.readingPaneLayout === 'right'}
+            class:layout-bottom={settings.readingPaneLayout === 'bottom'}
+            class:layout-hidden={settings.readingPaneLayout === 'hidden'}
+            style={settings.readingPaneLayout === 'bottom'
+                ? `--list-width: 100%; --list-height: ${listHeight}px`
+                : `--list-width: ${listWidth}px`}
+            data-testid="mail-content"
+            data-reading-pane-layout={settings.readingPaneLayout}
         >
             {#if $embeddedShortcut}
                 <ShortcutEmbed
@@ -2114,24 +2196,39 @@
                 onMove={moveTo}
                 onBlockSender={blockSenderForUid}
             />
+            {#if dockedReadingPane}
             <!-- svelte-ignore a11y_no_noninteractive_tabindex,a11y_no_noninteractive_element_interactions -->
             <!-- Focusable `role="separator"` — the WAI-ARIA window-splitter
                  pattern, same as the sidebar resizer above. -->
             <div
                 class="pane-resizer"
+                class:horizontal={settings.readingPaneLayout === 'bottom'}
                 class:dragging
-                onpointerdown={startDrag}
+                onpointerdown={settings.readingPaneLayout === 'bottom' ? startListHeightDrag : startDrag}
                 role="separator"
-                aria-orientation="vertical"
-                aria-label="Resize message list"
-                aria-valuenow={splitterValue(listWidth, LIST_MIN, LIST_MAX)}
+                aria-orientation={settings.readingPaneLayout === 'bottom' ? 'horizontal' : 'vertical'}
+                aria-label={settings.readingPaneLayout === 'bottom' ? 'Resize message list height' : 'Resize message list'}
+                aria-valuenow={settings.readingPaneLayout === 'bottom'
+                    ? splitterValue(listHeight, LIST_HEIGHT_MIN, LIST_HEIGHT_MAX)
+                    : splitterValue(listWidth, LIST_MIN, LIST_MAX)}
                 aria-valuemin={0}
                 aria-valuemax={100}
-                aria-valuetext={`Message list ${Math.round(listWidth)} pixels`}
+                aria-valuetext={settings.readingPaneLayout === 'bottom'
+                    ? `Message list ${Math.round(listHeight)} pixels tall`
+                    : `Message list ${Math.round(listWidth)} pixels`}
                 title="Drag to resize · arrows to adjust · double-click to reset"
                 tabindex="0"
-                ondblclick={() => (listWidth = LIST_DEFAULT)}
-                onkeydown={(e) => splitterKeys(e, () => listWidth, (n) => (listWidth = n), LIST_MIN, LIST_MAX, LIST_DEFAULT)}
+                ondblclick={() => {
+                    if (settings.readingPaneLayout === 'bottom') listHeight = LIST_HEIGHT_DEFAULT;
+                    else listWidth = LIST_DEFAULT;
+                }}
+                onkeydown={(e) => {
+                    if (settings.readingPaneLayout === 'bottom') {
+                        splitterKeysVertical(e, () => listHeight, (n) => (listHeight = n), LIST_HEIGHT_MIN, LIST_HEIGHT_MAX, LIST_HEIGHT_DEFAULT);
+                    } else {
+                        splitterKeys(e, () => listWidth, (n) => (listWidth = n), LIST_MIN, LIST_MAX, LIST_DEFAULT);
+                    }
+                }}
                 data-testid="pane-resizer"
             ></div>
             <MessageDetail
@@ -2144,7 +2241,39 @@
                 onAi={() => (ui.aiPanelOpen = true)}
             />
             {/if}
+            {/if}
         </main>
+        {#if readingFlyoutOpen}
+            <!-- svelte-ignore a11y_click_events_have_key_events,a11y_no_static_element_interactions -->
+            <div
+                class="reading-flyout-backdrop"
+                role="presentation"
+                onclick={closeReadingFlyout}
+                data-testid="reading-pane-flyout-backdrop"
+            ></div>
+            <aside class="reading-flyout" aria-label="Message" data-testid="reading-pane-flyout">
+                <div class="reading-flyout-bar">
+                    <button
+                        type="button"
+                        class="btn btn-ghost reading-flyout-close"
+                        onclick={closeReadingFlyout}
+                        data-testid="reading-pane-flyout-close"
+                    >
+                        <Icon name="close" size={16} />
+                        Close
+                    </button>
+                </div>
+                <MessageDetail
+                    onReply={(m) => openCompose(m, 'reply')}
+                    onReplyAll={(m) => openCompose(m, 'replyAll')}
+                    onForward={(m) => openCompose(m, 'forward')}
+                    onTrash={trashMessage}
+                    onArchive={archiveMessage}
+                    onMove={moveTo}
+                    onAi={() => (ui.aiPanelOpen = true)}
+                />
+            </aside>
+        {/if}
         {#if ui.aiPanelOpen && settings.aiFeatures}
             <AiPanel onClose={() => (ui.aiPanelOpen = false)} />
         {/if}
@@ -2951,6 +3080,14 @@
         grid-template-columns: var(--list-width, 380px) 6px 1fr;
         min-width: 0;
         min-height: 0;
+        position: relative;
+    }
+    .content.layout-bottom {
+        grid-template-columns: 1fr;
+        grid-template-rows: var(--list-height, 320px) 6px 1fr;
+    }
+    .content.layout-hidden {
+        grid-template-columns: 1fr;
     }
     /* With no message open the reading pane shows only a placeholder, so
        holding most of the width there squeezes sender, subject and the
@@ -2959,6 +3096,13 @@
        the floor. */
     .content.no-selection {
         grid-template-columns: minmax(var(--list-width, 380px), 55%) 6px 1fr;
+    }
+    .content.layout-bottom.no-selection {
+        grid-template-columns: 1fr;
+        grid-template-rows: minmax(var(--list-height, 320px), 55%) 6px 1fr;
+    }
+    .content.layout-hidden.no-selection {
+        grid-template-columns: 1fr;
     }
     .pane-resizer {
         background: transparent;
@@ -3003,9 +3147,64 @@
     .pane-resizer:focus-visible {
         box-shadow: inset 0 0 0 2px var(--accent);
     }
+    .pane-resizer.horizontal {
+        cursor: row-resize;
+        border-left: none;
+        border-right: none;
+        border-top: 1px solid var(--border-subtle);
+        border-bottom: 1px solid var(--border-subtle);
+        grid-column: 1 / -1;
+    }
+    .pane-resizer.horizontal::before {
+        inset: -5px 0;
+        cursor: row-resize;
+    }
+    .pane-resizer.horizontal::after {
+        width: 28px;
+        height: 2px;
+    }
+    .reading-flyout-backdrop {
+        position: fixed;
+        inset: 0;
+        background: color-mix(in srgb, var(--bg-base) 35%, transparent);
+        z-index: 40;
+    }
+    .reading-flyout {
+        position: fixed;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        width: min(560px, 94vw);
+        z-index: 45;
+        display: flex;
+        flex-direction: column;
+        background: var(--bg-base);
+        border-left: 1px solid var(--border-subtle);
+        box-shadow: var(--shadow-lg);
+    }
+    .reading-flyout-bar {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        padding: 8px 10px;
+        border-bottom: 1px solid var(--border-subtle);
+        background: var(--bg-elevated);
+    }
+    .reading-flyout-close {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 13px;
+    }
+    .reading-flyout :global(.detail) {
+        flex: 1;
+        min-height: 0;
+    }
     @media (max-width: 900px) {
         .content { grid-template-columns: 1fr; }
+        .content.layout-bottom { grid-template-rows: auto 1fr; }
         .pane-resizer { display: none; }
+        .reading-flyout { width: 100%; }
     }
     .toast {
         position: fixed;

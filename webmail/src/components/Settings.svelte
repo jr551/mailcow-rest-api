@@ -60,7 +60,7 @@
         setSpamSuggest, setSpamSuggestConfidenceFloor, setSpamSweepBatchSize, setAiSortSweepSpam,
         setVipAddresses, setPreSendCheck, setComposeHistorySummary, setAiSuggestReply,
         aiAvailable, resolveCustomBaseUrl, resolveCustomModel, extractChatText,
-        setCalendarTicker, setCalendarTickerTitles, setWeatherChipOutlook, setLinkSafetyCheck
+        setCalendarTicker, setCalendarTickerTitles, setWeatherChipOutlook, setLinkSafetyCheck, setReadingPaneLayout
     } from '../lib/settings.svelte';
     import { warmupTesseract, teardownTesseract } from '../lib/tesseract-ocr';
     import { linkCheckConfigured } from '../lib/virustotal';
@@ -163,7 +163,7 @@
             id: 'email', label: 'Email', icon: 'inbox',
             sections: [
                 { id: 'message-list', label: 'Message list', icon: 'inbox', keywords: 'page size density group thread chip list' },
-                { id: 'reading-pane', label: 'Reading pane', icon: 'eye', keywords: 'avatar gravatar sender preview' },
+                { id: 'reading-pane', label: 'Reading pane', icon: 'eye', keywords: 'avatar gravatar sender preview layout position bottom right hide' },
                 { id: 'privacy', label: 'Images & privacy', icon: 'shield', keywords: 'remote image proxy ip tracking' },
                 { id: 'compose', label: 'Compose', icon: 'pencil', keywords: 'write send tracker display name from address' },
                 { id: 'smart-suggestions', label: 'Smart suggestions', icon: 'sparkles', keywords: 'subject proofread history summary pre-send' },
@@ -4071,7 +4071,43 @@
             {:else if activeSection === 'reading-pane'}
                 <section class="tab-section" data-testid="settings-reading-pane">
                     <h3>Reading pane</h3>
-                    <p class="muted small">Sender avatars and how the opened message looks.</p>
+                    <p class="muted small">Where opened messages appear — same options as Outlook on the web (View → Reading pane).</p>
+                    <div class="form-row">
+                        <div class="row-text">
+                            <strong>Layout</strong>
+                            <span class="muted">
+                                Right docks the reader beside the list. Bottom stacks the list above the message.
+                                Hidden gives the list full width; selecting a message opens a slide-over panel.
+                                Shortcuts: <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> / <kbd>B</kbd> / <kbd>H</kbd>.
+                            </span>
+                        </div>
+                        <div class="seg" role="radiogroup" aria-label="Reading pane layout">
+                            <button
+                                type="button"
+                                role="radio"
+                                aria-checked={settings.readingPaneLayout === 'right'}
+                                class:active={settings.readingPaneLayout === 'right'}
+                                onclick={() => setReadingPaneLayout('right')}
+                                data-testid="settings-reading-pane-right"
+                            >Right</button>
+                            <button
+                                type="button"
+                                role="radio"
+                                aria-checked={settings.readingPaneLayout === 'bottom'}
+                                class:active={settings.readingPaneLayout === 'bottom'}
+                                onclick={() => setReadingPaneLayout('bottom')}
+                                data-testid="settings-reading-pane-bottom"
+                            >Bottom</button>
+                            <button
+                                type="button"
+                                role="radio"
+                                aria-checked={settings.readingPaneLayout === 'hidden'}
+                                class:active={settings.readingPaneLayout === 'hidden'}
+                                onclick={() => setReadingPaneLayout('hidden')}
+                                data-testid="settings-reading-pane-hidden"
+                            >Hidden</button>
+                        </div>
+                    </div>
                     <h4 class="section-head"><Icon name="eye" size={13} /> Avatars</h4>
                 <div class="form-row">
                     <div class="row-text">
