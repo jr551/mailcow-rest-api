@@ -5,7 +5,8 @@
     import { capabilities } from '../lib/settings.svelte';
     import Avatar from './Avatar.svelte';
     import VipBadge from './VipBadge.svelte';
-    import { settings, setListFilter, isVipAddress, type ListFilter } from '../lib/settings.svelte';
+    import { settings, setListFilter, setInboxTab, isVipAddress, type ListFilter } from '../lib/settings.svelte';
+    import { filterMessagesByInboxTab } from '../lib/focused-inbox';
     import { getCachedScan } from '../lib/phishing-scan';
     import Icon from './Icon.svelte';
     import { buildThreads, type Thread } from '../lib/threads';
@@ -629,11 +630,17 @@
     // Attachments filter works without a per-row round-trip.
     const filtered = $derived.by(() => {
         const f = settings.listFilter;
-        if (f === 'all' || f === 'ai-sorted') return ui.messages;
-        if (f === 'unread') return ui.messages.filter((m) => !m.flags.includes('\\Seen'));
-        if (f === 'starred') return ui.messages.filter((m) => m.flags.includes('\\Flagged'));
-        if (f === 'attachments') return ui.messages.filter((m) => !!m.hasAttachments);
-        return ui.messages;
+        let list: MessageListItem[];
+        if (f === 'all' || f === 'ai-sorted') list = ui.messages;
+        else if (f === 'unread') list = ui.messages.filter((m) => !m.flags.includes('\\Seen'));
+        else if (f === 'starred') list = ui.messages.filter((m) => m.flags.includes('\\Flagged'));
+        else if (f === 'attachments') list = ui.messages.filter((m) => !!m.hasAttachments);
+        else list = ui.messages;
+
+        if (showInboxTabs) {
+            list = filterMessagesByInboxTab(list, settings.inboxTab, { isVip: isVipAddress });
+        }
+        return list;
     });
 
     // A message the active filter hides must not stay selected: BulkBar acts
@@ -1137,6 +1144,11 @@
         return last.charAt(0).toUpperCase() + last.slice(1);
     }
 
+    const showInboxTabs = $derived(
+        !ui.search
+        && (ui.selectedPath || '').toUpperCase() === 'INBOX'
+    );
+
     // Slow-load detector. Quick loads (cached / cache-warm IMAP folders)
     // shouldn't flash an overlay — only show it after ~280ms of waiting,
     // long enough that the user has registered the folder switch and
@@ -1164,6 +1176,27 @@
             {/if}
         </div>
     </header>
+
+    {#if showInboxTabs}
+        <nav class="inbox-tabs" aria-label="Inbox view" data-testid="inbox-tabs">
+            <button
+                type="button"
+                class="inbox-tab"
+                class:active={settings.inboxTab === 'focused'}
+                aria-pressed={settings.inboxTab === 'focused'}
+                onclick={() => setInboxTab('focused')}
+                data-testid="inbox-tab-focused"
+            >Focused</button>
+            <button
+                type="button"
+                class="inbox-tab"
+                class:active={settings.inboxTab === 'other'}
+                aria-pressed={settings.inboxTab === 'other'}
+                onclick={() => setInboxTab('other')}
+                data-testid="inbox-tab-other"
+            >Other</button>
+        </nav>
+    {/if}
 
     <nav class="filter-chips" aria-label="Filter messages" data-testid="filter-chips">
         <!-- AI action group: labelled segmented control so the three AI
@@ -1437,6 +1470,24 @@
         <div class="state empty muted">
             <Icon name="inbox" size={32} />
             <p>{ui.search ? 'No matches found.' : 'This folder is empty.'}</p>
+        </div>
+    {:else if filtered.length === 0 && showInboxTabs && settings.listFilter === 'all' && ui.messages.length > 0}
+        <div class="state empty muted" data-testid="inbox-tab-empty">
+            <Icon name="inbox" size={32} />
+            <p>
+                {#if settings.inboxTab === 'other'}
+                    Nothing in Other right now. Personal mail and replies show under Focused.
+                {:else}
+                    Nothing in Focused right now. Newsletters and notifications may be under Other.
+                {/if}
+            </p>
+            <button
+                type="button"
+                class="btn btn-ghost"
+                onclick={() => setInboxTab(settings.inboxTab === 'focused' ? 'other' : 'focused')}
+            >
+                Switch to {settings.inboxTab === 'focused' ? 'Other' : 'Focused'}
+            </button>
         </div>
     {:else if filtered.length === 0 && settings.listFilter !== 'all'}
         <div class="state empty muted">
@@ -2084,6 +2135,43 @@
         align-items: center;
         gap: 12px;
         font-size: 12px;
+    }
+    .inbox-tabs {
+        flex: 0 0 auto;
+        display: flex;
+        gap: 0;
+        padding: 0 12px;
+        border-bottom: 1px solid var(--border-subtle);
+        background: var(--bg-surface);
+    }
+    .inbox-tab {
+        position: relative;
+        padding: 10px 14px 8px;
+        border: none;
+        background: transparent;
+        font: inherit;
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--text-secondary);
+        cursor: pointer;
+        border-radius: 0;
+    }
+    .inbox-tab:hover {
+        color: var(--text-primary);
+        background: color-mix(in srgb, var(--accent) 6%, transparent);
+    }
+    .inbox-tab.active {
+        color: var(--accent-text);
+    }
+    .inbox-tab.active::after {
+        content: '';
+        position: absolute;
+        left: 8px;
+        right: 8px;
+        bottom: 0;
+        height: 2px;
+        border-radius: 2px 2px 0 0;
+        background: var(--accent);
     }
     /* Glowing accent button for the AI inbox briefing — sweeps a subtle
      * shimmer across itself so the eye finds it even at a glance. */

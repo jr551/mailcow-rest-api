@@ -28,6 +28,8 @@ export interface LlmConfig {
 
 export type Density = 'comfortable' | 'compact';
 export type ListFilter = 'all' | 'unread' | 'starred' | 'attachments' | 'ai-sorted';
+export type { InboxTab } from './focused-inbox';
+import type { InboxTab } from './focused-inbox';
 
 export interface Settings {
     llm: LlmConfig;
@@ -49,6 +51,8 @@ export interface Settings {
     aiFeatures: boolean;
     density: Density;
     listFilter: ListFilter;
+    /** INBOX-only tab: Focused vs Other (Outlook parity). Default Focused. */
+    inboxTab: InboxTab;
     /** User-supplied system prompt for the AI surface. Empty → use the built-in default. */
     aiSystemPrompt: string;
     /** What the top-right account chip shows: 'email' or 'name'. */
@@ -223,6 +227,7 @@ export function sanitizeSettings(raw: unknown): Settings {
         aiFeatures: parsed.aiFeatures !== false,
         density: parsed.density === 'compact' ? 'compact' : 'comfortable',
         listFilter: (['all', 'unread', 'starred', 'attachments', 'ai-sorted'] as const).find((f) => f === parsed.listFilter) ?? 'all',
+        inboxTab: parsed.inboxTab === 'other' ? 'other' : 'focused',
         aiSystemPrompt: str(parsed.aiSystemPrompt),
         accountChipDisplay: parsed.accountChipDisplay === 'name' ? 'name' : 'email',
         defaultFromAddress: str(parsed.defaultFromAddress),
@@ -443,6 +448,11 @@ export function setDensity(d: Density) {
 
 export function setListFilter(f: ListFilter) {
     state.listFilter = f;
+    persist(state);
+}
+
+export function setInboxTab(tab: InboxTab) {
+    state.inboxTab = tab;
     persist(state);
 }
 
