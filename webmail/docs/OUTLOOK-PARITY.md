@@ -16,7 +16,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 | **Folder pane** | `Sidebar.svelte` tree, drag-drop move, shortcuts row | Medium: no Favorites pin list separate from tree; no groups |
 | **Message list** | `MessageList.svelte`, density, filters (All/Unread/Starred/Attachments), optional AI sort | Medium: no quick categories/colour tags |
 | **Focused / Other** | `focused-inbox.ts` + INBOX tabs | Low–medium: optional AI refinement later |
-| **Reading pane** | `MessageDetail.svelte`, reply/forward, conversation stack when grouped | Medium: no pane position (right/bottom/off) |
+| **Reading pane** | `MessageDetail.svelte`, reply/forward, conversation stack when grouped | Low–medium: richer HTML parity; pane position done (slice 3) |
 | **Conversation view** | List grouping via `threads.ts`; reading-pane stack via `conversation-view.ts` + `ConversationStack.svelte` | Medium: attachments per message in stack; richer HTML parity |
 | **Compose** | `Compose.svelte` + `FloatingPanel.svelte`, TipTap | Medium: no scheduled send, undo send, sensitivity labels |
 | **Search** | Header search + tag syntax; folder vs all scope | Medium: no unified People/Files search; no saved searches |
@@ -32,8 +32,8 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 ### P0 — Layout & mail core (no AI required)
 
 1. **Focused / Other inbox tabs** on INBOX (deterministic rules; optional AI refinement later) — **slice 1 (done)**.
-2. **Reading-pane conversation view**: stack thread messages in `MessageDetail` when `groupThreads` is on — **slice 2 (this PR)**.
-3. **Reading pane layout** setting: right (default) / bottom / hidden (OWA “Reading pane”).
+2. **Reading-pane conversation view**: stack thread messages in `MessageDetail` when `groupThreads` is on — **slice 2 (done)**.
+3. **Reading pane layout** setting: right (default) / bottom / hidden (OWA “Reading pane”) — **slice 3 (this PR)**.
 4. **Favorites** above folder tree (pinned folders, localStorage).
 
 ### P1 — Search & triage
@@ -72,7 +72,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 2 (implemented in this PR)
+## Slice 2 (done)
 
 - **`webmail/src/lib/conversation-view.ts`**: thread lookup, chronological order, expand/collapse rules.
 - **`ConversationStack.svelte`**: Outlook-style transcript in the reading pane (selected message expanded, older siblings collapsed with “Show message”).
@@ -83,9 +83,20 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 3 (implemented in this PR)
+
+- **`webmail/src/lib/reading-pane-layout.ts`**: layout type, sanitise, keyboard chords (Alt+Shift+R/B/H).
+- **`settings.readingPaneLayout`**: persisted `right` | `bottom` | `hidden` (default right).
+- **`Layout.svelte`**: grid layouts for right/bottom; hidden mode uses full-width list + slide-over flyout when a message is open; resizable list height in bottom mode.
+- **`Settings.svelte`** + **`MessageList.svelte`**: Outlook-style layout picker and quick header control.
+- Tests: unit (`reading-pane-layout.test.mjs`) + Playwright (`outlook-reading-pane-layout.spec.ts`) against API mocks.
+- Screenshots: `webmail/docs/assets/outlook-slice3/30-reading-pane-bottom.png`, `31-reading-pane-hidden-flyout.png`.
+
+---
+
 ## Next planned slice
 
-**Reading pane layout** setting: right (default) / bottom / hidden, matching OWA’s “Reading pane” options.
+**Favorites** above folder tree (pinned folders, localStorage), matching OWA’s Favorites section.
 
 ---
 

@@ -51,6 +51,11 @@ execFileSync(
     ['--loader:.ts=ts', '--format=esm', `--outfile=${path.join(tmp, 'settings.mjs')}`, settingsPath],
     { stdio: 'pipe' }
 );
+execFileSync(
+    path.join(webmailRoot, 'node_modules/.bin/esbuild'),
+    ['--loader:.ts=ts', '--format=esm', `--outfile=${path.join(tmp, 'reading-pane-layout.mjs')}`, path.join(webmailRoot, 'src/lib/reading-pane-layout.ts')],
+    { stdio: 'pipe' }
+);
 
 // The module's two local imports pull in Svelte runes and a browser API we
 // don't have, so they are rewritten to point at a stub module. The real
@@ -65,9 +70,10 @@ writeFileSync(path.join(tmp, 'stubs.mjs'),
     + 'export const dropPermanentSession = () => {};\n');
 
 const stubsUrl = pathToFileURL(path.join(tmp, 'stubs.mjs')).href;
+const readingPaneUrl = pathToFileURL(path.join(tmp, 'reading-pane-layout.mjs')).href;
 const rewritten = readFileSync(path.join(tmp, 'settings.mjs'), 'utf8').replace(
     /from\s+"\.\/[^"]*"/g,
-    `from "${stubsUrl}"`
+    (m) => (m.includes('reading-pane-layout') ? `from "${readingPaneUrl}"` : `from "${stubsUrl}"`)
 );
 writeFileSync(path.join(tmp, 'settings.mjs'), rewritten);
 
