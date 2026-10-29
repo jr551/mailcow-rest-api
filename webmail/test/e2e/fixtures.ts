@@ -56,6 +56,22 @@ export const messages = [
         }
     },
     {
+        uid: 997,
+        seq: -3,
+        flags: ['\\Seen'],
+        size: 180,
+        internalDate: '2026-04-26T12:00:00Z',
+        envelope: {
+            date: '2026-04-26T12:00:00Z',
+            subject: 'lunch on Friday?',
+            from: [{ name: 'Sam', address: 'sam@friend.example' }],
+            to: [{ name: null, address: MOCK_USER }],
+            cc: [],
+            messageId: '<lunch-1@friend>',
+            inReplyTo: null
+        }
+    },
+    {
         uid: 999,
         seq: -1,
         flags: ['\\Seen', '\\Flagged'],
@@ -68,7 +84,7 @@ export const messages = [
             to: [{ name: null, address: MOCK_USER }],
             cc: [],
             messageId: '<lunch-2@friend>',
-            inReplyTo: null
+            inReplyTo: '<lunch-1@friend>'
         }
     },
     {
@@ -124,6 +140,35 @@ export const detailFor998 = {
     text:
         'This is an open-tracking notification.\n\n' +
         'The recipient opened your email at 2026-04-26 14:22:00 UTC.',
+    html: null,
+    attachments: []
+};
+
+export const detailFor999 = {
+    uid: 999,
+    seq: -1,
+    flags: ['\\Seen', '\\Flagged'],
+    size: 200,
+    internalDate: '2026-04-27T08:00:00Z',
+    envelope: envelopeFor(999),
+    text:
+        'Sounds good — noon at the usual place?\n\n' +
+        '— Sam',
+    html: null,
+    attachments: []
+};
+
+export const detailFor997 = {
+    uid: 997,
+    seq: -3,
+    flags: ['\\Seen'],
+    size: 180,
+    internalDate: '2026-04-26T12:00:00Z',
+    envelope: envelopeFor(997),
+    text:
+        'Hey!\n\n' +
+        'Are you free for lunch on Friday? I was thinking we could try the new place on Main.\n\n' +
+        'Sam',
     html: null,
     attachments: []
 };
@@ -582,7 +627,7 @@ export async function applyMocks(page: Page) {
         const withCounts = request.url().includes('counts=true');
         const enriched = withCounts ? mailboxes.map((m, i) => ({
             ...m,
-            totalMessages: i === 0 ? 4 : 0,
+            totalMessages: i === 0 ? 5 : 0,
             unseen: i === 0 ? 1 : 0
         })) : mailboxes;
         route.fulfill({
@@ -619,6 +664,22 @@ export async function applyMocks(page: Page) {
             status: 200,
             contentType: 'application/json',
             body: JSON.stringify(detailFor998)
+        });
+    });
+
+    await page.route('**/v1/mailboxes/INBOX/messages/999', (route) => {
+        route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify(detailFor999)
+        });
+    });
+
+    await page.route('**/v1/mailboxes/INBOX/messages/997', (route) => {
+        route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify(detailFor997)
         });
     });
 

@@ -21,6 +21,10 @@ export interface UiState {
     detail: MessageDetail | null;
     detailLoading: boolean;
     detailError: string | null;
+    /** When thread grouping is on, full thread shown in the reading pane. */
+    conversationStack: { threadId: string; uids: number[] } | null;
+    conversationDetails: Record<number, MessageDetail>;
+    conversationLoading: boolean;
     composeOpen: boolean;
     composeContext: {
         replyTo?: MessageDetail | null;
@@ -111,6 +115,9 @@ const initial: UiState = {
     detail: null,
     detailLoading: false,
     detailError: null,
+    conversationStack: null,
+    conversationDetails: {},
+    conversationLoading: false,
     composeOpen: false,
     composeContext: null,
     settingsOpen: false,
