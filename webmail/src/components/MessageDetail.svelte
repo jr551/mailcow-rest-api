@@ -30,6 +30,7 @@
     import { listMailboxes, moveMessage } from '../lib/api';
     import type { Attachment, MessageDetail } from '../lib/api';
     import MenuSubmenu, { type SubmenuItem } from './MenuSubmenu.svelte';
+    import ConversationStack from './ConversationStack.svelte';
 
     interface Props {
         onReply: (replyTo: MessageDetail) => void;
@@ -64,6 +65,10 @@
     $effect(() => {
         if (ui.detail) shown = ui.detail;
     });
+
+    const showConversationStack = $derived(
+        !!ui.conversationStack && (ui.conversationStack.uids.length > 1)
+    );
     // --- Phishing scan -----------------------------------------------
     let phishingScanning = $state(false);
     let phishingResult = $state<PhishingScanResult | null>(null);
@@ -1968,7 +1973,9 @@
                     </button>
                 </div>
             {/if}
-            {#if viewMode(d) === 'html'}
+            {#if showConversationStack}
+                <ConversationStack focusUid={d.uid} />
+            {:else if viewMode(d) === 'html'}
                 <!-- No `blurred` / remote-overlay branch any more: remote
                      images are always allowed, so there is no permission
                      state left for an overlay to describe. The frame only

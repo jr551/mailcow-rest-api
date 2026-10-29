@@ -18,7 +18,8 @@
         apiUrl,
         ApiError,
         type MailboxInfo,
-        type MessageListItem
+        type MessageListItem,
+        type MessageDetail as MessageDetailBody
     } from '../lib/api';
     import Icon from './Icon.svelte';
     import Sidebar from './Sidebar.svelte';
@@ -51,6 +52,7 @@
     import { getShortcuts, blockSender as apiBlockSender, bulkDeleteMessages, type Shortcut } from '../lib/api';
     import { shortcutsItems, embeddedShortcut, popupShortcut, safeShortcutUrl } from '../lib/shortcuts-store';
     import { probeCapabilities, settings, setHideSidebar } from '../lib/settings.svelte';
+    import { findThreadForUid } from '../lib/conversation-view';
     import { SKINS, skinState } from '../lib/skins.svelte';
     import { initImapSync, newThread as newAiThread, appendMessage as appendAiMessage, requestAutoSend as requestAutoSendAi } from '../lib/ai-threads.svelte';
     import { clearSelection, selectAllVisible } from '../lib/store.svelte';
@@ -659,10 +661,53 @@
         scanAllPages(filter !== 'all' ? filter : (search ? 'search' : 'load'));
     });
 
+    function resetConversationStack() {
+        ui.conversationStack = null;
+        ui.conversationDetails = {};
+        ui.conversationLoading = false;
+    }
+
+    async function loadConversationStackForSelection(path: string, uid: number) {
+        resetConversationStack();
+        if (!settings.groupThreads) return;
+        const thread = findThreadForUid(ui.messages, uid);
+        if (!thread || thread.count <= 1) return;
+        ui.conversationStack = {
+            threadId: thread.id,
+            uids: thread.messages.map((m) => m.uid)
+        };
+        ui.conversationLoading = true;
+        const user = currentUser();
+        const details: Record<number, MessageDetailBody> = {};
+        const threadId = thread.id;
+        try {
+            await Promise.all(
+                thread.messages.map(async (m) => {
+                    try {
+                        let body = await cache.getMessageBody(user, path, m.uid);
+                        if (!body) {
+                            body = await getMessage(path, m.uid);
+                            cache.putMessageBody(user, path, m.uid, body);
+                        }
+                        details[m.uid] = body;
+                    } catch {
+                        /* sibling bodies are best-effort */
+                    }
+                })
+            );
+            if (ui.selectedUid === uid && ui.conversationStack?.threadId === threadId) {
+                ui.conversationDetails = details;
+            }
+        } finally {
+            if (ui.selectedUid === uid) ui.conversationLoading = false;
+        }
+    }
+
     async function selectMessage(uid: number) {
         ui.selectedUid = uid;
         ui.detail = null;
         ui.detailError = null;
+        resetConversationStack();
         ui.aiSummary = null;
         ui.aiDraft = null;
         ui.aiActions = null;
@@ -736,6 +781,9 @@
         } finally {
             ui.detailLoading = false;
         }
+        if (ui.detail && ui.selectedPath) {
+            void loadConversationStackForSelection(ui.selectedPath, uid);
+        }
     }
 
     async function selectMailbox(path: string) {
@@ -748,6 +796,7 @@
         ui.selectedPath = path;
         ui.selectedUid = null;
         ui.detail = null;
+        resetConversationStack();
         ui.search = '';
         searchInput = '';
         recordView({ kind: 'folder', title: path });
@@ -760,6 +809,9 @@
             messages: [],
             selectedUid: null,
             detail: null,
+            conversationStack: null,
+            conversationDetails: {},
+            conversationLoading: false,
             search: '',
             messagesPage: 0
         });

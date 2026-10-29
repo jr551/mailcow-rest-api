@@ -14,10 +14,10 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 |------------------|-------|--------------|
 | **App chrome / command bar** | Outlook skin default (`skins.svelte.ts`), top search, account menu, app rail (Mail / Calendar / AI / Drive) | Medium: rail is broader than OWA; unify launcher later |
 | **Folder pane** | `Sidebar.svelte` tree, drag-drop move, shortcuts row | Medium: no Favorites pin list separate from tree; no groups |
-| **Message list** | `MessageList.svelte`, density, filters (All/Unread/Starred/Attachments), optional AI sort | High: no Focused/Other (until slice 1); no quick categories/colour tags |
-| **Focused / Other** | Was AI-sort only | **High** — slice 1 adds deterministic Focused/Other tabs on INBOX |
-| **Reading pane** | `MessageDetail.svelte`, single message, reply/forward | High: no conversation stack in pane; no pane position (right/bottom/off) |
-| **Conversation view** | List grouping via `threads.ts` + expand chevron | High: not OWA-style transcript in reading pane |
+| **Message list** | `MessageList.svelte`, density, filters (All/Unread/Starred/Attachments), optional AI sort | Medium: no quick categories/colour tags |
+| **Focused / Other** | `focused-inbox.ts` + INBOX tabs | Low–medium: optional AI refinement later |
+| **Reading pane** | `MessageDetail.svelte`, reply/forward, conversation stack when grouped | Medium: no pane position (right/bottom/off) |
+| **Conversation view** | List grouping via `threads.ts`; reading-pane stack via `conversation-view.ts` + `ConversationStack.svelte` | Medium: attachments per message in stack; richer HTML parity |
 | **Compose** | `Compose.svelte` + `FloatingPanel.svelte`, TipTap | Medium: no scheduled send, undo send, sensitivity labels |
 | **Search** | Header search + tag syntax; folder vs all scope | Medium: no unified People/Files search; no saved searches |
 | **Settings shell** | `Settings.svelte` 3-column Outlook-like modal, 19 sections | Low–medium: content differs; AI defaults still need hard-off-by-default pass |
@@ -31,8 +31,8 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ### P0 — Layout & mail core (no AI required)
 
-1. **Focused / Other inbox tabs** on INBOX (deterministic rules; optional AI refinement later) — **slice 1 (this PR)**.
-2. **Reading-pane conversation view**: stack thread messages in `MessageDetail` when `groupThreads` is on.
+1. **Focused / Other inbox tabs** on INBOX (deterministic rules; optional AI refinement later) — **slice 1 (done)**.
+2. **Reading-pane conversation view**: stack thread messages in `MessageDetail` when `groupThreads` is on — **slice 2 (this PR)**.
 3. **Reading pane layout** setting: right (default) / bottom / hidden (OWA “Reading pane”).
 4. **Favorites** above folder tree (pinned folders, localStorage).
 
@@ -62,7 +62,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 1 (implemented in this PR)
+## Slice 1 (merged)
 
 - **`webmail/src/lib/focused-inbox.ts`**: classify messages into Focused vs Other without AI.
 - **`MessageList.svelte`**: Outlook-style **Focused | Other** tabs when viewing INBOX (hidden during search or other folders).
@@ -72,9 +72,20 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 2 (implemented in this PR)
+
+- **`webmail/src/lib/conversation-view.ts`**: thread lookup, chronological order, expand/collapse rules.
+- **`ConversationStack.svelte`**: Outlook-style transcript in the reading pane (selected message expanded, older siblings collapsed with “Show message”).
+- **`Layout.svelte`**: loads sibling message bodies when `groupThreads` is on and the selection is part of a multi-message thread.
+- **`store.svelte.ts`**: `conversationStack`, `conversationDetails`, `conversationLoading`.
+- Tests: unit (`conversation-view.test.mjs`) + Playwright (`outlook-conversation-view.spec.ts`) with threaded fixtures.
+- Screenshots: `webmail/docs/assets/outlook-slice2/28-conversation-stack-collapsed.png`, `29-conversation-stack-expanded.png`.
+
+---
+
 ## Next planned slice
 
-**Reading-pane conversation view**: when conversation grouping is enabled, show the full thread in the reading pane (newest expanded, older collapsed), matching Outlook’s conversation reading experience—not only a single selected message.
+**Reading pane layout** setting: right (default) / bottom / hidden, matching OWA’s “Reading pane” options.
 
 ---
 
@@ -82,6 +93,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 - Desktop layout: `webmail/src/components/Layout.svelte`
 - List / filters: `webmail/src/components/MessageList.svelte`
-- Reading: `webmail/src/components/MessageDetail.svelte`
+- Reading: `webmail/src/components/MessageDetail.svelte`, `ConversationStack.svelte`
+- Thread grouping: `webmail/src/lib/threads.ts`
 - Settings: `webmail/src/components/Settings.svelte`
 - E2E mocks: `webmail/test/e2e/fixtures.ts`
