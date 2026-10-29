@@ -122,5 +122,6 @@ function createIpAllowHook({ allowlist }) {
 module.exports = {
     parseAllowlist,
     isAllowed,
+    LOOPBACK_RULES,
     createIpAllowHook
 };

@@ -68,16 +68,33 @@ function dropFrom(list: string[], value: string) {
     if (idx >= 0) list.splice(idx, 1);
 }
 
-/** "Not spam" — add the sender to trusted lists and remove from spam. */
+/** "Not spam" — trust this exact address and remove it from the spam
+ *  lists. Never trusts the whole domain: a click on one gmail.com sender
+ *  must not switch scanning off for every gmail.com sender. */
 export function markTrusted(address: string | null | undefined) {
     if (!address) return;
     const a = normalise(address);
-    const d = domainOf(a);
     pushUnique(_state.trustedAddresses, a);
-    if (d) pushUnique(_state.trustedDomains, d);
     dropFrom(_state.spamAddresses, a);
-    if (d) dropFrom(_state.spamDomains, d);
     write(_state);
+}
+
+// Shared mailbox providers: trusting the domain would trust every stranger on it.
+const FREE_MAIL_DOMAINS = new Set([
+    'gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'live.com', 'msn.com',
+    'yahoo.com', 'ymail.com', 'icloud.com', 'me.com', 'mac.com', 'proton.me', 'protonmail.com',
+    'aol.com', 'mail.com', 'zoho.com', 'gmx.com', 'gmx.net'
+]);
+
+/** Explicit "trust this whole domain" (Settings). Refuses free-mail
+ *  providers; returns whether the domain was added. */
+export function addTrustedDomain(domain: string | null | undefined): boolean {
+    const d = normalise((domain || '').replace(/^@/, ''));
+    if (!d || d.includes('@') || FREE_MAIL_DOMAINS.has(d)) return false;
+    pushUnique(_state.trustedDomains, d);
+    dropFrom(_state.spamDomains, d);
+    write(_state);
+    return true;
 }
 
 /** "This is spam" — add to spam lists and remove from trusted. */
@@ -93,8 +110,8 @@ export function markSpam(address: string | null | undefined) {
 }
 
 /** Returns true when the sender (address or its domain) was previously
- *  marked as trusted. Used to skip the phishing/spam scan entirely so
- *  known-good correspondents don't burn LLM tokens. */
+ *  marked as trusted. The caller decides whether that is enough to skip
+ *  the phishing/spam scan (it should not be when SPF/DKIM/DMARC fail). */
 export function isTrustedSender(address: string | null | undefined): boolean {
     if (!address) return false;
     const a = normalise(address);
@@ -103,16 +120,10 @@ export function isTrustedSender(address: string | null | undefined): boolean {
     return !!d && _state.trustedDomains.includes(d);
 }
 
-/** Drops a single trusted address (and the domain entry if no other
- *  address from that domain remains). Used by Settings UI. */
+/** Drops a single trusted address. Domain entries are explicit and are
+ *  removed separately. Used by Settings UI. */
 export function removeTrusted(address: string) {
-    const a = normalise(address);
-    dropFrom(_state.trustedAddresses, a);
-    const d = domainOf(a);
-    if (d) {
-        const stillHasDomain = _state.trustedAddresses.some((x) => domainOf(x) === d);
-        if (!stillHasDomain) dropFrom(_state.trustedDomains, d);
-    }
+    dropFrom(_state.trustedAddresses, address);
     write(_state);
 }
 

@@ -27,7 +27,7 @@
 import {
     listMessages, getRawMessage, appendRawMessage, createMailbox, deleteMessage
 } from './api';
-import { settings, type Settings } from './settings.svelte';
+import { settings, sanitizeSettings, type Settings } from './settings.svelte';
 import { spamFeedback, type SpamFeedback } from './spam-feedback.svelte';
 import { getSession } from './auth.svelte';
 
@@ -37,12 +37,23 @@ const PUSH_DEBOUNCE_MS = 5000;
 // Keep the last few snapshots around. If a future device's pull races
 // with a push that's mid-write, the previous snapshot is still readable.
 const KEEP_HISTORY = 3;
+// Settings that stay on the device they were set on. The LLM provider block
+// carries the user's API key and the endpoint that key is sent to, and
+// permanentSignIn decides whether credentials are kept in the browser: none
+// of that belongs in a mailbox folder, and none of it should be settable
+// from one.
+const LOCAL_ONLY_SETTINGS: ReadonlySet<string> = new Set(['llm', 'useCustomLlm', 'permanentSignIn']);
+// A snapshot stamped further ahead than this is treated as if it were from
+// now, so one bad timestamp cannot make every later pull look stale.
+const MAX_CLOCK_SKEW_MS = 5 * 60 * 1000;
+const MAX_FEEDBACK_ENTRIES = 200;
+const MAX_FEEDBACK_ENTRY_LEN = 320;
 
 export interface SettingsSnapshot {
     v: 1;
     ts: number;
     settings: Partial<Settings>;
-    spamFeedback?: SpamFeedback;
+    spamFeedback?: Partial<SpamFeedback>;
 }
 
 let lastPullTs = 0;
@@ -51,11 +62,13 @@ let pushTimer: ReturnType<typeof setTimeout> | null = null;
 let inflightPush: Promise<void> | null = null;
 let pulledOnce = false;
 
-function snapshotNow(): SettingsSnapshot {
+export function snapshotNow(): SettingsSnapshot {
+    const synced: Record<string, unknown> = { ...settings };
+    for (const k of LOCAL_ONLY_SETTINGS) delete synced[k];
     return {
         v: 1,
         ts: Date.now(),
-        settings: { ...settings },
+        settings: synced as Partial<Settings>,
         spamFeedback: {
             trustedDomains: [...spamFeedback.trustedDomains],
             trustedAddresses: [...spamFeedback.trustedAddresses],
@@ -94,13 +107,50 @@ function parseSnapshotFromRfc822(raw: string): SettingsSnapshot | null {
     const idx = raw.search(/\r?\n\r?\n/);
     const body = idx >= 0 ? raw.slice(idx).replace(/^\r?\n\r?\n/, '') : raw;
     try {
-        const parsed = JSON.parse(body);
-        if (parsed && parsed.v === 1 && typeof parsed.ts === 'number'
-            && parsed.settings && typeof parsed.settings === 'object') {
-            return parsed as SettingsSnapshot;
-        }
+        return sanitizeSnapshot(JSON.parse(body));
     } catch { /* not our JSON */ }
     return null;
+}
+
+function sanitizeList(v: unknown): string[] | undefined {
+    if (!Array.isArray(v)) return undefined;
+    return v
+        .filter((x): x is string => typeof x === 'string' && x.length <= MAX_FEEDBACK_ENTRY_LEN)
+        .slice(0, MAX_FEEDBACK_ENTRIES);
+}
+
+/** Reduce an untrusted decoded snapshot to what this client will apply:
+ *  only known, synced settings with validated values, string-array spam
+ *  lists, and a timestamp that is not in the far future. */
+export function sanitizeSnapshot(parsed: unknown): SettingsSnapshot | null {
+    const p = parsed as Record<string, unknown> | null;
+    if (!p || p.v !== 1 || typeof p.ts !== 'number' || !Number.isFinite(p.ts)) return null;
+    const incoming = p.settings;
+    if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) return null;
+    // sanitizeSettings fills every gap with a default, so only the keys the
+    // remote actually sent are carried over.
+    const clean = sanitizeSettings(incoming) as unknown as Record<string, unknown>;
+    const synced: Record<string, unknown> = {};
+    for (const k of Object.keys(incoming)) {
+        if (LOCAL_ONLY_SETTINGS.has(k) || !Object.hasOwn(clean, k)) continue;
+        if ((incoming as Record<string, unknown>)[k] === undefined) continue;
+        synced[k] = clean[k];
+    }
+    const out: SettingsSnapshot = {
+        v: 1,
+        ts: Math.min(p.ts, Date.now() + MAX_CLOCK_SKEW_MS),
+        settings: synced as Partial<Settings>
+    };
+    const fb = p.spamFeedback as Record<string, unknown> | null | undefined;
+    if (fb && typeof fb === 'object') {
+        out.spamFeedback = {
+            trustedDomains: sanitizeList(fb.trustedDomains),
+            trustedAddresses: sanitizeList(fb.trustedAddresses),
+            spamDomains: sanitizeList(fb.spamDomains),
+            spamAddresses: sanitizeList(fb.spamAddresses)
+        };
+    }
+    return out;
 }
 
 async function ensureFolder(): Promise<boolean> {
@@ -155,28 +205,26 @@ function applySnapshot(remote: SettingsSnapshot): boolean {
     let changed = false;
     // Settings: assign field-by-field so Svelte runes register the
     // change and dependents (effects, $derived) re-run.
-    const incoming = remote.settings;
-    // `clientRules` used to ride along in the snapshot. The feature is gone,
-    // but snapshots already in the sync folder still carry it, and the
-    // field-by-field merge below would happily stamp it back onto state.
-    // Drop it before the loop so an upgrading device pulls a clean snapshot.
-    if ('clientRules' in incoming) delete (incoming as Record<string, unknown>).clientRules;
-    for (const k of Object.keys(incoming) as (keyof Settings)[]) {
-        const cur = (settings as unknown as Record<string, unknown>)[k as string];
-        const next = (incoming as unknown as Record<string, unknown>)[k as string];
-        if (cur !== next && next !== undefined) {
-            (settings as unknown as Record<string, unknown>)[k as string] = next;
+    // Snapshots pulled via pullSettings() are already sanitised, so retired
+    // fields such as `clientRules` never reach this loop.
+    const incoming = remote.settings as Record<string, unknown>;
+    const live = settings as unknown as Record<string, unknown>;
+    for (const k of Object.keys(incoming)) {
+        if (live[k] !== incoming[k]) {
+            live[k] = incoming[k];
             changed = true;
         }
     }
     // Spam feedback: replace lists wholesale (these are full snapshots,
-    // not deltas). Skip when the remote omits them.
+    // not deltas). Skip any list the remote omits.
     if (remote.spamFeedback) {
-        spamFeedback.trustedAddresses = [...remote.spamFeedback.trustedAddresses];
-        spamFeedback.trustedDomains = [...remote.spamFeedback.trustedDomains];
-        spamFeedback.spamAddresses = [...remote.spamFeedback.spamAddresses];
-        spamFeedback.spamDomains = [...remote.spamFeedback.spamDomains];
-        changed = true;
+        for (const k of ['trustedAddresses', 'trustedDomains', 'spamAddresses', 'spamDomains'] as const) {
+            const list = remote.spamFeedback[k];
+            if (list) {
+                spamFeedback[k] = [...list];
+                changed = true;
+            }
+        }
     }
     if (changed) {
         // Mirror to localStorage so the next reload reflects the merge

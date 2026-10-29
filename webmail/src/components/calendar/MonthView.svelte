@@ -67,17 +67,28 @@
             {#each week as d (d.toISOString())}
                 {@const key = format(d, 'yyyy-MM-dd')}
                 {@const dayEvents = monthEvents.get(key) || []}
+                {@const dateLabel = format(d, 'EEEE d MMMM yyyy')}
+                <!-- Mouse users click anywhere in the cell; keyboard and
+                     screen-reader users get the explicit "add event" button,
+                     so the cell itself is a plain labelled group and the
+                     event buttons inside it stay separately reachable. -->
+                <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
                 <div
                     class="cell"
                     class:other={!isSameMonth(d, cursor)}
-                    role="button"
-                    tabindex="0"
+                    role="group"
+                    aria-label={dateLabel}
                     onclick={() => onCreateOn(d)}
-                    onkeydown={(e) => { if (e.key === 'Enter') onCreateOn(d); }}
                     data-testid={`cal-cell-${key}`}
                 >
                     <div class="cell-head">
                         <span class={`dnum ${isSameDay(d, today) ? 'today' : ''}`}>{d.getDate()}</span>
+                        <button
+                            type="button"
+                            class="cell-add"
+                            aria-label={`Add event on ${dateLabel}`}
+                            onclick={(ev) => { ev.stopPropagation(); onCreateOn(d); }}
+                        >+</button>
                     </div>
                     <ul class="ev-list">
                         {#each dayEvents.slice(0, 3) as e (e.id)}
@@ -85,7 +96,7 @@
                                 <button
                                     type="button"
                                     class="evt"
-                                    style={`background: ${colorFor(e)};`}
+                                    style:background={colorFor(e)}
                                     onclick={(ev) => { ev.stopPropagation(); onOpenEvent(e); }}
                                     data-testid={`cal-evt-${e.id}`}
                                 >
@@ -143,6 +154,21 @@
     .cell.other .dnum { color: var(--text-tertiary); }
     .cell:nth-child(7n) { border-right: 0; }
     .cell-head { display: flex; justify-content: center; }
+    .cell-add {
+        position: absolute;
+        top: 4px;
+        right: 4px;
+        width: 20px;
+        height: 20px;
+        border-radius: 999px;
+        font-size: 14px;
+        line-height: 1;
+        color: var(--text-tertiary);
+        opacity: 0;
+        transition: opacity var(--transition-fast);
+    }
+    .cell:hover .cell-add, .cell-add:focus-visible { opacity: 1; }
+    .cell-add:hover { color: var(--accent-text); background: var(--bg-surface); }
     .dnum {
         display: inline-flex; align-items: center; justify-content: center;
         min-width: 22px; height: 22px;

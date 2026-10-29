@@ -45,8 +45,8 @@ const Database = require('better-sqlite3');
 // secretBox before it touches disk. Quoted message text is not a credential,
 // but it routinely carries them — password resets, order numbers, one-time
 // codes — and a leaked sqlite file is the realistic threat, so the free-text
-// columns (reason, thread snippet, advice, decision detail, standing
-// instructions) are encrypted
+// columns (sender, subject, reason, thread snippet, advice, decision detail,
+// standing instructions) are encrypted
 // and only the short structured fields (ids, outcome codes, missing-fact
 // labels) are stored in the clear.
 
@@ -558,8 +558,9 @@ function createTakeoverStore({ filePath, secretBox, maxPerUser = 50, maxSendersP
         return {
             id: row.id,
             messageId: row.message_id,
-            from: row.from_addr,
-            subject: row.subject,
+            // Rows written before these columns were sealed read back as-is.
+            from: secretBox.decrypt(row.from_addr) || '',
+            subject: secretBox.decrypt(row.subject) || '',
             missing: parseMissing(row.missing),
             // decrypt() returns null for a tampered or wrong-key payload;
             // an empty string is the honest fallback rather than leaking
@@ -591,7 +592,7 @@ function createTakeoverStore({ filePath, secretBox, maxPerUser = 50, maxSendersP
         const snippet = String(threadSnippet || '').slice(0, MAX_TEXT);
 
         if (existing) {
-            updateNeedsStmt.run(fromAddr, subj, JSON.stringify(missingList), secretBox.encrypt(why), secretBox.encrypt(snippet), at, existing.id);
+            updateNeedsStmt.run(secretBox.encrypt(fromAddr), secretBox.encrypt(subj), JSON.stringify(missingList), secretBox.encrypt(why), secretBox.encrypt(snippet), at, existing.id);
             return existing.id;
         }
 
@@ -602,7 +603,7 @@ function createTakeoverStore({ filePath, secretBox, maxPerUser = 50, maxSendersP
 
         const id = crypto.randomBytes(6).toString('hex');
         insertNeedsStmt.run(
-            id, u, mid, fromAddr, subj,
+            id, u, mid, secretBox.encrypt(fromAddr), secretBox.encrypt(subj),
             JSON.stringify(missingList), secretBox.encrypt(why), secretBox.encrypt(snippet), at
         );
         return id;

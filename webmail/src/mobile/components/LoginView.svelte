@@ -6,7 +6,6 @@
     let pass = $state('');
     let showPass = $state(false);
     // Mobile always stays signed in — session is persisted to localStorage + cookie.
-    let shake = $state(0);
 
     async function attemptLogin(email: string, password: string) {
         setPending(true);
@@ -20,7 +19,6 @@
                 ? 'Wrong username or password.'
                 : err instanceof Error ? err.message : 'Login failed';
             setError(msg);
-            shake++;
         } finally {
             setPending(false);
         }
@@ -62,6 +60,9 @@
                     <input
                         type="email"
                         autocomplete="username"
+                        autocapitalize="none"
+                        autocorrect="off"
+                        spellcheck="false"
                         placeholder="you@domain.tld"
                         bind:value={user}
                         class:error-field={!!authState.error}
@@ -208,6 +209,10 @@
         background: transparent;
         border: none;
         padding: 4px;
+        min-width: 44px;
+        min-height: 44px;
+        /* Negative margins keep the row height while the tap area is 44px. */
+        margin: -11px -10px -11px 0;
         color: var(--accent-text);
         cursor: pointer;
         flex-shrink: 0;

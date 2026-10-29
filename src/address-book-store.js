@@ -142,6 +142,16 @@ function rfc2822Date(value) {
     return d.toUTCString();
 }
 
+// Largest timestamp a Date can represent; anything above makes
+// toISOString() throw.
+const MAX_TIMESTAMP = 8.64e15;
+
+function lastSeenIso(value) {
+    if (!value) return '';
+    const d = new Date(value);
+    return Number.isNaN(d.getTime()) ? '' : d.toISOString();
+}
+
 // Build the RFC822 message that carries one vCard.
 //
 // The envelope is deliberately synthetic and self-describing: these are
@@ -182,7 +192,7 @@ function buildVCardMessage(contact, { uidValidity, now, user }) {
         'Content-Transfer-Encoding: 8bit',
         '',
         `${contact.name || '(no name)'} <${contact.address}>`,
-        contact.lastSeen ? `Last seen: ${new Date(contact.lastSeen).toISOString()}` : '',
+        lastSeenIso(contact.lastSeen) ? `Last seen: ${lastSeenIso(contact.lastSeen)}` : '',
         contact.count ? `Times seen in your mail: ${contact.count}` : '',
         '',
         `--${boundary}`,
@@ -361,10 +371,12 @@ function normalizeContact(input, existing) {
     if (!address || !isDeliverable(address)) return null;
 
     // An explicit name wins; "Name <addr>" in the address field is the
-    // fallback; the existing name is the last resort so a bare-address edit
-    // does not silently wipe a name the user typed earlier.
+    // fallback; the existing name is the last resort, used only when the
+    // body does not mention a name at all, so a bare-address edit does not
+    // silently wipe a name the user typed earlier while an explicit empty
+    // name does clear it.
     const name = cleanField(src.name, 200) || parsed.name ||
-        cleanField(existing ? existing.name : '', 200) || null;
+        (src.name === undefined && existing ? cleanField(existing.name, 200) : '') || null;
 
     return {
         // UID is the identity: preserved across an edit, minted on create.
@@ -377,8 +389,10 @@ function normalizeContact(input, existing) {
             : (existing ? existing.uid : newUid()),
         address,
         name,
-        note: cleanField(src.note, 500) || (existing ? existing.note : null) || null,
-        lastSeen: Number.isFinite(Number(src.lastSeen)) && Number(src.lastSeen) > 0
+        note: src.note === undefined
+            ? (existing ? existing.note : null) || null
+            : cleanField(src.note, 500) || null,
+        lastSeen: Number.isFinite(Number(src.lastSeen)) && Number(src.lastSeen) > 0 && Number(src.lastSeen) <= MAX_TIMESTAMP
             ? Number(src.lastSeen)
             : (existing ? existing.lastSeen : 0),
         count: Number.isFinite(Number(src.count)) && Number(src.count) > 0
@@ -392,6 +406,7 @@ module.exports = {
     ADDRESS_BOOK_MAILBOX,
     isAddressBookMailbox,
     MAX_CONTACTS,
+    MAX_TIMESTAMP,
     newUid,
     buildVCardMessage,
     extractVCard,

@@ -32,15 +32,24 @@ function luhn(digits: string): boolean {
     return sum % 10 === 0;
 }
 
+/** Replace the secret capture group inside a labelled match. The secret sits
+ *  at the end of the match (only an optional closing quote can follow), so it
+ *  is located from the right: a plain `m.replace(secret, …)` hits the first
+ *  occurrence, which can be inside the label itself ("password: word"). */
+function redactCapture(m: string, secret: string): string {
+    const at = m.lastIndexOf(secret);
+    return m.slice(0, at) + '[REDACTED]' + m.slice(at + secret.length);
+}
+
 /** Replace OTPs, passwords, API keys, and Luhn-valid card numbers with
  *  `[REDACTED]`. Returns the cleaned text — never throws. */
 export function redactSecrets(text: string): string {
     if (!text) return text;
     let out = text;
 
-    out = out.replace(RX_OTP_LABELLED, (m, code) => m.replace(code, '[REDACTED]'));
-    out = out.replace(RX_PASSWORD_LABELLED, (m, pw) => m.replace(pw, '[REDACTED]'));
-    out = out.replace(RX_API_KEY_LABELLED, (m, key) => m.replace(key, '[REDACTED]'));
+    out = out.replace(RX_OTP_LABELLED, redactCapture);
+    out = out.replace(RX_PASSWORD_LABELLED, redactCapture);
+    out = out.replace(RX_API_KEY_LABELLED, redactCapture);
 
     out = out.replace(RX_CARD_CANDIDATE, (m) => {
         const digits = m.replace(/[\s-]/g, '');

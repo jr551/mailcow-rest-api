@@ -230,6 +230,10 @@ function buildApprovalEmail({ from, to, subject, approveUrl, denyUrl, text: body
     const fromSafe = escapeEmailHtml(from);
     const toSafe = escapeEmailHtml(toList, 400);
     const subjectSafe = escapeEmailHtml(subject);
+    // The links are built from request headers, so they are escaped for the
+    // attribute like every other interpolated value.
+    const approveHref = escapeEmailHtml(approveUrl, 2000);
+    const denyHref = escapeEmailHtml(denyUrl, 2000);
     // An UNSURE draft tells the owner why the assistant held it before he
     // reads the draft. Prepend, so it reads as a verdict on the draft rather
     // than part of it — and never reaches the recipient.
@@ -256,8 +260,8 @@ function buildApprovalEmail({ from, to, subject, approveUrl, denyUrl, text: body
   <p><strong>Body:</strong></p>
   ${bodyBlock}
   <div style="margin:24px 0;">
-    <a href="${approveUrl}" style="display:inline-block;padding:12px 24px;background:#10b981;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;">✅ Approve & Send</a>
-    <a href="${denyUrl}" style="display:inline-block;padding:12px 24px;background:#ef4444;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;margin-left:12px;">❌ Deny</a>
+    <a href="${approveHref}" style="display:inline-block;padding:12px 24px;background:#10b981;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;">✅ Approve & Send</a>
+    <a href="${denyHref}" style="display:inline-block;padding:12px 24px;background:#ef4444;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;margin-left:12px;">❌ Deny</a>
   </div>
   <p style="color:#666;font-size:13px;">This request was made via the MCP/API. If you didn't request this, click Deny.</p>
 </body>
@@ -368,6 +372,26 @@ p.note{color:#666;font-size:13px}</style></head>
 </body></html>`;
     }
 
+    // GET must not act: mail scanners follow every link in the approval
+    // email, so denying happens on POST from this page, like approving.
+    function buildConfirmDenyHtml() {
+        return `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Confirm deny</title>
+<style>body{font-family:sans-serif;max-width:600px;margin:40px auto;padding:0 16px;text-align:center}
+h1{margin:0 0 16px}
+button{padding:12px 24px;background:#ef4444;color:#fff;border:0;border-radius:6px;font-weight:600;font-size:15px;cursor:pointer}
+p.note{color:#666;font-size:13px}</style></head>
+<body>
+<h1>Deny sending this email?</h1>
+<form method="POST" action="">
+  <button type="submit">Deny</button>
+</form>
+<p class="note">Nothing has been sent. This step exists because mail scanners follow links automatically.</p>
+</body></html>`;
+    }
+
     function replyApprovalUnavailable(token, req, reply) {
         const fresh = {};
         const entry = pendingStore.get(token, (info) => { fresh.info = info; });
@@ -394,12 +418,12 @@ p.note{color:#666;font-size:13px}</style></head>
                         sent: { type: 'boolean' },
                         messageId: { type: 'string' },
                         pendingApproval: { type: 'boolean' },
-                        token: { type: 'string' },
                         message: { type: 'string' }
                     }
                 },
                 400: problemSchema,
                 403: problemSchema,
+                429: problemSchema,
                 502: problemSchema,
                 501: problemSchema
             }
@@ -449,21 +473,29 @@ p.note{color:#666;font-size:13px}</style></head>
             const unsureReason = typeof body.unsureReason === 'string' && body.unsureReason.trim()
                 ? body.unsureReason
                 : undefined;
-            const token = pendingStore.create({
-                user,
-                pass,
-                from,
-                to: body.to,
-                cc: body.cc,
-                bcc: body.bcc,
-                subject: body.subject,
-                text: body.text,
-                html: body.html,
-                inReplyTo: body.inReplyTo,
-                attachments: body.attachments,
-                trackOpens: body.trackOpens,
-                unsureReason
-            });
+            let token;
+            try {
+                token = pendingStore.create({
+                    user,
+                    pass,
+                    from,
+                    to: body.to,
+                    cc: body.cc,
+                    bcc: body.bcc,
+                    subject: body.subject,
+                    text: body.text,
+                    html: body.html,
+                    inReplyTo: body.inReplyTo,
+                    attachments: body.attachments,
+                    trackOpens: body.trackOpens,
+                    unsureReason
+                });
+            } catch (err) {
+                if (err && err.code === 'PENDING_LIMIT') {
+                    throw problem(429, 'Too Many Requests', err.message);
+                }
+                throw err;
+            }
 
             const baseUrl = getPublicBaseUrl ? getPublicBaseUrl(req) : '';
             lastApprovalBaseUrl = baseUrl;
@@ -499,7 +531,6 @@ p.note{color:#666;font-size:13px}</style></head>
 
             return {
                 pendingApproval: true,
-                token,
                 message: 'An approval email has been sent to your inbox. Click the link to send this message.'
             };
         }
@@ -692,7 +723,7 @@ p{color:#666}</style></head>
 <body>
 <div class="success">✅</div>
 <h1>Email sent</h1>
-<p>Message ID: <code>${result.messageId}</code></p>
+<p>Message ID: <code>${escapeEmailHtml(result.messageId)}</code></p>
 </body></html>`);
             } catch (err) {
                 if (err.problem && err.problem.status === 404) {
@@ -717,6 +748,15 @@ p{color:#666}</style></head>
         });
 
         app2.get('/v1/messages/deny/:token', {
+            config: { public: true },
+            schema: {
+                tags: ['messages'],
+                summary: 'Show the confirmation page for denying a pending email',
+                response: { 200: { type: 'string' } }
+            }
+        }, async (_req, reply) => reply.type('text/html').send(buildConfirmDenyHtml()));
+
+        app2.post('/v1/messages/deny/:token', {
             config: { public: true },
             schema: {
                 tags: ['messages'],

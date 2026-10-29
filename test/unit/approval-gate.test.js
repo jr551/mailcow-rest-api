@@ -113,7 +113,7 @@ test('a Basic-authenticated send is HELD for approval, not dispatched', async (t
     assert.equal(res.statusCode, 200, `unexpected status: ${res.statusCode} ${res.body}`);
     const body = res.json();
     assert.equal(body.pendingApproval, true, 'a Basic-authenticated send must be held for approval');
-    assert.ok(body.token, 'an approval token must be issued so the owner can act on it');
+    assert.equal(body.token, undefined, 'the approval token is a bearer capability and must not be returned to the caller it constrains');
 
     // The caller's message must not have gone anywhere.
     const leakedToCustomer = recorder.sent.filter(

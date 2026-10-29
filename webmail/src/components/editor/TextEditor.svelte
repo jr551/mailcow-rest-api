@@ -35,9 +35,20 @@
     async function save() {
         if (saving) return;
         saving = true;
-        const blob = new Blob([content], { type: isMarkdown ? 'text/markdown' : 'text/plain' });
-        await onSave(blob, item.name);
-        saving = false;
+        try {
+            const blob = new Blob([content], { type: isMarkdown ? 'text/markdown' : 'text/plain' });
+            await onSave(blob, item.name);
+        } finally {
+            saving = false;
+        }
+    }
+
+    // A successful save closes the editor, so any difference from the file
+    // as opened is unsaved work.
+    const dirty = $derived(content !== initialContent);
+    function requestClose() {
+        if (dirty && !confirm('Discard your unsaved changes?')) return;
+        onClose();
     }
 
     function onKeydown(e: KeyboardEvent) {
@@ -46,7 +57,7 @@
             save();
         }
         if (e.key === 'Escape' && !saving) {
-            onClose();
+            requestClose();
         }
     }
 
@@ -68,8 +79,8 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) onClose(); }} role="button" tabindex="0" onkeydown={(e) => { if (e.key === 'Escape') onClose(); }}>
-    <div class="modal">
+<div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) requestClose(); }} role="presentation">
+    <div class="modal" role="dialog" aria-modal="true" aria-label={`Edit ${item.name}`}>
         <div class="header">
             <span class="title">Edit {item.name}</span>
             <div class="tabs">
@@ -87,7 +98,7 @@
                     {#if saving}<span class="spinner"></span>{/if}
                     <Icon name="check" size={14} /> Save
                 </button>
-                <button type="button" class="btn-ghost" onclick={onClose}>Close</button>
+                <button type="button" class="btn-ghost" onclick={requestClose}>Close</button>
             </div>
         </div>
         <div class="body">

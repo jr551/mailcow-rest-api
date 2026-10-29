@@ -38,7 +38,8 @@ import {
     importContacts,
     type Contact
 } from './contacts';
-import { getSession } from './auth.svelte';
+import { untrack } from 'svelte';
+import { authState, getSession } from './auth.svelte';
 
 export type { Contact };
 
@@ -46,11 +47,17 @@ export type { Contact };
  *  "full" means and the client never queues an impossible write. */
 const MAX_ENTRIES = 500;
 
-/** Fallback key. v1 held a shape with no `uid`; the migration below reads it
- *  rather than discarding it, because those contacts were harvested from the
- *  user's own mail and dropping them is data loss. */
+/** Fallback key prefix; the book is bucketed per signed-in user
+ *  (`<prefix>.<user>`) so one account's correspondents never reach another's
+ *  mailbox. The bare prefix and v1 are the pre-per-user global keys: v1 held a
+ *  shape with no `uid`, and both are read once (see loadLocal) rather than
+ *  discarded, because those contacts were harvested from the user's own mail. */
 const STORAGE_KEY = 'webmail.address-book.v2';
 const LEGACY_STORAGE_KEY = 'webmail.address-book.v1';
+
+function userKey(user: string): string {
+    return `${STORAGE_KEY}.${encodeURIComponent(user)}`;
+}
 
 export type AddressBookStore = 'imap' | 'local' | 'unknown';
 
@@ -67,9 +74,19 @@ function isContact(value: unknown): value is Contact {
     return typeof c.name === 'string' || c.name === null;
 }
 
-function loadLocal(): { contacts: Contact[]; legacy: boolean } {
-    let raw: string | null = null;
-    try { raw = localStorage.getItem(STORAGE_KEY); } catch { return { contacts: [], legacy: false }; }
+function readKey(key: string): string | null {
+    try { return localStorage.getItem(key); } catch { return null; }
+}
+
+function loadLocal(user: string | null): { contacts: Contact[]; legacy: boolean } {
+    if (!user) return { contacts: [], legacy: false };
+    const own = readKey(userKey(user));
+    // The pre-per-user global book is adopted only when a single account is
+    // signed in, i.e. when it can only be that account's. With several
+    // sessions its owner is unknowable, and guessing would hand one user's
+    // correspondents to another.
+    const adopt = own === null && authState.sessions.length === 1;
+    const raw = own ?? (adopt ? readKey(STORAGE_KEY) : null);
 
     if (raw) {
         try {
@@ -84,8 +101,7 @@ function loadLocal(): { contacts: Contact[]; legacy: boolean } {
         } catch { /* corrupt — fall through */ }
     }
 
-    let legacyRaw: string | null = null;
-    try { legacyRaw = localStorage.getItem(LEGACY_STORAGE_KEY); } catch { legacyRaw = null; }
+    const legacyRaw = adopt ? readKey(LEGACY_STORAGE_KEY) : null;
     if (!legacyRaw) return { contacts: [], legacy: false };
     try {
         const p = JSON.parse(legacyRaw) as { contacts?: unknown };
@@ -103,7 +119,15 @@ function loadLocal(): { contacts: Contact[]; legacy: boolean } {
     } catch { return { contacts: [], legacy: false }; }
 }
 
-function saveLocal(contacts: Contact[], fromLegacy: boolean) {
+function dropGlobalKeys() {
+    try {
+        localStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem(LEGACY_STORAGE_KEY);
+    } catch { /* storage disabled */ }
+}
+
+function saveLocal(user: string | null, contacts: Contact[], fromLegacy: boolean) {
+    if (!user) return;
     try {
         // Trim the way the server does — least recently seen first — so the
         // layers shed the same records and a sync cannot resurrect a contact
@@ -111,13 +135,20 @@ function saveLocal(contacts: Contact[], fromLegacy: boolean) {
         const trimmed = contacts.length > MAX_ENTRIES
             ? [...contacts].sort((a, b) => b.lastSeen - a.lastSeen).slice(0, MAX_ENTRIES)
             : contacts;
-        localStorage.setItem(STORAGE_KEY, JSON.stringify({ contacts: trimmed, fromLegacy }));
+        localStorage.setItem(userKey(user), JSON.stringify({ contacts: trimmed, fromLegacy }));
     } catch { /* quota or storage disabled — the in-memory book still works */ }
 }
 
 // ── state ──
 
-const initial = loadLocal();
+/** The signed-in user the in-memory book belongs to. */
+let owner: string | null = getSession()?.user ?? null;
+/** Bumped whenever `owner` changes, so work started for one user can tell it
+ *  went stale and must not write into the next user's book. */
+let epoch = 0;
+
+const initial = loadLocal(owner);
+if (owner) dropGlobalKeys();
 
 const _state = $state<{
     contacts: Contact[];
@@ -202,8 +233,35 @@ function scheduleSave() {
     clearTimeout(saveTimer as ReturnType<typeof setTimeout>);
     saveTimer = setTimeout(() => {
         saveTimer = null;
-        saveLocal(_state.contacts, fromLegacy);
+        saveLocal(owner, _state.contacts, fromLegacy);
     }, 1500);
+}
+
+/** Re-point the book at the active user: persist the outgoing book under its
+ *  own key, then replace everything user-scoped (contacts, index, queues). */
+function switchOwner(next: string | null) {
+    if (next === owner) return;
+    if (saveTimer) {
+        clearTimeout(saveTimer);
+        saveTimer = null;
+        saveLocal(owner, _state.contacts, fromLegacy);
+    }
+    epoch++;
+    owner = next;
+    pendingUpdate.clear();
+    pendingDelete.clear();
+    const local = loadLocal(next);
+    if (next) dropGlobalKeys();
+    fromLegacy = local.legacy;
+    _state.contacts = local.contacts;
+    _state.store = 'unknown';
+    _state.error = null;
+    _state.loading = false;
+    reindex();
+}
+
+function syncOwner() {
+    switchOwner(getSession()?.user ?? null);
 }
 
 /** The server derives these; sending them back is how a client-supplied
@@ -267,7 +325,8 @@ function enqueueDelete(uid: string) {
 
 function flush(): Promise<void> {
     pushChain = pushChain.then(async () => {
-        while (pendingUpdate.size || pendingDelete.size) {
+        const at = epoch;
+        while (at === epoch && (pendingUpdate.size || pendingDelete.size)) {
             const uid = pendingUpdate.keys().next().value as string | undefined;
             if (uid === undefined) {
                 const batch = [...pendingDelete];
@@ -279,7 +338,7 @@ function flush(): Promise<void> {
                         // Re-arm rather than drop the intent: a delete that
                         // failed silently would resurrect a contact the user
                         // believes they removed, on the next reload.
-                        pendingDelete.add(d);
+                        if (at === epoch) pendingDelete.add(d);
                         throw err;
                     }
                 }
@@ -291,8 +350,10 @@ function flush(): Promise<void> {
             try {
                 await updateContact(uid, toDraft(contact));
             } catch (err) {
-                pendingUpdate.set(uid, contact);
-                degrade(err);
+                if (at === epoch) {
+                    pendingUpdate.set(uid, contact);
+                    degrade(err);
+                }
                 throw err;
             }
         }
@@ -309,10 +370,13 @@ function flush(): Promise<void> {
  * the local layer supplies whatever it alone has seen.
  */
 export async function loadAddressBook(): Promise<void> {
-    if (!getSession() || _state.loading) return;
+    syncOwner();
+    if (!owner || _state.loading) return;
+    const at = epoch;
     _state.loading = true;
     try {
         const book = await listContacts();
+        if (at !== epoch) return;
         const serverByAddress = new Map(book.contacts.map((c) => [c.address.toLowerCase(), c]));
         const merged: Contact[] = [...book.contacts];
         const onlyLocal: Contact[] = [];
@@ -356,6 +420,7 @@ export async function loadAddressBook(): Promise<void> {
             // cannot duplicate a person the folder already had.
             await importContacts(onlyLocal.map(toDraft));
             const refreshed = await listContacts();
+            if (at !== epoch) return;
             _state.contacts = refreshed.contacts;
             reindex();
         }
@@ -364,9 +429,9 @@ export async function loadAddressBook(): Promise<void> {
         scheduleSave();
         await flush();
     } catch (err) {
-        degrade(err);
+        if (at === epoch) degrade(err);
     } finally {
-        _state.loading = false;
+        if (at === epoch) _state.loading = false;
     }
 }
 
@@ -382,6 +447,8 @@ export async function loadAddressBook(): Promise<void> {
  */
 export function recordContact(address: string | null | undefined, name?: string | null): void {
     if (!address) return;
+    syncOwner();
+    if (!owner) return;
     const a = address.trim();
     // Cheap shape check: no dot in the domain means group syntax or a
     // parsing artefact, not a person worth remembering.
@@ -428,6 +495,7 @@ export function addContact(input: {
     name?: string | null;
     note?: string | null;
 }): EditResult {
+    syncOwner();
     const address = input.address.trim();
     if (!address.includes('@') || !address.includes('.')) {
         return { ok: false, error: 'That does not look like an email address' };
@@ -463,15 +531,17 @@ export function addContact(input: {
  * layer, which is exactly the fallback this store is built around.
  */
 async function pushNew(contact: Contact): Promise<void> {
+    const at = epoch;
     try {
         const created = await createContact(toDraft(contact));
+        if (at !== epoch) return;
         // Adopt the server uid so a later edit addresses the real card. The
         // placeholder is removed first because upsertLocal matches on uid:
         // inserting the new record without dropping the old would leave two.
         removeLocal(contact.uid);
         upsertLocal(created);
         scheduleSave();
-    } catch (err) { degrade(err); }
+    } catch (err) { if (at === epoch) degrade(err); }
 }
 
 /**
@@ -486,6 +556,8 @@ export async function editContact(
     uid: string,
     patch: { address?: string; name?: string | null; note?: string | null }
 ): Promise<EditResult> {
+    syncOwner();
+    const at = epoch;
     const existing = _state.contacts.find((c) => c.uid === uid);
     if (!existing) return { ok: false, error: 'That contact no longer exists' };
     if (patch.address !== undefined) {
@@ -514,6 +586,7 @@ export async function editContact(
     if (_state.store === 'imap' && !isLocalOnly(uid)) {
         try {
             const saved = await updateContact(uid, toDraft(next));
+            if (at !== epoch) return { ok: true };
             // Adopt the server's normalisation, but do not lose harvest
             // counters that ticked while the request was in flight.
             saved.lastSeen = Math.max(saved.lastSeen || 0, next.lastSeen || 0);
@@ -522,20 +595,24 @@ export async function editContact(
             if (idx >= 0) _state.contacts[idx] = saved;
             lookup.set(saved.address.toLowerCase(), saved);
             scheduleSave();
-        } catch (err) { degrade(err); }
+        } catch (err) { if (at === epoch) degrade(err); }
     }
     return { ok: true };
 }
 
 export async function removeContact(uid: string): Promise<void> {
+    syncOwner();
+    const at = epoch;
     removeLocal(uid);
     scheduleSave();
     if (_state.store === 'imap' && !isLocalOnly(uid)) {
         try {
             await deleteContact(uid);
         } catch (err) {
-            pendingDelete.add(uid);
-            degrade(err);
+            if (at === epoch) {
+                pendingDelete.add(uid);
+                degrade(err);
+            }
         }
     }
 }
@@ -626,21 +703,51 @@ export function filterContacts(query: string): Contact[] {
  * would also throw away contacts added from another device.
  */
 export async function clearAddressBook(): Promise<void> {
+    syncOwner();
+    const at = epoch;
     const targets = _state.contacts.filter((c) => !isLocalOnly(c.uid));
     _state.contacts = [];
     lookup.clear();
     pendingUpdate.clear();
     pendingDelete.clear();
     try {
-        localStorage.removeItem(STORAGE_KEY);
-        localStorage.removeItem(LEGACY_STORAGE_KEY);
+        if (owner) localStorage.removeItem(userKey(owner));
     } catch { /* storage disabled */ }
+    dropGlobalKeys();
     for (const c of targets) {
         try {
             await deleteContact(c.uid);
         } catch (err) {
+            if (at !== epoch) return;
             pendingDelete.add(c.uid);
             degrade(err);
         }
     }
 }
+
+// ── account changes ──
+
+// The book is per user. When the active account changes, or one is signed
+// out, drop the previous user's in-memory book and queues so none of it can be
+// merged or imported into the next account's mailbox, and delete the local
+// copy of any account that is no longer signed in.
+let knownUsers = new Set<string>();
+
+$effect.root(() => {
+    $effect(() => {
+        const active = getSession()?.user ?? null;
+        const signedIn = new Set(authState.sessions.map((x) => x.user));
+        untrack(() => {
+            const previous = owner;
+            switchOwner(active);
+            for (const user of knownUsers) {
+                if (signedIn.has(user)) continue;
+                try { localStorage.removeItem(userKey(user)); } catch { /* storage disabled */ }
+            }
+            knownUsers = signedIn;
+            if (previous && active && previous !== active) {
+                void loadAddressBook();
+            }
+        });
+    });
+});

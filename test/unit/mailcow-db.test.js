@@ -114,3 +114,17 @@ test('getSendFromAddresses collects catch-all wildcard domains', async () => {
     assert.ok(out.addresses.includes('temp@x.com'));
     assert.deepEqual(out.wildcardDomains.sort(), ['other.com', 'x.com']);
 });
+
+test('alias membership uses exact list matching, not LIKE wildcards', async () => {
+    const { pool, calls } = makePool(() => [[], {}]);
+    const db = createMailcowDbFromPool(pool);
+    await db.listAliases('a_b@x.com');
+    await db.getSendFromAddresses('a_b@x.com');
+    const aliasCalls = calls.filter((c) => c.sql.includes('FROM alias'));
+    assert.equal(aliasCalls.length, 2);
+    for (const c of aliasCalls) {
+        assert.ok(!/LIKE/i.test(c.sql));
+        assert.ok(/FIND_IN_SET\(\?/.test(c.sql));
+        assert.deepEqual(c.params, ['a_b@x.com']);
+    }
+});

@@ -70,7 +70,6 @@ function ruleUsesEnvelope(condition) {
 module.exports = {
     VALID_LEAF_TYPES,
     isGroupCondition,
-    isLeafCondition,
     validateRuleCondition,
     ruleUsesEnvelope
 };

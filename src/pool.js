@@ -156,8 +156,9 @@ function createPool(opts) {
             }
         }
 
-        // Second: create new connections if slots are available.
-        while (waiters.size && totalLive < max) {
+        // Second: create new connections if slots are available, evicting an
+        // idle client of another user when the pool is full.
+        while (waiters.size && (totalLive < max || evictIdleSlot())) {
             const w = waiters.values().next().value;
             waiters.delete(w);
             clearTimeout(w.timer);
@@ -173,6 +174,12 @@ function createPool(opts) {
                     w.reject(err);
                 });
         }
+    }
+
+    function evictIdleSlot() {
+        if (!tryEvictOneIdle()) return false;
+        totalLive--;
+        return true;
     }
 
     function tryEvictOneIdle() {
@@ -259,6 +266,7 @@ function createPool(opts) {
             }
             if (e.idle.length === 0 && e.busy === 0) entries.delete(hash);
         }
+        pump();
         await Promise.allSettled(closes);
     }
 

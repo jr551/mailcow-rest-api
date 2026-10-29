@@ -1,6 +1,6 @@
 // Top-level UI state shared across components.
 
-import type { Mailbox, MessageDetail, MessageListItem, Shortcut } from './api';
+import type { Mailbox, MessageDetail, MessageListItem } from './api';
 import type { CalEvent } from './calendar.svelte';
 import { playError } from './sounds.svelte';
 
@@ -33,9 +33,6 @@ export interface UiState {
     aiPanelOpen: boolean;
     selected: Set<number>;
     undo: { kind: 'trash' | 'archive' | 'move'; uid: number; fromPath: string; toPath: string; ts: number } | null;
-    shortcuts: Shortcut[];
-    embeddedShortcut: Shortcut | null;
-    popupShortcut: Shortcut | null;
     aiSummary: string | null;
     aiSummaryLoading: boolean;
     aiSummaryError: string | null;
@@ -121,9 +118,6 @@ const initial: UiState = {
     aiPanelOpen: false,
     selected: new Set<number>(),
     undo: null,
-    shortcuts: [],
-    embeddedShortcut: null,
-    popupShortcut: null,
     aiSummary: null,
     aiSummaryLoading: false,
     aiSummaryError: null,

@@ -12,6 +12,11 @@ permissions:
   packages: write
 
 jobs:
+  # An image is only published from a commit that passes the same checks as
+  # a pull request: unit tests, webmail check/build and the dependency audit.
+  test:
+    uses: ./.github/workflows/test.yml
+
   resolve-runner:
     runs-on: ubuntu-latest
     outputs:
@@ -53,7 +58,7 @@ jobs:
           fi
 
   publish:
-    needs: resolve-runner
+    needs: [test, resolve-runner]
     runs-on: ${{ needs.resolve-runner.outputs.label }}
     defaults:
       run:

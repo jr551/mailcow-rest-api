@@ -18,8 +18,13 @@ const num0 = (v, d) => {
 };
 const bool = (v, d) => {
     if (v === undefined || v === null || v === '') return d;
-    const s = String(v).toLowerCase();
-    return s === '1' || s === 'true' || s === 'yes' || s === 'y';
+    const s = String(v).trim().toLowerCase();
+    if (s === '1' || s === 'true' || s === 'yes' || s === 'y' || s === 'on') return true;
+    if (s === '0' || s === 'false' || s === 'no' || s === 'n' || s === 'off') return false;
+    // An unrecognised value must not silently flip a secure-by-default switch
+    // (TLS verification, rate limiting) off.
+    console.warn(`[config] unrecognised boolean value ${JSON.stringify(String(v))}; using default ${d}`);
+    return d;
 };
 
 // Every sqlite file must sit on the same persistent volume as the main
@@ -145,10 +150,10 @@ module.exports = Object.freeze({
     rateLimit: {
         // Anti-abuse backstop, not a strict per-user throttle — a webmail
         // client legitimately bursts many requests when opening a mailbox.
-        // The default caps credential-stuffing sweeps against the IMAP
-        // LOGIN each failed Basic-auth attempt triggers (see auth.js)
-        // without disrupting normal use. 127.0.0.1/::1 are always exempt
-        // so the Docker healthcheck can't be starved by real traffic.
+        // The default bounds the rate of IMAP LOGINs a failed Basic-auth
+        // attempt can trigger (auth.js adds a per-IP failure backoff on top)
+        // without disrupting normal use. Loopback is always exempt so the
+        // Docker healthcheck can't be starved by real traffic.
         enabled: bool(process.env.RATE_LIMIT_ENABLED, true),
         max: num(process.env.RATE_LIMIT_MAX, 300),
         windowMs: num(process.env.RATE_LIMIT_WINDOW_MS, 60_000)

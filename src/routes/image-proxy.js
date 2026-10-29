@@ -5,13 +5,7 @@ const dns = require('node:dns').promises;
 const { Agent } = require('undici');
 const { problem } = require('../errors');
 const { streamWithLimit } = require('../utils/stream');
-const {
-    isPrivateIp,
-    isPrivateHostname,
-    normalizeHost,
-    validateTargetUrl,
-    createPinnedDispatcher
-} = require('../utils/ssrf-guard');
+const { validateTargetUrl, createPinnedDispatcher } = require('../utils/ssrf-guard');
 
 const MAX_IMAGE_BYTES = 1 * 1024 * 1024; // 1 MB per image
 const FETCH_TIMEOUT_MS = 10_000;
@@ -72,6 +66,12 @@ function todayIso() {
     return d.toISOString().slice(0, 10);
 }
 
+// Pinned agents are per-hop and would otherwise keep their sockets until the
+// process exits.
+function closeQuietly(dispatcher) {
+    try { Promise.resolve(dispatcher?.close?.()).catch(() => { /* */ }); } catch { /* */ }
+}
+
 async function fetchImage(url, { fetchImpl = global.fetch, lookup = dns.lookup, AgentCtor = Agent } = {}) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
@@ -84,12 +84,15 @@ async function fetchImage(url, { fetchImpl = global.fetch, lookup = dns.lookup, 
     // rules we apply to the user-provided URL.
     const MAX_HOPS = 5;
     let current = url;
+    let dispatcher = null;
     try {
         for (let hop = 0; hop <= MAX_HOPS; hop++) {
+            closeQuietly(dispatcher);
+            dispatcher = null;
             // Resolve first, reject private answers, then pin the connection
             // to the address we checked — otherwise the name is free to
             // resolve somewhere else on the second lookup (DNS rebinding).
-            const dispatcher = await createPinnedDispatcher(current, { lookup, AgentCtor });
+            dispatcher = await createPinnedDispatcher(current, { lookup, AgentCtor });
             const res = await fetchImpl(current, {
                 signal: controller.signal,
                 redirect: 'manual',
@@ -145,10 +148,12 @@ async function fetchImage(url, { fetchImpl = global.fetch, lookup = dns.lookup, 
         return { ok: false, reason: err.message || 'Fetch failed' };
     } finally {
         clearTimeout(timer);
+        closeQuietly(dispatcher);
     }
 }
 
 const imageProxyRoutes = async function imageProxyRoutes(app, { cache, maxBytesPerDay = 1024 * 1024 * 1024 }) {
+    const dailyLimitDetail = `Daily image proxy limit of ${Math.round(maxBytesPerDay / 1024 / 1024)} MB exceeded`;
     app.get('/v1/proxy/image', {
         schema: {
             tags: ['proxy'],
@@ -158,7 +163,7 @@ const imageProxyRoutes = async function imageProxyRoutes(app, { cache, maxBytesP
                 type: 'object',
                 required: ['url'],
                 properties: {
-                    url: { type: 'string', format: 'uri' }
+                    url: { type: 'string', format: 'uri', maxLength: 2048 }
                 }
             },
             response: {
@@ -184,6 +189,11 @@ const imageProxyRoutes = async function imageProxyRoutes(app, { cache, maxBytesP
         const user = req.creds.user;
         const day = todayIso();
         const usageToday = cache.getUsage(user, day);
+        // Already at the cap: refuse before spending an upstream fetch, or an
+        // over-quota user could still drive outbound traffic with novel URLs.
+        if (usageToday >= maxBytesPerDay) {
+            throw problem(429, 'Too Many Requests', dailyLimitDetail);
+        }
 
         // 1. Check cache
         const cached = cache.get(rawUrl);
@@ -193,7 +203,7 @@ const imageProxyRoutes = async function imageProxyRoutes(app, { cache, maxBytesP
             }
             const wouldUse = usageToday + cached.size;
             if (wouldUse > maxBytesPerDay) {
-                throw problem(429, 'Too Many Requests', `Daily image proxy limit of ${Math.round(maxBytesPerDay / 1024 / 1024)} MB exceeded`);
+                throw problem(429, 'Too Many Requests', dailyLimitDetail);
             }
             cache.incrementUsage(user, day, cached.size);
             reply.header('cache-control', 'private, max-age=86400');
@@ -229,7 +239,7 @@ const imageProxyRoutes = async function imageProxyRoutes(app, { cache, maxBytesP
 
         const wouldUse = usageToday + result.data.length;
         if (wouldUse > maxBytesPerDay) {
-            throw problem(429, 'Too Many Requests', `Daily image proxy limit of ${Math.round(maxBytesPerDay / 1024 / 1024)} MB exceeded`);
+            throw problem(429, 'Too Many Requests', dailyLimitDetail);
         }
 
         // 4. Store in cache and account usage
@@ -244,8 +254,3 @@ const imageProxyRoutes = async function imageProxyRoutes(app, { cache, maxBytesP
 
 module.exports = imageProxyRoutes;
 module.exports.fetchImage = fetchImage;
-module.exports.validateTargetUrl = validateTargetUrl;
-module.exports.isPrivateIp = isPrivateIp;
-module.exports.isPrivateHostname = isPrivateHostname;
-module.exports.normalizeHost = normalizeHost;
-module.exports.createPinnedDispatcher = createPinnedDispatcher;

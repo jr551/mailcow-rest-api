@@ -73,9 +73,17 @@ export function initPwa(): void {
         // skipWaiting + claim). Reload the page so the user is on the
         // freshly-cached shell instead of running stale assets that the
         // new SW will increasingly mismatch on.
+        //
+        // Two cases must not reload:
+        // the very first install (clients.claim() takes over a page that had
+        // no controller, and a reload would wipe a half-typed login), and an
+        // open compose window in this tab (another tab applied the update).
+        // In the compose case updateAvailable stays set, so the prompt remains.
+        let hadController = !!navigator.serviceWorker.controller;
         let reloading = false;
         navigator.serviceWorker.addEventListener('controllerchange', () => {
-            if (reloading) return;
+            if (!hadController) { hadController = true; return; }
+            if (reloading || ui.composeOpen) return;
             reloading = true;
             // Small delay so any user-visible "updating…" toast gets a
             // chance to render before the page tears down.
@@ -244,7 +252,7 @@ export async function pushSubscriptionStatus(): Promise<'subscribed' | 'denied' 
         const sub = await reg.pushManager.getSubscription();
         if (sub) return 'subscribed';
     } catch { /* noop */ }
-    return Notification.permission === 'granted' ? 'default' : 'default';
+    return 'default';
 }
 
 // Exhaustive per-subsystem diagnostics for the "Why isn't push working?"

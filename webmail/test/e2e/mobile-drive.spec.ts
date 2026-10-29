@@ -101,6 +101,8 @@ test.describe('mobile drive', () => {
 
         // Delete via trash button in selection bar (force because FABs may overlap)
         await page.locator('.selection-bar .delete-btn').click({ force: true });
+        // Bulk delete asks for an explicit second tap.
+        await page.getByTestId('mobile-drive-confirm-delete').click({ force: true });
         await expect(page.locator('.selection-bar')).not.toBeVisible();
 
         // Item should be gone

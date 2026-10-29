@@ -81,7 +81,7 @@
         // The panel is conditionally rendered, so bind:this only lands after
         // the next flush — hence the microtask before arming the trap.
         queueMicrotask(() => {
-            if (panelEl) stopTrap = trapFocus(panelEl);
+            if (panelEl) stopTrap = trapFocus(panelEl, false);
         });
     }
 
@@ -484,21 +484,6 @@
     }
     .reset-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
     .reset-btn:disabled { opacity: 0.55; cursor: default; }
-
-    /* Visually hidden, still announced. The swatch names are rendered
-     * aria-hidden on purpose so the button's own name is one clean string
-     * rather than the chip's colour and the label read as two things. */
-    .sr-only {
-        position: absolute;
-        width: 1px;
-        height: 1px;
-        padding: 0;
-        margin: -1px;
-        overflow: hidden;
-        clip: rect(0 0 0 0);
-        white-space: nowrap;
-        border: 0;
-    }
 
     @media (max-width: 720px) {
         .hidden-on-narrow { display: none; }

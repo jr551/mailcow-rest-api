@@ -110,12 +110,36 @@
 
     // --- Context menu ----------------------------------------------------
     let menu = $state<{ path: string; x: number; y: number } | null>(null);
+    let menuEl = $state<HTMLUListElement | null>(null);
+    let menuOpener: HTMLElement | null = null;
     function openMenu(e: MouseEvent, path: string) {
         e.preventDefault();
         e.stopPropagation();
+        menuOpener = e.currentTarget as HTMLElement;
         menu = { path, x: e.clientX, y: e.clientY };
     }
     function closeMenu() { menu = null; }
+
+    // Move focus into the menu on open so its own key handling is reachable.
+    $effect(() => {
+        menuEl?.querySelector<HTMLElement>('button')?.focus();
+    });
+
+    function onMenuKey(e: KeyboardEvent) {
+        if (e.key === 'Escape') {
+            e.stopPropagation();
+            closeMenu();
+            menuOpener?.focus();
+            return;
+        }
+        if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+        const items = Array.from(menuEl?.querySelectorAll<HTMLElement>('button') ?? []);
+        if (!items.length) return;
+        e.preventDefault();
+        const at = items.indexOf(document.activeElement as HTMLElement);
+        const step = e.key === 'ArrowDown' ? 1 : -1;
+        items[(at + step + items.length) % items.length].focus();
+    }
 
     async function doCreate(parent: string | null) {
         closeMenu();
@@ -155,7 +179,14 @@
             cur
         );
         if (next === null) return;
-        setFolderIcon(path, next.trim() || null);
+        const icon = next.trim();
+        // One grapheme, and short: the value is rendered in a fixed-size slot.
+        const first = icon ? ([...new Intl.Segmenter().segment(icon)][0]?.segment ?? '') : '';
+        if (icon && (first !== icon || icon.length > 8)) {
+            showToast('error', 'Use a single emoji for the folder icon.');
+            return;
+        }
+        setFolderIcon(path, icon || null);
     }
 
     let aiSuggesting = $state<string | null>(null); // path being processed, for spinner state
@@ -307,10 +338,11 @@
                                 <button
                                     type="button"
                                     class="caret"
-                                    aria-label={expanded ? 'Collapse' : 'Expand'}
+                                    aria-label={`${expanded ? 'Collapse' : 'Expand'} ${prettyFolder(node.label)}`}
+                                    aria-expanded={expanded}
                                     onclick={(e) => { e.stopPropagation(); toggle(node.path); }}
                                 >
-                                    <Icon name={expanded ? 'chevronRight' : 'chevronRight'} size={11} />
+                                    <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={11} />
                                 </button>
                             {:else}
                                 <span class="caret-spacer" aria-hidden="true"></span>
@@ -552,18 +584,11 @@
     <ul
         class="ctx-menu"
         role="menu"
-        style={`top: ${menu.y}px; left: ${menu.x}px;`}
+        bind:this={menuEl}
+        style={`top: max(8px, min(${menu.y}px, calc(100vh - 230px))); left: max(8px, min(${menu.x}px, calc(100vw - 220px)));`}
         onclick={(e) => e.stopPropagation()}
         oncontextmenu={(e) => e.preventDefault()}
-        onkeydown={(e) => {
-            // Escape dismisses — the menu previously only closed on outside
-            // click/right-click, so once focus was on an item there was no
-            // keyboard way out short of running one of the actions.
-            if (e.key === 'Escape') {
-                e.stopPropagation();
-                closeMenu();
-            }
-        }}
+        onkeydown={onMenuKey}
     >
         <li><button type="button" role="menuitem" onclick={() => doCreate(menu!.path)}>
             <Icon name="plus" size={12} /> New subfolder
@@ -678,13 +703,9 @@
         width: 18px;
         height: 24px;
         color: var(--text-tertiary);
-        transition: transform 160ms ease-out, color var(--transition-fast);
+        transition: color var(--transition-fast);
     }
     .caret:hover { color: var(--text-primary); }
-    .folder-row:has(.folder.expanded) .caret { transform: rotate(0deg); }
-    /* Rotate caret when the folder's expanded. The caret button PRECEDES the
-     * .folder button in the DOM, so a sibling combinator can never reach it —
-     * the :has() form above is the one that matches. */
     .caret-spacer { flex: 0 0 auto; width: 18px; height: 1px; }
     .folder {
         flex: 1;

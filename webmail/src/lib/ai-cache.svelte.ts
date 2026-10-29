@@ -10,6 +10,8 @@
 // 'subject-suggest') so identical bodies coming from different surfaces
 // can't collide. The hash is never sent off-device.
 
+import { authState } from './auth.svelte';
+
 const PREFIX = 'webmail.ai-cache.v1.';
 const MAX_BYTES = 1_500_000;        // ~1.5MB ceiling across all entries
 const MAX_ENTRY_BYTES = 64 * 1024;  // 64KB per response — bigger ones aren't cached
@@ -147,9 +149,12 @@ export interface CachedChatCompletionOpts {
 export async function cachedChatCompletion(opts: CachedChatCompletionOpts): Promise<CachedFetchResult> {
     const hour = hourBucket();
     const baseUrl = opts.baseUrl.replace(/\/+$/, '');
+    // Cached bodies hold mail content: key them per account so a second
+    // sign-in on this browser can never be served the first one's answer.
+    const scope = `${authState.activeUser ?? ''}|${opts.scope}`;
 
     if (!opts.skipCache) {
-        const k = `${PREFIX}${await hashKey(opts.scope, opts.body, hour)}`;
+        const k = `${PREFIX}${await hashKey(scope, opts.body, hour)}`;
         const hit = readEntry(k);
         if (hit && hit.hour === hour && hit.status >= 200 && hit.status < 300) {
             return { ok: true, status: hit.status, text: hit.text, cached: true };
@@ -167,7 +172,7 @@ export async function cachedChatCompletion(opts: CachedChatCompletionOpts): Prom
     });
     const text = await res.text();
     if (!opts.skipCache && res.ok) {
-        const k = `${PREFIX}${await hashKey(opts.scope, opts.body, hour)}`;
+        const k = `${PREFIX}${await hashKey(scope, opts.body, hour)}`;
         writeEntry(k, { hour, status: res.status, text });
     }
     maybeEvict(hour);

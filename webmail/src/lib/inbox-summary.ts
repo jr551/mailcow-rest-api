@@ -244,7 +244,11 @@ export async function summarizeInbox(
     const mktSummaries: string[] = [];
     const allActions: InboxAction[] = [];
 
-    for (const p of partials) {
+    for (const [pageIdx, p] of partials.entries()) {
+        // The model may only point at messages it was actually shown on this
+        // page; a uid it makes up (or one an injected mail talks it into)
+        // must not become a target for archive/trash.
+        const pageUids = new Set(pages[pageIdx].map((m) => m.uid));
         if (typeof p.summary === 'string' && p.summary.trim()) opSummaries.push(p.summary.trim());
         if (typeof p.marketingSummary === 'string' && p.marketingSummary.trim()) mktSummaries.push(p.marketingSummary.trim());
         const raw = Array.isArray(p.actions) ? p.actions : [];
@@ -254,7 +258,7 @@ export async function summarizeInbox(
                 label: a.label.slice(0, 80),
                 severity: SEVERITIES.includes(a.severity as Severity) ? (a.severity as Severity) : 'yellow',
                 detail: a.detail.slice(0, 200),
-                refUid: typeof a.refUid === 'number' ? a.refUid : undefined,
+                refUid: typeof a.refUid === 'number' && pageUids.has(a.refUid) ? a.refUid : undefined,
                 category: a.category === 'marketing' ? 'marketing' : 'operational',
                 canAutoReply: a.canAutoReply === true
             });

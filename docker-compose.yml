@@ -6,6 +6,10 @@ services:
     image: ghcr.io/jr551/mailcow-rest-api:master
     container_name: mailcow-rest-api
     restart: unless-stopped
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     env_file:
       - .env
     environment:

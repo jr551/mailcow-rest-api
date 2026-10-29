@@ -18,7 +18,6 @@
         apiUrl,
         ApiError,
         type MailboxInfo,
-        type LoginEntry,
         type MessageListItem
     } from '../lib/api';
     import Icon from './Icon.svelte';
@@ -50,14 +49,13 @@
     import ShortcutEmbed from './ShortcutEmbed.svelte';
     import BulkBar from './BulkBar.svelte';
     import { getShortcuts, blockSender as apiBlockSender, bulkDeleteMessages, type Shortcut } from '../lib/api';
-    import { shortcutsItems, embeddedShortcut, popupShortcut } from '../lib/shortcuts-store';
+    import { shortcutsItems, embeddedShortcut, popupShortcut, safeShortcutUrl } from '../lib/shortcuts-store';
     import { probeCapabilities, settings, setHideSidebar } from '../lib/settings.svelte';
     import { SKINS, skinState } from '../lib/skins.svelte';
     import { initImapSync, newThread as newAiThread, appendMessage as appendAiMessage, requestAutoSend as requestAutoSendAi } from '../lib/ai-threads.svelte';
-    import { toggleSelected, clearSelection, selectAllVisible } from '../lib/store.svelte';
+    import { clearSelection, selectAllVisible } from '../lib/store.svelte';
     import * as cache from '../lib/cache';
-    import { startNetworkWatchdog, withTimeout } from '../lib/network-watchdog.svelte';
-    import { playNotify, playSent, playClick, playShred, primeAudio, sounds, setMuted } from '../lib/sounds.svelte';
+    import { playNotify, playClick, playShred, primeAudio, sounds, setMuted } from '../lib/sounds.svelte';
     import { pwa, promptInstall } from '../lib/pwa.svelte';
     import { loadTakeover } from '../lib/takeover.svelte';
     import { recordEnvelope, loadAddressBook } from '../lib/address-book.svelte';
@@ -89,45 +87,6 @@
         return 25;
     }
 
-    // Hard time budget for the FIRST paint of mailboxes / message list.
-    // Past this we render whatever cache had and flip ui.online = false
-    // — the watchdog re-probes every 30s and seamlessly upgrades back
-    // when the network returns. Late-arriving fetches still update the
-    // view, so a slow link recovers without forcing the user to refresh.
-    const FIRST_LOAD_BUDGET_MS = 2000;
-
-    // Mobile-PWA test, used to gate behaviour we only want on phones
-    // (full-folder prefetch, sticky-session defaults).
-    function isMobilePwa(): boolean {
-        return typeof window !== 'undefined' && window.location.pathname.startsWith('/webmail/mobile/');
-    }
-
-    // Drain the rest of the visible folder into the cache so the mobile
-    // PWA can browse offline. Pages are fetched 100 at a time with a
-    // small inter-page delay so we don't hammer the server, capped so a
-    // 100k-message folder doesn't burn the user's data plan.
-    let prefetchInflight = false;
-    async function prefetchFolderPages(path: string, search: string | undefined) {
-        if (prefetchInflight) return;
-        prefetchInflight = true;
-        const HARD_CAP = 1000;       // never prefetch more than this many envelopes
-        const PER_PAGE = SERVER_PAGE_CAP;
-        const PAUSE_MS = 250;
-        try {
-            // We start from page 1 (page 0 is what the user just loaded).
-            for (let page = 1; page * PER_PAGE < HARD_CAP; page++) {
-                if (path !== ui.selectedPath) break; // user navigated away
-                if (!ui.online) break;
-                const r = await listMessages(path, { page, pageSize: PER_PAGE, search, include: 'attachments' }).catch(() => null);
-                if (!r) break;
-                cache.putMessageList(currentUser(), path, page, search, r);
-                if (r.messages.length < PER_PAGE) break; // we've drained the folder
-                await new Promise((res) => setTimeout(res, PAUSE_MS));
-            }
-        } finally {
-            prefetchInflight = false;
-        }
-    }
     let searchInput = $state('');
     let searchSuggestOpen = $state(false);
     let searchInputEl: HTMLInputElement | null = $state(null);
@@ -182,6 +141,31 @@
         // Don't fire a search yet — the value half is still empty.
     }
 
+    function onSearchKey(e: KeyboardEvent) {
+        if (!searchSuggestOpen || visibleTags.length === 0) return;
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            searchSuggestOpen = false;
+        } else if (e.key === 'ArrowDown') {
+            const chip = (e.currentTarget as HTMLElement).parentElement?.querySelector<HTMLElement>('.search-suggest-chip');
+            if (chip) { e.preventDefault(); chip.focus(); }
+        }
+    }
+
+    function onSuggestKey(e: KeyboardEvent) {
+        const chip = e.currentTarget as HTMLElement;
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            searchSuggestOpen = false;
+            searchInputEl?.focus();
+        } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            const sib = e.key === 'ArrowDown' ? chip.nextElementSibling : chip.previousElementSibling;
+            if (sib instanceof HTMLElement && sib.classList.contains('search-suggest-chip')) sib.focus();
+            else if (e.key === 'ArrowUp') searchInputEl?.focus();
+        }
+    }
+
     // Mailbox info (name, quota, etc.) is loaded once and used to drive
     // the top-right account chip in 'name' display mode.
     let mailboxInfo = $state<MailboxInfo | null>(null);
@@ -221,15 +205,13 @@
     // Server health ping. Round-trip /health every 15 s and surface the
     // latency in the topbar (with a radar pulse). Slow/offline states
     // colour the indicator amber/red.
-    let serverPingMs = $state<number | null>(null);
     let serverPingState = $state<'live' | 'slow' | 'offline'>('live');
     async function pingServer() {
         const t0 = performance.now();
         try {
             const res = await fetch(apiUrl('/health'), { cache: 'no-store' });
             const dt = Math.round(performance.now() - t0);
-            if (!res.ok) { serverPingState = 'offline'; serverPingMs = null; return; }
-            serverPingMs = dt;
+            if (!res.ok) { serverPingState = 'offline'; return; }
             serverPingState = dt > 800 ? 'slow' : 'live';
             // If the server reports a newer app version than this build,
             // the SPA is running a stale cached shell — drop every cache
@@ -254,12 +236,33 @@
             } catch { /* non-JSON health body — ignore */ }
         } catch {
             serverPingState = 'offline';
-            serverPingMs = null;
         }
     }
     let searchDebounce: ReturnType<typeof setTimeout> | null = null;
     let installDismissed = $state(loadInstallDismissed());
     let accountMenuOpen = $state(false);
+    let accountBtnEl: HTMLButtonElement | null = $state(null);
+    let accountMenuEl: HTMLUListElement | null = $state(null);
+
+    $effect(() => {
+        if (accountMenuOpen) accountMenuEl?.querySelector<HTMLElement>('button')?.focus();
+    });
+
+    function onAccountMenuKey(e: KeyboardEvent) {
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            accountMenuOpen = false;
+            accountBtnEl?.focus();
+            return;
+        }
+        if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+        const items = Array.from(accountMenuEl?.querySelectorAll<HTMLElement>('button') ?? []);
+        if (!items.length) return;
+        e.preventDefault();
+        const at = items.indexOf(document.activeElement as HTMLElement);
+        const step = e.key === 'ArrowDown' ? 1 : -1;
+        items[(at + step + items.length) % items.length].focus();
+    }
 
     // Resizable panes. Each is persisted as a pixel width; the detail
     // pane absorbs whatever's left. Bounded so neither goes unusable.
@@ -411,27 +414,14 @@
         const cached = cache.getMailboxes(currentUser(), { allowStale: true });
         if (cached && cached.length) ui.mailboxes = cached;
         ui.mailboxesLoading = true;
-        // The 2s race + offline flip is mobile-PWA-only. Desktop has a
-        // stable connection profile and slow IMAP folders (5-10s for
-        // big mailboxes) were noisily flagging the app "offline" even
-        // when nothing was actually wrong.
-        const isMobile = isMobilePwa();
-        const fetchP = listMailboxes({ counts: true }).catch((err) => {
+        const fresh = await listMailboxes({ counts: true }).catch((err) => {
             if (err instanceof ApiError && err.status === 401) setSession(null);
-            throw err;
+            return null;
         });
-        const fresh = isMobile
-            ? await withTimeout(fetchP, FIRST_LOAD_BUDGET_MS).catch(() => null)
-            : await fetchP.catch(() => null);
         try {
             if (fresh) {
                 ui.mailboxes = fresh;
                 cache.putMailboxes(currentUser(), fresh);
-            } else if (isMobile && (!cached || !cached.length)) {
-                // Mobile only: no fresh, no cache → flip offline so the
-                // PWA can show its offline UX. Desktop stays "online"
-                // and just reports the underlying error normally.
-                ui.online = false;
             }
         } finally {
             ui.mailboxesLoading = false;
@@ -465,6 +455,7 @@
         return parts.length ? parts.join(' ') : undefined;
     }
 
+    let refreshSeq = 0;
     async function refreshMessages(opts: { resetPage?: boolean; force?: boolean } = {}) {
         if (opts.resetPage) ui.messagesPage = 0;
         const search = effectiveSearch();
@@ -493,76 +484,41 @@
             ui.messagesTotal = 0;
         }
 
+        const seq = ++refreshSeq;
         ui.messagesLoading = true;
         ui.messagesError = null;
-        // Snapshot the request shape so a late-arriving fetch can't
-        // stomp the view if the user navigated between folders during
-        // the 2s race.
+        // Snapshot the request shape so a slow response can't stomp the
+        // view (or the cache entry of another folder) if the user moved on
+        // while it was in flight. IMAP fetches of 5-10s are normal, and the
+        // network promise is never aborted.
         const reqPath = ui.selectedPath;
         const reqPage = ui.messagesPage;
-        const reqUser = currentUser();
-        // 2s budget on mobile PWA only — desktop has stable connectivity
-        // so slow IMAP folders (5-10s for huge mailboxes) shouldn't
-        // flag the app as "offline" or surface a scary error banner.
-        const isMobile = isMobilePwa();
-        // The network promise is *not* aborted; if it eventually returns
-        // we still replace (in cache, and in the view if the user is
-        // still on this folder), so offline → online recovery is seamless.
-        const fetchP = listMessages(reqPath, { page: reqPage, pageSize: pageSize(), search, include: 'attachments' });
-        // Mobile races the 2s budget; desktop just awaits the real call.
-        const r = isMobile
-            ? await withTimeout(fetchP, FIRST_LOAD_BUDGET_MS).catch(() => null)
-            : await fetchP.catch((err) => {
-                if (err instanceof ApiError && err.status === 401) setSession(null);
-                ui.messagesError = describe(err, 'Failed to load messages');
-                return null;
-            });
-        if (isMobile) {
-            // Late-arriving network response replaces the cached paint.
-            fetchP.then((late) => {
-                if (!late) return;
-                cache.putMessageList(reqUser, reqPath, reqPage, search, late);
-                if (!ui.online) ui.online = true;
-                if (ui.selectedPath === reqPath && ui.messagesPage === reqPage && currentUser() === reqUser) {
-                    ui.messages = late.messages;
-                    ui.messagesTotal = late.total;
-                    messagesShownFor = { user: reqUser, path: reqPath, page: reqPage, search };
-                }
-            }).catch(() => { /* offline; watchdog handles the flag */ });
-        }
+        const reqUser = user;
+        const stillWanted = () =>
+            ui.selectedPath === reqPath
+            && ui.messagesPage === reqPage
+            && currentUser() === reqUser
+            && effectiveSearch() === search;
         try {
-            if (r) {
-                ui.messages = r.messages;
-                ui.messagesTotal = r.total;
-                messagesShownFor = { user, path: reqPath, page: reqPage, search };
-                cache.putMessageList(currentUser(), ui.selectedPath, ui.messagesPage, search, r);
-                for (const m of r.messages) {
-                    recordEnvelope(m.envelope.from);
-                    recordEnvelope(m.envelope.to);
-                    recordEnvelope(m.envelope.cc);
-                }
-                if (!ui.online) ui.online = true;
-                // (client-rules pass removed — settings.clientRules deleted by Settings refactor)
-                // On mobile, after the first page lands, drain the rest
-                // of the folder in the background so the whole inbox is
-                // available offline.
-                if (isMobile && ui.messages.length < ui.messagesTotal) {
-                    void prefetchFolderPages(ui.selectedPath, search);
-                }
-            } else if (isMobile) {
-                // Mobile only — flip offline + show the cache-empty
-                // banner. Desktop already populated messagesError above
-                // with the actual underlying error (if any).
-                if (ui.online) ui.online = false;
-                if (ui.messages.length === 0) {
-                    ui.messagesError = 'Offline — no cached messages for this folder yet.';
-                }
+            const r = await listMessages(reqPath, { page: reqPage, pageSize: pageSize(), search, include: 'attachments' });
+            // Always keyed by the request, never by whatever is selected now.
+            cache.putMessageList(reqUser, reqPath, reqPage, search, r);
+            if (!stillWanted()) return;
+            ui.messages = r.messages;
+            ui.messagesTotal = r.total;
+            messagesShownFor = { user: reqUser, path: reqPath, page: reqPage, search };
+            for (const m of r.messages) {
+                recordEnvelope(m.envelope.from);
+                recordEnvelope(m.envelope.to);
+                recordEnvelope(m.envelope.cc);
             }
+            if (!ui.online) ui.online = true;
         } catch (err) {
-            ui.messagesError = describe(err, 'Failed to load messages');
+            if (!stillWanted()) return;
             if (err instanceof ApiError && err.status === 401) setSession(null);
+            ui.messagesError = describe(err, 'Failed to load messages');
         } finally {
-            ui.messagesLoading = false;
+            if (seq === refreshSeq) ui.messagesLoading = false;
         }
     }
 
@@ -577,15 +533,17 @@
         if (ui.messages.length >= ui.messagesTotal) return;
         if (ui.messages.length >= targetTotal()) return;
         const nextPage = Math.floor(ui.messages.length / SERVER_PAGE_CAP);
-        const search = ui.search || undefined;
+        const search = effectiveSearch();
+        const path = ui.selectedPath;
         appendingMore = true;
         try {
-            const r = await listMessages(ui.selectedPath, {
+            const r = await listMessages(path, {
                 page: nextPage,
                 pageSize: SERVER_PAGE_CAP,
                 search,
                 include: 'attachments'
             });
+            if (ui.selectedPath !== path || effectiveSearch() !== search || ui.searchScope === 'all') return;
             const seen = new Set(ui.messages.map((m) => m.uid));
             const fresh = r.messages.filter((m) => !seen.has(m.uid));
             ui.messages = [...ui.messages, ...fresh];
@@ -621,7 +579,7 @@
         cancelScan();
         const ctrl = new AbortController();
         scanAbort = ctrl;
-        const search = ui.search || undefined;
+        const search = effectiveSearch();
         const path = ui.selectedPath;
         // Initial guess at total — gets refined after the first response.
         const total = Math.max(ui.messagesTotal || 0, ui.messages.length);
@@ -637,7 +595,7 @@
                     search,
                     include: 'attachments'
                 });
-                if (ctrl.signal.aborted || ui.selectedPath !== path) break;
+                if (ctrl.signal.aborted || ui.selectedPath !== path || effectiveSearch() !== search) break;
                 const seen = new Set(ui.messages.map((m) => m.uid));
                 const fresh = r.messages.filter((m) => !seen.has(m.uid));
                 if (!fresh.length) break;
@@ -796,6 +754,17 @@
         await refreshMessages({ resetPage: true });
     }
 
+    function resetMailState() {
+        Object.assign(ui, {
+            mailboxes: [],
+            messages: [],
+            selectedUid: null,
+            detail: null,
+            search: '',
+            messagesPage: 0
+        });
+    }
+
     async function logout() {
         // Fire-and-forget the server-side logout — server is stateless but
         // logs the call, and we don't want to block the UI on it.
@@ -806,14 +775,7 @@
         // app stays mounted and switches to one of them.
         setSession(null);
         try { sessionStorage.setItem('webmail.logout.recent', String(Date.now())); } catch { /* noop */ }
-        Object.assign(ui, {
-            mailboxes: [],
-            messages: [],
-            selectedUid: null,
-            detail: null,
-            search: '',
-            messagesPage: 0
-        });
+        resetMailState();
         // If another session remains, refresh into it; otherwise App.svelte
         // routes to the login screen.
         if (authState.activeUser) {
@@ -828,14 +790,7 @@
         accountMenuOpen = false;
         // Reset UI; cache is user-bucketed so stale-while-revalidate makes
         // the swap feel instant when both accounts have been visited recently.
-        Object.assign(ui, {
-            mailboxes: [],
-            messages: [],
-            selectedUid: null,
-            detail: null,
-            search: '',
-            messagesPage: 0
-        });
+        resetMailState();
         await refreshMailboxes();
         await refreshMessages({ resetPage: true });
     }
@@ -851,14 +806,7 @@
         removeSession(user);
         accountMenuOpen = false;
         if (wasActive && authState.activeUser) {
-            Object.assign(ui, {
-                mailboxes: [],
-                messages: [],
-                selectedUid: null,
-                detail: null,
-                search: '',
-                messagesPage: 0
-            });
+            resetMailState();
             await refreshMailboxes();
             await refreshMessages({ resetPage: true });
         }
@@ -952,7 +900,7 @@
                     });
                     if (ctrl.signal.aborted) break;
                     for (const msg of r.messages) {
-                        const key = `${path}${msg.uid}`;
+                        const key = `${path}\u0000${msg.uid}`;
                         if (seenKey.has(key)) continue;
                         seenKey.add(key);
                         aggregated.push({ ...msg, mailbox: path });
@@ -1010,6 +958,18 @@
         }
     }
 
+    // Drops a row that has left the current folder (moved or deleted) from
+    // the list, the selection and the cached page.
+    function removeFromList(uid: number, from: string) {
+        ui.messages = ui.messages.filter((m) => m.uid !== uid);
+        ui.messagesTotal = Math.max(0, ui.messagesTotal - 1);
+        if (ui.selectedUid === uid) {
+            ui.selectedUid = null;
+            ui.detail = null;
+        }
+        cache.invalidatePath(currentUser(), from);
+    }
+
     async function trashMessage(uid: number) {
         const trashBox = trashFolderName();
         const from = ui.selectedPath;
@@ -1017,13 +977,7 @@
             const isHardDelete = from === trashBox;
             if (isHardDelete) await deleteMessage(from, uid);
             else await moveMessage(from, uid, trashBox);
-            ui.messages = ui.messages.filter((m) => m.uid !== uid);
-            ui.messagesTotal = Math.max(0, ui.messagesTotal - 1);
-            if (ui.selectedUid === uid) {
-                ui.selectedUid = null;
-                ui.detail = null;
-            }
-            cache.invalidatePath(currentUser(), from);
+            removeFromList(uid, from);
             if (!isHardDelete) recordUndo('trash', uid, from, trashBox);
             showToast('success', isHardDelete ? 'Deleted' : 'Moved to Trash');
         } catch (err) {
@@ -1035,18 +989,28 @@
         const from = ui.selectedPath;
         try {
             await moveMessage(from, uid, destPath);
-            ui.messages = ui.messages.filter((m) => m.uid !== uid);
-            ui.messagesTotal = Math.max(0, ui.messagesTotal - 1);
-            if (ui.selectedUid === uid) {
-                ui.selectedUid = null;
-                ui.detail = null;
-            }
-            cache.invalidatePath(currentUser(), from);
+            removeFromList(uid, from);
             recordUndo('move', uid, from, destPath);
             showToast('success', `Moved to ${destPath}`);
         } catch (err) {
             showToast('error', describe(err, 'Failed to move'));
         }
+    }
+
+    // Moves a batch one at a time (keeps the IMAP client linear), skipping
+    // failures, then reloads the folder. Bulk moves are not undoable.
+    async function moveMany(uids: number[], dest: string) {
+        const from = ui.selectedPath;
+        ui.undo = null;
+        for (const uid of uids) {
+            try { await moveMessage(from, uid, dest); } catch { /* skip */ }
+        }
+        cache.invalidatePath(currentUser(), from);
+        if (ui.selectedUid !== null && uids.includes(ui.selectedUid)) {
+            ui.selectedUid = null;
+            ui.detail = null;
+        }
+        await refreshMessages({ force: true });
     }
 
     function openCompose(replyTo?: MessageDetailType | null, mode: 'new' | 'reply' | 'replyAll' | 'forward' = replyTo ? 'reply' : 'new') {
@@ -1227,13 +1191,7 @@
         const from = ui.selectedPath;
         try {
             await moveMessage(from, uid, dest);
-            ui.messages = ui.messages.filter((m) => m.uid !== uid);
-            ui.messagesTotal = Math.max(0, ui.messagesTotal - 1);
-            if (ui.selectedUid === uid) {
-                ui.selectedUid = null;
-                ui.detail = null;
-            }
-            cache.invalidatePath(currentUser(), from);
+            removeFromList(uid, from);
             recordUndo('archive', uid, from, dest);
             showToast('success', 'Archived');
         } catch (err) {
@@ -1276,14 +1234,8 @@
     async function bulkArchive() {
         const ids = [...ui.selected];
         if (!ids.length) return;
-        const dest = archiveFolderName();
-        const from = ui.selectedPath;
-        for (const uid of ids) {
-            try { await moveMessage(from, uid, dest); } catch { /* skip */ }
-        }
-        cache.invalidatePath(currentUser(), from);
         clearSelection();
-        await refreshMessages({ force: true });
+        await moveMany(ids, archiveFolderName());
         showToast('success', `Archived ${ids.length}`);
     }
 
@@ -1292,6 +1244,7 @@
         if (!ids.length) return;
         const dest = trashFolderName();
         const from = ui.selectedPath;
+        ui.undo = null;
         for (const uid of ids) {
             try {
                 if (from === dest) await deleteMessage(from, uid);
@@ -1413,7 +1366,14 @@
         return fallback;
     }
 
+    // Containers that own their own arrow / Escape handling. A key pressed
+    // inside one of them is theirs, never the message list's.
+    const OVERLAY_SELECTOR = '[role=dialog],[role=menu],[role=listbox],[role=radiogroup],[role=slider],dialog';
+
     function onKey(e: KeyboardEvent) {
+        // Something nearer the target already handled it (a menu, a
+        // suggestion list, a dialog), and the other apps have their own keys.
+        if (e.defaultPrevented || ui.app !== 'mail') return;
         // Ignore when typing in inputs — and in a <select>.
         //
         // SELECT is not a nicety: the arrow branches below call
@@ -1423,28 +1383,27 @@
         // "When"/"Then", every Settings dropdown — moved the message
         // selection behind the open modal and played the click sound
         // instead of changing the option the user was pointing at.
-        const target = e.target as HTMLElement;
+        const target = e.target as HTMLElement | null;
         if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)) {
-            if (e.key === 'Escape') {
-                if (ui.composeOpen) ui.composeOpen = false;
-                if (ui.aiPanelOpen) ui.aiPanelOpen = false;
-            }
+            if (e.key === 'Escape' && ui.aiPanelOpen) ui.aiPanelOpen = false;
             return;
         }
+        if (target?.closest?.(OVERLAY_SELECTOR)) return;
         // Only Escape and arrow navigation stay live — the single-key
         // shortcut layer (j/k/r/a/c/s/u/#/?/etc.) was removed.
         const idx = ui.messages.findIndex((m) => m.uid === ui.selectedUid);
-        if (e.key === 'ArrowDown') {
-            const next = ui.messages[Math.min(ui.messages.length - 1, idx < 0 ? 0 : idx + 1)];
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            if (ui.settingsOpen || ui.setupOpen) return;
+            const next = e.key === 'ArrowDown'
+                ? ui.messages[Math.min(ui.messages.length - 1, idx < 0 ? 0 : idx + 1)]
+                : ui.messages[Math.max(0, idx < 0 ? 0 : idx - 1)];
             if (next) { playClick(); selectMessage(next.uid); }
             e.preventDefault();
-        } else if (e.key === 'ArrowUp') {
-            const prev = ui.messages[Math.max(0, idx < 0 ? 0 : idx - 1)];
-            if (prev) { playClick(); selectMessage(prev.uid); }
-            e.preventDefault();
         } else if (e.key === 'Escape') {
-            if (ui.composeOpen) ui.composeOpen = false;
-            else if (ui.settingsOpen) ui.settingsOpen = false;
+            // The compose window closes itself (FloatingPanel) and a
+            // minimised one is deliberately parked, so it is left alone here.
+            if (ui.composeOpen) return;
+            if (ui.settingsOpen) ui.settingsOpen = false;
             else if (ui.aiPanelOpen) ui.aiPanelOpen = false;
             else if (ui.selected.size > 0) clearSelection();
             else {
@@ -1477,8 +1436,13 @@
     }
 
     function handleShortcut(sc: Shortcut) {
+        const url = safeShortcutUrl(sc.url);
+        if (!url) {
+            showToast('error', 'This shortcut has an unsupported link');
+            return;
+        }
         if (sc.mode === 'link') {
-            window.open(sc.url, '_blank', 'noopener,noreferrer');
+            window.open(url, '_blank', 'noopener,noreferrer');
         } else if (sc.mode === 'popup') {
             popupShortcut.set(sc);
         } else if (sc.mode === 'embed') {
@@ -1529,21 +1493,14 @@
         } catch { /* mailcow DB unavailable — skip */ }
     }
 
+    // Background refresh for the poll and push handler. The all-folders
+    // search owns the list while it is active, so it is left alone.
+    async function refreshVisibleList() {
+        if (ui.searchScope === 'all') return;
+        try { await refreshMessages({ force: true }); } catch { /* */ }
+    }
+
     onMount(() => {
-        // Network watchdog: probes /health within 2s on app open, retries
-        // every 30s while we believe we're offline. ui.online is the
-        // single source of truth for the offline banner + cached-mode UI.
-        // On reconnect, force-refresh the visible folder so the user
-        // sees fresh state right away (the periodic poll would catch up
-        // within 60s anyway, but instant feels much nicer). Mobile-PWA
-        // only — desktop's network is stable and the probe was just
-        // surfacing false alarms.
-        const stopWatchdog = isMobilePwa() ? startNetworkWatchdog({
-            onReconnect: () => {
-                refreshMailboxes().catch(() => { /* noop */ });
-                refreshMessages({ force: true }).catch(() => { /* noop */ });
-            }
-        }) : (() => { /* desktop: no watchdog */ });
         refreshMailboxes();
         refreshMessages();
         probeCapabilities();
@@ -1606,7 +1563,7 @@
             // on the inbox and never saw new mail land. force=true
             // bypasses the 30s server-side cache so a freshly arrived
             // message is visible within one poll cycle.
-            try { await refreshMessages({ force: true }); } catch { /* */ }
+            await refreshVisibleList();
             checkNewMailAndChime();
         }, 60_000);
 
@@ -1624,7 +1581,7 @@
                 if (e.data && e.data.type === 'webmail-new-mail') {
                     playNotify();
                     refreshMailboxes();
-                    void refreshMessages({ force: true });
+                    void refreshVisibleList();
                 }
             };
             navigator.serviceWorker.addEventListener('message', onSwMsg);
@@ -1639,7 +1596,6 @@
             clearInterval(capTimer);
             if (onSwMsg) navigator.serviceWorker.removeEventListener('message', onSwMsg);
             window.removeEventListener('pointerdown', prime);
-            stopWatchdog();
             stopExpiryWatch();
         };
     });
@@ -1720,7 +1676,12 @@
                 bind:this={searchInputEl}
                 oninput={(e) => { onSearchChange((e.currentTarget as HTMLInputElement).value); searchSuggestOpen = true; }}
                 onfocus={() => (searchSuggestOpen = true)}
-                onblur={() => setTimeout(() => (searchSuggestOpen = false), 150)}
+                onblur={(e) => {
+                    const next = e.relatedTarget as Node | null;
+                    if (next && e.currentTarget.parentElement?.contains(next)) return;
+                    setTimeout(() => (searchSuggestOpen = false), 150);
+                }}
+                onkeydown={onSearchKey}
                 aria-label={searchLabel}
                 data-testid="search-input"
             />
@@ -1750,13 +1711,24 @@
                 {/if}
             {/if}
             {#if searchSuggestOpen && visibleTags.length > 0}
-                <div class="search-suggest" role="listbox" data-testid="search-suggest">
+                <div
+                    class="search-suggest"
+                    role="group"
+                    aria-label="Search filter tags"
+                    onfocusout={(e) => {
+                        const next = e.relatedTarget as Node | null;
+                        if (!next || !e.currentTarget.parentElement?.contains(next)) searchSuggestOpen = false;
+                    }}
+                    data-testid="search-suggest"
+                >
                     <div class="search-suggest-hint">Filter with tags:</div>
                     {#each visibleTags as tag (tag.key)}
                         <button
                             type="button"
                             class="search-suggest-chip"
-                            onmousedown={(e) => { e.preventDefault(); insertTag(tag.key); }}
+                            onmousedown={(e) => e.preventDefault()}
+                            onclick={() => insertTag(tag.key)}
+                            onkeydown={onSuggestKey}
                             data-testid={`search-tag-${tag.key}`}
                         >
                             <span class="search-suggest-key">{tag.key}:</span>
@@ -1853,6 +1825,7 @@
                     class="user"
                     aria-haspopup="menu"
                     aria-expanded={accountMenuOpen}
+                    bind:this={accountBtnEl}
                     onclick={() => (accountMenuOpen = !accountMenuOpen)}
                     data-testid="account-btn"
                 >
@@ -1882,7 +1855,7 @@
                     <svg class="caret" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
                 </button>
                 {#if accountMenuOpen}
-                    <ul class="account-menu" role="menu" data-testid="account-menu">
+                    <ul class="account-menu" role="menu" bind:this={accountMenuEl} onkeydown={onAccountMenuKey} data-testid="account-menu">
                         {#each authState.sessions as s (s.user)}
                             <li class="account-row" role="presentation">
                                 <button
@@ -2035,12 +2008,7 @@
                 onRename={renameFolder}
                 onDelete={deleteFolder}
                 onDropMessages={async (uids, destPath) => {
-                    // Move each uid in turn — keeps the IMAP client linear
-                    // and matches the existing single-uid moveTo flow.
-                    for (const uid of uids) {
-                        try { await moveTo(uid, destPath); }
-                        catch { /* keep going for the rest */ }
-                    }
+                    await moveMany(uids, destPath);
                     showToast('success', `Moved ${uids.length} → ${destPath}`);
                 }}
             />
@@ -2189,24 +2157,8 @@
                 inboxSummaryOpen = false;
                 selectMessage(uid);
             }}
-            onArchiveSelected={async (uids) => {
-                const dest = archiveFolderName();
-                const from = ui.selectedPath;
-                for (const uid of uids) {
-                    try { await moveMessage(from, uid, dest); } catch { /* skip */ }
-                }
-                cache.invalidatePath(currentUser(), from);
-                await refreshMessages({ force: true });
-            }}
-            onTrashSelected={async (uids) => {
-                const dest = trashFolderName();
-                const from = ui.selectedPath;
-                for (const uid of uids) {
-                    try { await moveMessage(from, uid, dest); } catch { /* skip */ }
-                }
-                cache.invalidatePath(currentUser(), from);
-                await refreshMessages({ force: true });
-            }}
+            onArchiveSelected={(uids) => moveMany(uids, archiveFolderName())}
+            onTrashSelected={(uids) => moveMany(uids, trashFolderName())}
             onMarkReadSelected={async (uids) => {
                 const from = ui.selectedPath;
                 for (const uid of uids) {
@@ -2280,7 +2232,7 @@
     {#if ui.toast}
         <div class={`toast toast-${ui.toast.kind}`} role="status" aria-live="polite" data-testid="toast">
             <span>{ui.toast.message}</span>
-            {#if ui.undo && ui.toast.kind === 'success' && /Trash|Archive|Moved/.test(ui.toast.message)}
+            {#if ui.undo && ui.toast.kind === 'success' && ui.toast.ts >= ui.undo.ts && ui.toast.ts - ui.undo.ts < 1000}
                 <button type="button" class="undo-btn" onclick={performUndo} data-testid="undo-btn">Undo</button>
             {/if}
         </div>
@@ -2387,18 +2339,6 @@
 {/if}
 
 <style>
-    .takeover-chip {
-        display: inline-flex;
-        align-items: center;
-        gap: 5px;
-        padding: 3px 9px;
-        border-radius: 999px;
-        border: 1px solid var(--border-subtle);
-        background: var(--bg-elevated);
-        color: var(--text-secondary);
-        font-size: 11.5px;
-        white-space: nowrap;
-    }
     .net-banner {
         position: fixed;
         left: 50%;

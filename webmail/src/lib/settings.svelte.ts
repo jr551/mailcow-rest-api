@@ -4,7 +4,7 @@
 // of (or as a fallback to) the server's env-default.
 
 import { getAiConfig, getTtsConfig, apiUrl, type AiConfig, type TtsConfig } from './api';
-import { getSession, bearerHeader } from './auth.svelte';
+import { getSession, bearerHeader, dropPermanentSession } from './auth.svelte';
 
 const STORAGE_KEY = 'webmail.settings.v1';
 
@@ -197,6 +197,99 @@ const defaultLlm: LlmConfig = {
     model: ''
 };
 
+function clampNum(v: unknown, lo: number, hi: number, fallback: number): number {
+    return typeof v === 'number' && Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : fallback;
+}
+
+function str(v: unknown, fallback = ''): string {
+    return typeof v === 'string' ? v : fallback;
+}
+
+// Turn an untrusted blob (localStorage, or a snapshot pulled from another
+// device) into a complete, correctly typed Settings. Unknown keys are
+// dropped; anything missing or out of range falls back to its default.
+export function sanitizeSettings(raw: unknown): Settings {
+    const parsed = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+    const llm = (parsed.llm && typeof parsed.llm === 'object' ? parsed.llm : {}) as Record<string, unknown>;
+    return {
+        llm: {
+            kind: llm.kind === 'anthropic' ? 'anthropic' : 'openai',
+            preset: str(llm.preset, defaultLlm.preset),
+            apiKey: str(llm.apiKey),
+            baseUrl: str(llm.baseUrl),
+            model: str(llm.model)
+        },
+        useCustomLlm: !!parsed.useCustomLlm,
+        aiFeatures: parsed.aiFeatures !== false,
+        density: parsed.density === 'compact' ? 'compact' : 'comfortable',
+        listFilter: (['all', 'unread', 'starred', 'attachments', 'ai-sorted'] as const).find((f) => f === parsed.listFilter) ?? 'all',
+        aiSystemPrompt: str(parsed.aiSystemPrompt),
+        accountChipDisplay: parsed.accountChipDisplay === 'name' ? 'name' : 'email',
+        defaultFromAddress: str(parsed.defaultFromAddress),
+        displayName: str(parsed.displayName),
+        pageSize: parsed.pageSize === 'unlimited' ? 'unlimited'
+            : (typeof parsed.pageSize === 'number' && parsed.pageSize > 0 && parsed.pageSize <= 1000)
+                ? parsed.pageSize
+                : 25,
+        // Remote images are ALWAYS allowed now — there is no
+        // `allowImages` decision left in either reader. `proxyImages`
+        // survives as the only image knob because it decides HOW an
+        // image is fetched, and it must read as ON even for a profile
+        // that once stored `false`: with blocking gone, an explicit
+        // false would otherwise silently become "load straight from
+        // the sender" and hand out the user's IP. The migration
+        // below rewrites the stored blob to match, so this line is
+        // the fallback for the one session before its rewrite is
+        // read back — see migrateRemoteImagesAlwaysAllowed.
+        groupThreads: parsed.groupThreads !== false,
+        proxyImages: parsed.proxyImages !== false,
+        // Mobile defaults this to true on first launch — iOS PWA
+        // storage is too volatile to leave perma-signin opt-in.
+        permanentSignIn: parsed.permanentSignIn === undefined
+            ? isMobilePwa()
+            : !!parsed.permanentSignIn,
+        phishingScan: parsed.phishingScan !== false,
+        trackOpensDefault: !!parsed.trackOpensDefault,
+        aiSuggestSubjectOnBlur: !!parsed.aiSuggestSubjectOnBlur,
+        aiSuggestReply: parsed.aiSuggestReply !== false,
+        phishingScanTimeoutSec: typeof parsed.phishingScanTimeoutSec === 'number' && parsed.phishingScanTimeoutSec > 0
+            ? Math.min(60, parsed.phishingScanTimeoutSec) : 8,
+        phishingScanPromptAddendum: str(parsed.phishingScanPromptAddendum).slice(0, 500),
+        phishingScanConfidenceFloor: clampNum(parsed.phishingScanConfidenceFloor, 0, 1, 0.7),
+        tesseractOcrInstalled: !!parsed.tesseractOcrInstalled,
+        phishingScanOcrInline: !!parsed.phishingScanOcrInline,
+        spamSuggest: parsed.spamSuggest !== false,
+        spamSuggestConfidenceFloor: clampNum(parsed.spamSuggestConfidenceFloor, 0, 1, 0.7),
+        spamSweepBatchSize: typeof parsed.spamSweepBatchSize === 'number' && parsed.spamSweepBatchSize > 0
+            ? Math.min(200, Math.max(10, Math.round(parsed.spamSweepBatchSize))) : 50,
+        aiSortSweepSpam: parsed.aiSortSweepSpam !== false,
+        preSendCheck: parsed.preSendCheck !== false,
+        composeHistorySummary: parsed.composeHistorySummary !== false,
+        vipAddresses: str(parsed.vipAddresses),
+        weatherChip: !!parsed.weatherChip,
+        weatherChipOutlook: !!parsed.weatherChipOutlook,
+        weatherLatitude: clampNum(parsed.weatherLatitude, -90, 90, 51.5074),
+        weatherLongitude: clampNum(parsed.weatherLongitude, -180, 180, -0.1278),
+        weatherUnits: parsed.weatherUnits === 'fahrenheit' ? 'fahrenheit' : 'celsius',
+        calendarTicker: !!parsed.calendarTicker,
+        calendarTickerTitles: !!parsed.calendarTickerTitles,
+        // The app rail (Mail / Calendar / AI / Drive) is VISIBLE by
+        // default. This line read `parsed.hideSidebar !== false`,
+        // which defaults to TRUE — and since commit c7ef6fc "true"
+        // also means "the rail is collapsed" (it stopped targeting
+        // the folder pane and started targeting <AppSwitcher />), so
+        // the rail shipped HIDDEN for every user. Default to shown;
+        // a user who explicitly collapsed it still has `true` stored
+        // and keeps the collapsed rail.
+        hideSidebar: parsed.hideSidebar === true,
+        // `!== false` so an existing profile that has never heard of
+        // this field inherits the on-by-default behaviour, matching a
+        // fresh profile. An explicit `false` from a user who turned
+        // it off is preserved.
+        linkSafetyCheck: parsed.linkSafetyCheck !== false
+    };
+}
+
 function load(): Settings {
     // Migrate FIRST, then read. The remote-image migration rewrites the
     // stored blob and hands the new bytes back, and every field below is
@@ -207,137 +300,16 @@ function load(): Settings {
     // the two disagreed, which is exactly the class of bug the old test
     // suite was written to catch.
     const raw = migrateRemoteImagesAlwaysAllowed(localStorage.getItem(STORAGE_KEY));
-    let out: Settings;
     try {
         if (raw) {
-            const parsed = JSON.parse(raw);
-            out = {
-                llm: { ...defaultLlm, ...(parsed.llm || {}) },
-                useCustomLlm: !!parsed.useCustomLlm,
-                aiFeatures: parsed.aiFeatures !== false,
-                density: parsed.density === 'compact' ? 'compact' : 'comfortable',
-                listFilter: ['all', 'unread', 'starred', 'attachments', 'ai-sorted'].includes(parsed.listFilter)
-                    ? parsed.listFilter : 'all',
-                aiSystemPrompt: typeof parsed.aiSystemPrompt === 'string' ? parsed.aiSystemPrompt : '',
-                accountChipDisplay: parsed.accountChipDisplay === 'name' ? 'name' : 'email',
-                defaultFromAddress: typeof parsed.defaultFromAddress === 'string' ? parsed.defaultFromAddress : '',
-                displayName: typeof parsed.displayName === 'string' ? parsed.displayName : '',
-                pageSize: parsed.pageSize === 'unlimited' ? 'unlimited'
-                    : (typeof parsed.pageSize === 'number' && parsed.pageSize > 0 && parsed.pageSize <= 1000)
-                        ? parsed.pageSize
-                        : 25,
-                // Remote images are ALWAYS allowed now — there is no
-                // `allowImages` decision left in either reader. `proxyImages`
-                // survives as the only image knob because it decides HOW an
-                // image is fetched, and it must read as ON even for a profile
-                // that once stored `false`: with blocking gone, an explicit
-                // false would otherwise silently become "load straight from
-                // the sender" and hand out the user's IP. The migration
-                // below rewrites the stored blob to match, so this line is
-                // the fallback for the one session before its rewrite is
-                // read back — see migrateRemoteImagesAlwaysAllowed.
-                groupThreads: parsed.groupThreads !== false,
-                proxyImages: parsed.proxyImages !== false,
-                // Mobile defaults this to true on first launch — iOS PWA
-                // storage is too volatile to leave perma-signin opt-in.
-                permanentSignIn: parsed.permanentSignIn === undefined
-                    ? isMobilePwa()
-                    : !!parsed.permanentSignIn,
-                phishingScan: parsed.phishingScan !== false,
-                trackOpensDefault: !!parsed.trackOpensDefault,
-                aiSuggestSubjectOnBlur: !!parsed.aiSuggestSubjectOnBlur,
-                aiSuggestReply: parsed.aiSuggestReply !== false,
-                phishingScanTimeoutSec: typeof parsed.phishingScanTimeoutSec === 'number' && parsed.phishingScanTimeoutSec > 0
-                    ? Math.min(60, parsed.phishingScanTimeoutSec) : 8,
-                phishingScanPromptAddendum: typeof parsed.phishingScanPromptAddendum === 'string'
-                    ? parsed.phishingScanPromptAddendum.slice(0, 500) : '',
-                phishingScanConfidenceFloor: typeof parsed.phishingScanConfidenceFloor === 'number'
-                    ? Math.max(0, Math.min(1, parsed.phishingScanConfidenceFloor)) : 0.7,
-                tesseractOcrInstalled: !!parsed.tesseractOcrInstalled,
-                phishingScanOcrInline: !!parsed.phishingScanOcrInline,
-                spamSuggest: parsed.spamSuggest !== false,
-                spamSuggestConfidenceFloor: typeof parsed.spamSuggestConfidenceFloor === 'number'
-                    ? Math.max(0, Math.min(1, parsed.spamSuggestConfidenceFloor)) : 0.7,
-                spamSweepBatchSize: typeof parsed.spamSweepBatchSize === 'number' && parsed.spamSweepBatchSize > 0
-                    ? Math.min(200, Math.max(10, Math.round(parsed.spamSweepBatchSize))) : 50,
-                aiSortSweepSpam: parsed.aiSortSweepSpam !== false,
-                preSendCheck: parsed.preSendCheck !== false,
-                composeHistorySummary: parsed.composeHistorySummary !== false,
-                vipAddresses: typeof parsed.vipAddresses === 'string'
-                    ? parsed.vipAddresses
-                    : '',
-                weatherChip: !!parsed.weatherChip,
-                weatherChipOutlook: !!parsed.weatherChipOutlook,
-                weatherLatitude: typeof parsed.weatherLatitude === 'number' ? parsed.weatherLatitude : 51.5074,
-                weatherLongitude: typeof parsed.weatherLongitude === 'number' ? parsed.weatherLongitude : -0.1278,
-                weatherUnits: parsed.weatherUnits === 'fahrenheit' ? 'fahrenheit' : 'celsius',
-                calendarTicker: !!parsed.calendarTicker,
-                calendarTickerTitles: !!parsed.calendarTickerTitles,
-                // The app rail (Mail / Calendar / AI / Drive) is VISIBLE by
-                // default. This line read `parsed.hideSidebar !== false`,
-                // which defaults to TRUE — and since commit c7ef6fc "true"
-                // also means "the rail is collapsed" (it stopped targeting
-                // the folder pane and started targeting <AppSwitcher />), so
-                // the rail shipped HIDDEN for every user. Default to shown;
-                // a user who explicitly collapsed it still has `true` stored
-                // and keeps the collapsed rail.
-                hideSidebar: parsed.hideSidebar === true,
-                // `!== false` so an existing profile that has never heard of
-                // this field inherits the on-by-default behaviour, matching a
-                // fresh profile. An explicit `false` from a user who turned
-                // it off is preserved.
-                linkSafetyCheck: parsed.linkSafetyCheck !== false
-            };
+            const out = sanitizeSettings(JSON.parse(raw));
             // Sanitise the blob on the way past, not just the object we
             // return, so the stale field can't come back via settings-sync.
             migrateStripClientRules(raw);
             return out;
         }
     } catch { /* noop */ }
-    return {
-        llm: { ...defaultLlm },
-        useCustomLlm: false,
-        aiFeatures: true,
-        density: 'comfortable',
-        listFilter: 'all',
-        aiSystemPrompt: '',
-        accountChipDisplay: 'email',
-        defaultFromAddress: '',
-        displayName: '',
-        pageSize: 25,
-        groupThreads: true,
-        proxyImages: true,
-        permanentSignIn: isMobilePwa(),
-        phishingScan: true,
-        trackOpensDefault: false,
-        aiSuggestSubjectOnBlur: false,
-        phishingScanTimeoutSec: 8,
-        phishingScanPromptAddendum: '',
-        phishingScanConfidenceFloor: 0.7,
-        tesseractOcrInstalled: false,
-        phishingScanOcrInline: false,
-        spamSuggest: true,
-        spamSuggestConfidenceFloor: 0.7,
-        spamSweepBatchSize: 50,
-        aiSortSweepSpam: true,
-        aiSuggestReply: true,
-        preSendCheck: true,
-        composeHistorySummary: true,
-        vipAddresses: '',
-        weatherChip: false,
-        weatherChipOutlook: false,
-        weatherLatitude: 51.5074,
-        weatherLongitude: -0.1278,
-        weatherUnits: 'celsius',
-        calendarTicker: false,
-        calendarTickerTitles: false,
-        // Rail VISIBLE on a fresh profile. See the load() comment: `true`
-        // means collapsed, so defaulting it true hid the app rail.
-        hideSidebar: false,
-        // Link checking defaults on — see the Settings interface note. The
-        // AI hard-off in linkCheckEnabled() is the real privacy control.
-        linkSafetyCheck: true
-    };
+    return sanitizeSettings(null);
 }
 
 /* Move every profile out of the blocked state.
@@ -543,6 +515,7 @@ export function setProxyImages(on: boolean) {
 
 export function setPermanentSignIn(on: boolean) {
     state.permanentSignIn = on;
+    if (!on) dropPermanentSession();
     persist(state);
 }
 
@@ -706,6 +679,54 @@ export function aiProviderOverride(): LlmConfig | undefined {
     if (llm.baseUrl) out.baseUrl = llm.baseUrl;
     if (llm.model) out.model = llm.model;
     return out as LlmConfig;
+}
+
+// Where the user's own provider lives when they only picked a preset. Shared
+// by every client-side chat/completions caller so a new preset or a changed
+// default is edited once.
+const PRESET_BASE_URLS: Record<string, string> = {
+    mistral: 'https://api.mistral.ai/v1',
+    openai: 'https://api.openai.com/v1',
+    groq: 'https://api.groq.com/openai/v1',
+    together: 'https://api.together.xyz/v1',
+    ollama: 'http://127.0.0.1:11434/v1',
+    perplexity: 'https://api.perplexity.ai',
+    openrouter: 'https://openrouter.ai/api/v1'
+};
+
+const PRESET_MODELS: Record<string, string> = {
+    mistral: 'mistral-small-latest',
+    openai: 'gpt-4o-mini',
+    groq: 'llama-3.1-70b-versatile',
+    together: 'meta-llama/Llama-3-8b-chat-hf',
+    ollama: 'llama3.1',
+    perplexity: 'llama-3.1-sonar-small-128k-chat',
+    openrouter: 'meta-llama/llama-3.1-8b-instruct'
+};
+
+// The user's own provider endpoint, ignoring any server-managed AI config.
+export function resolveCustomBaseUrl(): string {
+    const llm = state.llm;
+    if (llm.baseUrl) return llm.baseUrl.replace(/\/+$/, '');
+    return PRESET_BASE_URLS[llm.preset] || PRESET_BASE_URLS.openai;
+}
+
+export function resolveCustomModel(): string {
+    const llm = state.llm;
+    if (llm.model) return llm.model;
+    return PRESET_MODELS[llm.preset] || PRESET_MODELS.openai;
+}
+
+// Text of a chat/completions reply. Reasoning models can leave `content`
+// empty and put the answer in `reasoning` / `reasoning_details` instead.
+export function extractChatText(reply: unknown): string {
+    const m = (reply as { choices?: { message?: Record<string, unknown> }[] } | null)?.choices?.[0]?.message || {};
+    const content = typeof m.content === 'string' ? m.content : '';
+    const reasoning = typeof m.reasoning === 'string' ? m.reasoning : '';
+    const details = Array.isArray(m.reasoning_details)
+        ? m.reasoning_details.map((d: { text?: string }) => d?.text || '').join('')
+        : '';
+    return (content || reasoning || details).trim();
 }
 
 // --- Server capability probe ----------------------------------------------

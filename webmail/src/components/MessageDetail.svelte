@@ -9,17 +9,17 @@
     import { linkCheckEnabled } from '../lib/virustotal';
     import LinkCheckPrompt from './LinkCheckPrompt.svelte';
     import { proxyImagesInHtml, isProxyHealthy } from '../lib/image-proxy';
-    import { formatFullDate, formatBytes, formatAddress, formatAddressList, isTrackingEmail, isNotificationMessage, isSmsMessage } from '../lib/format';
+    import { formatFullDate, formatBytes, formatAddressList, isTrackingEmail, isNotificationMessage, isSmsMessage } from '../lib/format';
     import NotificationBubble from './NotificationBubble.svelte';
     import Avatar from './Avatar.svelte';
     import VipBadge from './VipBadge.svelte';
     import { attachmentUrl, ocrAttachmentText, blockSender, allowSender, blockRecipient, getRawMessage, ApiError } from '../lib/api';
-    import { saveAttachmentToDrive, driveState, loadDriveConfig } from '../lib/drive.svelte';
+    import { saveAttachmentToDrive, loadDriveConfig } from '../lib/drive.svelte';
     import Icon from './Icon.svelte';
     import DriveFolderPicker from './drive/DriveFolderPicker.svelte';
     import { aiAvailable, capabilities, isVipAddress, settings } from '../lib/settings.svelte';
     import { authState } from '../lib/auth.svelte';
-    import { suggestEventFromEmail, suggestCalendarOptions, type CalendarSuggestion } from '../lib/calendar-suggest';
+    import { suggestCalendarOptions, type CalendarSuggestion } from '../lib/calendar-suggest';
     import { isChatConfigured } from '../lib/chat.svelte';
     import { loadCalendar } from '../lib/calendar.svelte';
     import { hasRemoteImages } from '../lib/image-trust';
@@ -98,6 +98,11 @@
             spamMoving = false;
         }
     }
+    function authFailed(auth: MessageDetail['auth']): boolean {
+        if (!auth) return false;
+        return [auth.spf, auth.dkim, auth.dmarc].some((v) => v === 'fail' || v === 'softfail' || v === 'permerror');
+    }
+
     // Identity of the message the last scan ran for. `ui.detail` is
     // reassigned on every refresh of the SAME message (background sync, a
     // flag change, a re-poll) — not just when the user opens a different
@@ -162,8 +167,10 @@
         // Skip the LLM scan entirely for senders the user has already
         // marked trusted — those are people they know, no point burning
         // tokens or making them wait. Synthetic "clean" result keeps the
-        // toolbar badge consistent with normal scan flow.
-        if (isTrustedSender(detail.envelope.from?.[0]?.address)) {
+        // toolbar badge consistent with normal scan flow. A message whose
+        // SPF/DKIM/DMARC verdict failed is not skipped: a spoofed From of
+        // a trusted address is exactly the case the scan exists for.
+        if (isTrustedSender(detail.envelope.from?.[0]?.address) && !authFailed(detail.auth)) {
             phishingResult = {
                 isPhishing: false,
                 confidence: 0,
@@ -389,6 +396,8 @@
             calOptionsOpen = false;
             closeAiTools();
             aiMenuOpen = false;
+            folderPickerAtt = null;
+            folderPickerBlob = null;
         });
     });
 
@@ -427,6 +436,13 @@
         requestAutoSend(t.id);
         ui.app = 'ai';
         closeAiTools();
+    }
+    // Attachment ids are IMAP part numbers ("2"), unique only within one
+    // message, so per-attachment state is keyed by folder + uid + part. The
+    // pane is not remounted per message and would otherwise show one
+    // message's OCR text or spinner on the next message's attachment 2.
+    function attKey(att: Attachment, uid: number | undefined = ui.detail?.uid, path: string = ui.selectedPath): string {
+        return `${path}:${uid}:${att.id}`;
     }
     let ocrText = $state<Record<string, string>>({});
     let ocrLoading = $state<Record<string, boolean>>({});
@@ -634,15 +650,16 @@
 
     async function viewOcr(att: Attachment) {
         if (!ui.detail) return;
-        ocrLoading = { ...ocrLoading, [att.id]: true };
+        const key = attKey(att);
+        ocrLoading = { ...ocrLoading, [key]: true };
         try {
             const text = await ocrAttachmentText(ui.selectedPath, ui.detail.uid, att.id);
-            ocrText = { ...ocrText, [att.id]: text };
+            ocrText = { ...ocrText, [key]: text };
         } catch (err) {
             const msg = err instanceof ApiError ? err.detail || err.title : (err as Error).message;
             showToast('error', msg || 'OCR failed');
         } finally {
-            ocrLoading = { ...ocrLoading, [att.id]: false };
+            ocrLoading = { ...ocrLoading, [key]: false };
         }
     }
 
@@ -669,7 +686,7 @@
     // fetched + scanned, so big PDFs without forms don't blink the user.
     let pdfFormBanner = $state<{ attId: string; filename: string } | null>(null);
     let pdfFormFiller = $state<{ id: string; filename: string; bytes: ArrayBuffer } | null>(null);
-    // Per-uid memo so we don't re-fetch the same PDF when the user toggles
+    // Per-message memo so we don't re-fetch the same PDF when the user toggles
     // panes or jumps back to the same message.
     const pdfFormSeen = new Map<string, boolean>();
 
@@ -686,14 +703,15 @@
 
     async function viewPdf(att: Attachment) {
         if (!ui.detail) return;
-        pdfLoading = { ...pdfLoading, [att.id]: true };
+        const key = attKey(att);
+        pdfLoading = { ...pdfLoading, [key]: true };
         try {
             const bytes = await fetchAttachmentBytes(att);
             pdfPreview = { id: att.id, filename: att.filename || 'document.pdf', bytes };
         } catch (err) {
             showToast('error', `Couldn't open PDF: ${(err as Error).message}`);
         } finally {
-            pdfLoading = { ...pdfLoading, [att.id]: false };
+            pdfLoading = { ...pdfLoading, [key]: false };
         }
     }
     function closePdf() { pdfPreview = null; }
@@ -717,9 +735,12 @@
     const PDF_SCAN_MAX_BYTES = 8 * 1024 * 1024;
     async function maybeShowPdfFormBanner(d: MessageDetail) {
         pdfFormBanner = null;
+        const path = ui.selectedPath;
+        // The loop awaits per attachment; the user may have moved on by then.
+        const stale = () => ui.detail?.uid !== d.uid || ui.selectedPath !== path;
         const pdfs = d.attachments.filter(isPdf);
         for (const att of pdfs) {
-            const key = `${d.uid}:${att.id}`;
+            const key = attKey(att, d.uid, path);
             const memo = pdfFormSeen.get(key);
             if (memo === false) continue; // already scanned, no form
             if (memo === true) {
@@ -732,12 +753,14 @@
                 const { hasPdfForm } = await import('../lib/pdf-form');
                 const has = await hasPdfForm(bytes);
                 pdfFormSeen.set(key, has);
+                if (stale()) return;
                 if (has) {
                     pdfFormBanner = { attId: att.id, filename: att.filename || 'form.pdf' };
                     return;
                 }
             } catch {
                 pdfFormSeen.set(key, false);
+                if (stale()) return;
             }
         }
     }
@@ -763,7 +786,8 @@
 
     async function viewEml(att: Attachment) {
         if (!ui.detail) return;
-        emlLoading = { ...emlLoading, [att.id]: true };
+        const key = attKey(att);
+        emlLoading = { ...emlLoading, [key]: true };
         try {
             // Fetch the raw attachment bytes through the existing
             // download endpoint, then parse client-side with eml-parse-js.
@@ -791,7 +815,7 @@
         } catch (err) {
             showToast('error', `Couldn't open .eml: ${(err as Error).message}`);
         } finally {
-            emlLoading = { ...emlLoading, [att.id]: false };
+            emlLoading = { ...emlLoading, [key]: false };
         }
     }
     function closeEmlPreview() { emlPreview = null; }
@@ -802,7 +826,8 @@
     }
     async function saveAttachmentToDriveFromDetail(att: Attachment) {
         if (!ui.detail) return;
-        driveLoading = { ...driveLoading, [att.id]: true };
+        const key = attKey(att);
+        driveLoading = { ...driveLoading, [key]: true };
         try {
             await loadDriveConfig();
             const url = attachmentUrl(ui.selectedPath, ui.detail.uid, att.id);
@@ -817,7 +842,7 @@
         } catch (err) {
             showToast('error', `Couldn't save to Drive: ${(err as Error).message}`);
         } finally {
-            driveLoading = { ...driveLoading, [att.id]: false };
+            driveLoading = { ...driveLoading, [key]: false };
         }
     }
 
@@ -827,10 +852,6 @@
         await saveAttachmentToDrive(folderPickerBlob, filename, path);
         folderPickerAtt = null;
         folderPickerBlob = null;
-    }
-
-    function UNIQUE_TEST_FUNCTION_XYZ123() {
-        return 'UNIQUE_TEST_STRING_XYZ123';
     }
 
     // True when the recipient list is exactly the logged-in user. We then
@@ -981,10 +1002,6 @@
         };
         closeCalOptions();
     }
-    // Keep the old single-shot path available — handy when the user
-    // wants to skip the picker or for unit tests.
-    void suggestEventFromEmail;
-
     // Best-effort plain-text fallback when the message is HTML-only. The
     // sanitizer would be heavy; a tag strip is enough to feed the LLM.
     function stripHtml(html: string): string {
@@ -1548,6 +1565,7 @@
                                                         type="button"
                                                         role="menuitem"
                                                         class="ai-tools-action"
+                                                        title={a.prompt}
                                                         onclick={() => runAction(a, d)}
                                                         data-testid={`ai-action-${i}`}
                                                     >
@@ -1842,14 +1860,21 @@
                         </span>
                         <button
                             type="button"
-                            class="phish-bubble-close"
-                            title="Trust this sender — not a scam"
-                            aria-label="Mark as trusted"
+                            class="phish-bubble-trust"
+                            title="Not a scam — stop scanning mail from this address"
                             onclick={() => {
                                 markTrusted(d.envelope.from?.[0]?.address);
                                 phishingDismissed = true;
-                                showToast('success', 'Marked as trusted — future mail from this sender won\'t be flagged.');
+                                showToast('success', 'Marked as trusted — future mail from this address won\'t be flagged.');
                             }}
+                            data-testid="phishing-trust-address"
+                        >Trust address</button>
+                        <button
+                            type="button"
+                            class="phish-bubble-close"
+                            title="Dismiss"
+                            aria-label="Dismiss warning"
+                            onclick={() => { phishingDismissed = true; }}
                         ><Icon name="close" size={11} /></button>
                     </div>
                 <!-- "Mixed signals" is a CONTINUOUS band, not one starting at a
@@ -1899,11 +1924,11 @@
                         <button
                             type="button"
                             class="spam-bubble-action ghost"
-                            title="Tell the AI this isn't spam — future emails from this sender won't be flagged"
+                            title="Tell the AI this isn't spam — future emails from this address won't be flagged"
                             onclick={() => {
                                 markTrusted(d.envelope.from?.[0]?.address);
                                 spamDismissed = true;
-                                showToast('success', 'Got it — won\'t flag mail from this sender as spam.');
+                                showToast('success', 'Got it — won\'t flag mail from this address as spam.');
                             }}
                             data-testid="spam-suggest-not-spam"
                         >Not spam</button>
@@ -2050,9 +2075,9 @@
                                         type="button"
                                         class="btn btn-ghost"
                                         onclick={() => viewOcr(att)}
-                                        disabled={ocrLoading[att.id]}
+                                        disabled={ocrLoading[attKey(att)]}
                                     >
-                                        {#if ocrLoading[att.id]}<span class="spinner"></span>{/if}
+                                        {#if ocrLoading[attKey(att)]}<span class="spinner"></span>{/if}
                                         <Icon name="sparkles" size={13} /> OCR
                                     </button>
                                 {/if}
@@ -2061,10 +2086,10 @@
                                         type="button"
                                         class="btn btn-ghost"
                                         onclick={() => viewEml(att)}
-                                        disabled={emlLoading[att.id]}
+                                        disabled={emlLoading[attKey(att)]}
                                         data-testid={`eml-view-${att.id}`}
                                     >
-                                        {#if emlLoading[att.id]}<span class="spinner"></span>{/if}
+                                        {#if emlLoading[attKey(att)]}<span class="spinner"></span>{/if}
                                         <Icon name="mail" size={13} /> Open
                                     </button>
                                 {/if}
@@ -2073,10 +2098,10 @@
                                         type="button"
                                         class="btn btn-ghost"
                                         onclick={() => viewPdf(att)}
-                                        disabled={pdfLoading[att.id]}
+                                        disabled={pdfLoading[attKey(att)]}
                                         data-testid={`pdf-view-${att.id}`}
                                     >
-                                        {#if pdfLoading[att.id]}<span class="spinner"></span>{/if}
+                                        {#if pdfLoading[attKey(att)]}<span class="spinner"></span>{/if}
                                         <Icon name="eye" size={13} /> Open + draw
                                     </button>
                                 {/if}
@@ -2084,9 +2109,9 @@
                                     type="button"
                                     class="btn btn-ghost"
                                     onclick={() => saveAttachmentToDriveFromDetail(att)}
-                                    disabled={driveLoading[att.id]}
+                                    disabled={driveLoading[attKey(att)]}
                                 >
-                                    {#if driveLoading[att.id]}<span class="spinner"></span>{/if}
+                                    {#if driveLoading[attKey(att)]}<span class="spinner"></span>{/if}
                                     <Icon name="drive" size={13} /> Save to Drive
                                 </button>
                                 <a class="btn btn-ghost" href={downloadHref(att)} download={att.filename || ''}>
@@ -2099,8 +2124,8 @@
                                     onCancel={() => { folderPickerAtt = null; folderPickerBlob = null; }}
                                 />
                             {/if}
-                            {#if ocrText[att.id]}
-                                <pre class="ocr-output" data-testid={`ocr-${att.id}`}>{ocrText[att.id]}</pre>
+                            {#if ocrText[attKey(att)]}
+                                <pre class="ocr-output" data-testid={`ocr-${att.id}`}>{ocrText[attKey(att)]}</pre>
                             {/if}
                         </li>
                     {/each}
@@ -3590,6 +3615,21 @@
         border-color: var(--warning, currentColor);
         color: var(--text-secondary);
         opacity: 0.9;
+    }
+    .phish-bubble-trust {
+        flex-shrink: 0;
+        padding: 4px 10px;
+        font: inherit;
+        font-weight: 600;
+        font-size: 12px;
+        background: color-mix(in srgb, var(--danger) 18%, transparent);
+        color: var(--text-primary);
+        border: none;
+        border-radius: 999px;
+        cursor: pointer;
+    }
+    .phish-bubble-trust:hover {
+        background: color-mix(in srgb, var(--danger) 30%, transparent);
     }
     .phish-bubble-close {
         flex-shrink: 0;

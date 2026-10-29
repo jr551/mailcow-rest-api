@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const { ImapFlow } = require('imapflow');
 const { request } = require('undici');
-const { walkStructure, downloadPartText, streamToBuffer, parseAuthResultsHeader } = require('./imap');
+const { walkStructure, downloadPartText } = require('./imap');
 const { headersFromSource, htmlToText, addressList } = require('./webhook-payload');
 const { createWebhookStager } = require('./webhook-staging');
 const { setHeader } = require('./utils/webhook-headers');
@@ -57,11 +57,7 @@ function createWebhookForwarder({ config, store, logger, connect: connectOverrid
     const accounts = config.webhooks.accounts || [];
     const pollIntervalMs = config.webhooks.pollIntervalMs;
     const maxAttempts = config.webhooks.maxAttempts;
-    const maxBytes = config.webhooks.maxMessageBytes;
     const maxPayloadBytes = config.webhooks.maxPayloadBytes || 240 * 1024;
-    const includeAttachments = config.webhooks.includeAttachments;
-    const maxAttachmentBytes = config.webhooks.maxAttachmentBytes;
-    const maxAttachmentsTotalBytes = config.webhooks.maxAttachmentsTotalBytes;
     const timeoutMs = config.webhooks.timeoutMs;
     const enabled = accounts.length > 0;
 
@@ -135,9 +131,17 @@ function createWebhookForwarder({ config, store, logger, connect: connectOverrid
             headersTimeout: timeoutMs,
             bodyTimeout: timeoutMs
         });
-        // Drain regardless of status so the socket can be reused.
+        // Only the first 300 characters are kept for the error message; a
+        // longer reply is abandoned (which closes the socket) rather than
+        // buffered whole.
         let text = '';
-        try { text = (await res.body.text()).slice(0, 300); } catch { /* */ }
+        try {
+            for await (const chunk of res.body) {
+                text += chunk.toString();
+                if (text.length >= 300) break;
+            }
+        } catch { /* */ }
+        text = text.slice(0, 300);
         if (res.statusCode < 200 || res.statusCode >= 300) {
             const err = new Error(`Webhook returned ${res.statusCode}: ${text}`);
             err.statusCode = res.statusCode;
@@ -189,7 +193,6 @@ function createWebhookForwarder({ config, store, logger, connect: connectOverrid
         }));
 
         let body = text || '';
-        let truncated = false;
         const payload = {
             account: account.address,
             mailbox: account.mailbox,
@@ -228,7 +231,6 @@ function createWebhookForwarder({ config, store, logger, connect: connectOverrid
             // Keep the complete body readable where possible; shrink to a preview
             // and let the one-time link carry the full original.
             body = body.slice(0, 16000);
-            truncated = true;
             payload.text = body;
             payload.textTruncated = true;
         }

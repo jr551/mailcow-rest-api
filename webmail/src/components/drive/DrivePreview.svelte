@@ -1,6 +1,7 @@
 <script lang="ts">
     import { getObjectUrl, fetchBlob } from '../../lib/drive-api';
     import { renderMarkdown } from '../../lib/markdown';
+    import { showToast } from '../../lib/store.svelte';
     import Icon from '../Icon.svelte';
 
     interface Props {
@@ -10,28 +11,54 @@
     }
     let { item, onClose, onEdit }: Props = $props();
 
+    // Presigned URLs only need to outlive the preview, not the default 24h.
+    const PREVIEW_URL_TTL_SEC = 3600;
+    // The Office viewer fetches the file straight away, so its link is short.
+    const OFFICE_URL_TTL_SEC = 300;
+
     let url = $state('');
     let textContent = $state<string | null>(null);
     let isMarkdownFile = $state(false);
+    let officeUrl = $state('');
 
+    // Each fetch below is tied to the item that started it: switching files
+    // quickly must not paint the previous file's content, and a failed
+    // request must surface as a toast instead of an unhandled rejection.
     $effect(() => {
-        if (item) {
-            getObjectUrl(item.path).then((u) => { url = u; });
-            if (isMarkdown(item.name) || isTextCode(item.name)) {
-                fetchBlob(item.path).then((b) => b.text()).then((t) => {
-                    textContent = t;
-                    isMarkdownFile = isMarkdown(item.name);
-                });
-            } else {
-                textContent = null;
-                isMarkdownFile = false;
-            }
-        } else {
+        const current = item;
+        officeUrl = '';
+        if (!current) {
             url = '';
             textContent = null;
             isMarkdownFile = false;
+            return;
         }
+        let stale = false;
+        const fail = () => { if (!stale) showToast('error', `Could not load preview of ${current.name}`); };
+        url = '';
+        getObjectUrl(current.path, PREVIEW_URL_TTL_SEC).then((u) => { if (!stale) url = u; }).catch(fail);
+        textContent = null;
+        isMarkdownFile = false;
+        if (isMarkdown(current.name) || isTextCode(current.name)) {
+            fetchBlob(current.path).then((b) => b.text()).then((t) => {
+                if (stale) return;
+                textContent = t;
+                isMarkdownFile = isMarkdown(current.name);
+            }).catch(fail);
+        }
+        return () => { stale = true; };
     });
+
+    async function openOfficeViewer() {
+        if (!item) return;
+        const current = item;
+        try {
+            const u = await getObjectUrl(current.path, OFFICE_URL_TTL_SEC);
+            if (item === current) officeUrl = u;
+        } catch {
+            showToast('error', `Could not load preview of ${current.name}`);
+        }
+    }
 
     function isImage(name: string): boolean {
         const ext = name.split('.').pop()?.toLowerCase();
@@ -54,7 +81,7 @@
 
     function isOffice(name: string): boolean {
         const ext = name.split('.').pop()?.toLowerCase();
-        return ['doc','docx','odt','xls','xlsx','csv','ods','ppt','pptx','odp'].includes(ext || '');
+        return ['doc','docx','odt','xls','xlsx','ods','ppt','pptx','odp'].includes(ext || '');
     }
 
     function isMarkdown(name: string): boolean {
@@ -81,11 +108,14 @@
 
     let pdfBytes = $state<ArrayBuffer | null>(null);
     $effect(() => {
-        if (item && isPdf(item.name)) {
-            fetchBlob(item.path).then((b) => b.arrayBuffer()).then((ab) => { pdfBytes = ab; });
-        } else {
-            pdfBytes = null;
-        }
+        const current = item;
+        pdfBytes = null;
+        if (!current || !isPdf(current.name)) return;
+        let stale = false;
+        fetchBlob(current.path).then((b) => b.arrayBuffer()).then((ab) => {
+            if (!stale) pdfBytes = ab;
+        }).catch(() => { if (!stale) showToast('error', `Could not load preview of ${current.name}`); });
+        return () => { stale = true; };
     });
 
     $effect(() => {
@@ -106,8 +136,8 @@
 </script>
 
 {#if item}
-    <div class="preview-overlay" onclick={(e) => { if (e.target === e.currentTarget) onClose(); }} role="button" tabindex="0" onkeydown={(e) => { if (e.key === 'Escape') onClose(); }}>
-        <div class="preview-modal">
+    <div class="preview-overlay" onclick={(e) => { if (e.target === e.currentTarget) onClose(); }} role="presentation">
+        <div class="preview-modal" role="dialog" aria-modal="true" aria-label={`Preview of ${item.name}`}>
             <div class="preview-header">
                 <span class="preview-title">{item.name}</span>
                 <div class="preview-actions">
@@ -149,8 +179,25 @@
                             <mod.default bytes={pdfBytes} filename={item.name} onClose={onClose} inline={true} />
                         {/await}
                     </div>
+                {:else if isOffice(item.name) && officeUrl}
+                    <iframe src={`https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(officeUrl)}`} title={item.name} class="preview-iframe"></iframe>
                 {:else if isOffice(item.name)}
-                    <iframe src={`https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(url)}`} title={item.name} class="preview-iframe"></iframe>
+                    <div class="preview-generic">
+                        <Icon name="file" size={64} />
+                        <p class="preview-name">{item.name}</p>
+                        <p class="preview-meta">{formatSize(item.size)}</p>
+                        <p class="preview-consent">
+                            Previewing this file uses Microsoft's online viewer. A temporary link
+                            (valid for 5 minutes) is sent to Microsoft so it can fetch the file.
+                        </p>
+                        <button type="button" class="preview-btn" onclick={openOfficeViewer} data-testid="drive-office-preview">
+                            <Icon name="eye" size={16} />
+                            Preview with Microsoft
+                        </button>
+                        {#if url}
+                            <a class="preview-link" href={url} download={item.name}>Download instead</a>
+                        {/if}
+                    </div>
                 {:else if isMarkdownFile && textContent !== null}
                     <div class="preview-text markdown-body">
                         {@html renderMarkdown(textContent)}
@@ -292,6 +339,17 @@
         font-size: 13px;
         color: var(--text-tertiary);
     }
+    .preview-consent {
+        max-width: 420px;
+        font-size: 12.5px;
+        line-height: 1.5;
+        color: var(--text-tertiary);
+    }
+    .preview-link {
+        font-size: 12.5px;
+        color: var(--text-secondary);
+        text-decoration: underline;
+    }
     .preview-btn {
         display: inline-flex;
         align-items: center;
@@ -304,6 +362,8 @@
         font-size: 14px;
         font-weight: 500;
         margin-top: 8px;
+        border: none;
+        cursor: pointer;
     }
     .preview-btn:hover {
         opacity: 0.9;

@@ -1,7 +1,7 @@
 <script lang="ts">
     import { apiUrl } from '../../lib/api';
     import { onMount } from 'svelte';
-    import { mobileState, navigate, showToast } from '../lib/store.svelte';
+    import { navigate, showToast, resetMobileState } from '../lib/store.svelte';
     import { authState, logoutRemote, setSession, bearerHeader, getSession } from '../../lib/auth.svelte';
     import { pwa, promptInstall, subscribePush, unsubscribePush, pushSubscriptionStatus } from '../../lib/pwa.svelte';
     import {
@@ -15,7 +15,7 @@
     import { warmupTesseract, teardownTesseract } from '../../lib/tesseract-ocr';
     import { sounds, setMuted } from '../../lib/sounds.svelte';
     import { gravatarPref, setGravatarEnabled } from '../../lib/avatars.svelte';
-    import { spamFeedback, markTrusted, removeTrusted, removeTrustedDomain } from '../../lib/spam-feedback.svelte';
+    import { spamFeedback, markTrusted, addTrustedDomain, removeTrusted, removeTrustedDomain } from '../../lib/spam-feedback.svelte';
     import {
         getSendFromAddresses, summarizeMessage, createTempAlias, deleteTempAlias, getTempAliases,
         listMailRules, addMailRule, removeMailRule,
@@ -23,6 +23,7 @@
         formatMailRuleConditionSummary
     } from '../../lib/api';
     import Icon from '../../components/Icon.svelte';
+    import Toggle from './Toggle.svelte';
 
     // Mail rules — minimal port of the desktop block. Mobile keeps to
     // contains-only conditions to avoid a deep dropdown stack on phones.
@@ -46,10 +47,9 @@
         if (!v) return;
         if (v.includes('@')) {
             markTrusted(v);
-        } else {
-            // Bare-domain shortcut: stash via a synthetic address then drop it.
-            markTrusted(`__user__@${v}`);
-            removeTrusted(`__user__@${v}`);
+        } else if (!addTrustedDomain(v)) {
+            showToast('error', 'Free-mail providers cannot be trusted as a whole domain. Add the exact address instead.');
+            return;
         }
         trustedAddInput = '';
     }
@@ -87,7 +87,7 @@
             await refreshMailRules();
             showToast('success', 'Rule added');
         } catch (err) {
-            showToast('error', (err as Error).message || 'Failed to add rule');
+            showToast('error', 'Failed to add rule', err);
         } finally {
             savingRule = false;
         }
@@ -99,7 +99,7 @@
             await refreshMailRules();
             showToast('success', 'Rule removed');
         } catch (err) {
-            showToast('error', (err as Error).message || 'Failed to remove rule');
+            showToast('error', 'Failed to remove rule', err);
         }
     }
 
@@ -228,7 +228,7 @@
                     showToast('success', 'Push notifications enabled');
                     pushStatus = 'subscribed';
                 } else {
-                    showToast('error', r.reason || 'Failed to enable push');
+                    showToast('error', 'Failed to enable push', r.reason);
                 }
             }
         } finally {
@@ -252,8 +252,7 @@
             tempAliases = [...tempAliases, { address: r.address, validity: r.validity, permanent: r.permanent }];
             showToast('success', `Created ${r.address}`);
         } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            showToast('error', msg);
+            showToast('error', "Couldn't create alias", err);
         } finally {
             creatingAlias = false;
         }
@@ -264,13 +263,14 @@
             await deleteTempAlias(addr);
             tempAliases = tempAliases.filter((a) => a.address !== addr);
         } catch (err) {
-            showToast('error', (err as Error).message);
+            showToast('error', "Couldn't delete alias", err);
         }
     }
 
     function logout() {
         logoutRemote();
         setSession(null);
+        resetMobileState();
         navigate('inbox');
         showToast('info', 'Signed out');
     }
@@ -359,7 +359,7 @@
                 <div class="ios-row">
                     <span class="row-value truncate" style="font-family:var(--font-mono);font-size:13px;">{a.address}</span>
                     <span class="muted small">{a.permanent ? 'permanent' : 'temp'}</span>
-                    <button type="button" class="btn btn-ghost" onclick={() => dropTempAlias(a.address)}>
+                    <button type="button" class="btn btn-ghost" aria-label={`Delete alias ${a.address}`} onclick={() => dropTempAlias(a.address)}>
                         <Icon name="trash" size={14} />
                     </button>
                 </div>
@@ -373,64 +373,28 @@
                     <span class="row-label">Compact density</span>
                     <span class="muted small">Pack more rows into the message list</span>
                 </div>
-                <button
-                    type="button"
-                    class="toggle-switch"
-                    aria-label="Compact density"
-                    class:on={settings.density === 'compact'}
-                    class:off={settings.density !== 'compact'}
-                    onclick={() => setDensity(settings.density === 'compact' ? 'comfortable' : 'compact')}
-                >
-                    <span class="toggle-knob"></span>
-                </button>
+                <Toggle checked={settings.density === 'compact'} label="Compact density" onToggle={() => setDensity(settings.density === 'compact' ? 'comfortable' : 'compact')} />
             </div>
             <div class="ios-row toggle-row">
                 <div class="toggle-info">
                     <span class="row-label">Group threads</span>
                     <span class="muted small">Collapse conversations into one row</span>
                 </div>
-                <button
-                    type="button"
-                    class="toggle-switch"
-                    aria-label="Group threads"
-                    class:on={settings.groupThreads}
-                    class:off={!settings.groupThreads}
-                    onclick={() => setGroupThreads(!settings.groupThreads)}
-                >
-                    <span class="toggle-knob"></span>
-                </button>
+                <Toggle checked={settings.groupThreads} label="Group threads" onToggle={() => setGroupThreads(!settings.groupThreads)} />
             </div>
             <div class="ios-row toggle-row">
                 <div class="toggle-info">
                     <span class="row-label">Sounds</span>
                     <span class="muted small">Chime on new mail, swoosh on send</span>
                 </div>
-                <button
-                    type="button"
-                    class="toggle-switch"
-                    aria-label="Sounds"
-                    class:on={!sounds.muted}
-                    class:off={sounds.muted}
-                    onclick={() => setMuted(!sounds.muted)}
-                >
-                    <span class="toggle-knob"></span>
-                </button>
+                <Toggle checked={!sounds.muted} label="Sounds" onToggle={() => setMuted(!sounds.muted)} />
             </div>
             <div class="ios-row toggle-row">
                 <div class="toggle-info">
                     <span class="row-label">Gravatar avatars</span>
                     <span class="muted small">Look up sender portraits</span>
                 </div>
-                <button
-                    type="button"
-                    class="toggle-switch"
-                    aria-label="Gravatar avatars"
-                    class:on={gravatarPref.on}
-                    class:off={!gravatarPref.on}
-                    onclick={() => setGravatarEnabled(!gravatarPref.on)}
-                >
-                    <span class="toggle-knob"></span>
-                </button>
+                <Toggle checked={gravatarPref.on} label="Gravatar avatars" onToggle={() => setGravatarEnabled(!gravatarPref.on)} />
             </div>
         </div>
 
@@ -441,16 +405,7 @@
                     <span class="row-label">Load images via the privacy proxy</span>
                     <span class="muted small">Remote images always load; this fetches them through our server so the sender's CDN never sees your IP</span>
                 </div>
-                <button
-                    type="button"
-                    class="toggle-switch"
-                    aria-label="Load images via the privacy proxy"
-                    class:on={settings.proxyImages}
-                    class:off={!settings.proxyImages}
-                    onclick={() => setProxyImages(!settings.proxyImages)}
-                >
-                    <span class="toggle-knob"></span>
-                </button>
+                <Toggle checked={settings.proxyImages} label="Load images via the privacy proxy" onToggle={() => setProxyImages(!settings.proxyImages)} />
             </div>
             <!-- The "Always allow images" row is gone because there is no
                  blocking any more — remote content always loads. The single
@@ -462,16 +417,7 @@
                     <span class="row-label">Phishing detection</span>
                     <span class="muted small">Scan opened messages for phishing patterns</span>
                 </div>
-                <button
-                    type="button"
-                    class="toggle-switch"
-                    aria-label="Phishing detection"
-                    class:on={settings.phishingScan}
-                    class:off={!settings.phishingScan}
-                    onclick={() => setPhishingScan(!settings.phishingScan)}
-                >
-                    <span class="toggle-knob"></span>
-                </button>
+                <Toggle checked={settings.phishingScan} label="Phishing detection" onToggle={() => setPhishingScan(!settings.phishingScan)} />
             </div>
             {#if settings.phishingScan}
                 <div class="ios-row" style="flex-direction:column;align-items:stretch;gap:6px;padding-top:10px;">
@@ -516,17 +462,7 @@
                             {#if !settings.tesseractOcrInstalled}<em>Install OCR engine below first.</em>{/if}
                         </span>
                     </div>
-                    <button
-                        type="button"
-                        class="toggle-switch"
-                        aria-label="OCR inline images"
-                        class:on={settings.phishingScanOcrInline}
-                        class:off={!settings.phishingScanOcrInline}
-                        disabled={!settings.tesseractOcrInstalled}
-                        onclick={() => setPhishingScanOcrInline(!settings.phishingScanOcrInline)}
-                    >
-                        <span class="toggle-knob"></span>
-                    </button>
+                    <Toggle checked={settings.phishingScanOcrInline} label="OCR inline images" disabled={!settings.tesseractOcrInstalled} onToggle={() => setPhishingScanOcrInline(!settings.phishingScanOcrInline)} />
                 </div>
             {/if}
             <div class="ios-row toggle-row">
@@ -534,13 +470,7 @@
                     <span class="row-label">Local OCR engine (tesseract.js)</span>
                     <span class="muted small">~3 MB WASM core + a one-off ~12 MB language download. All OCR runs in your browser.</span>
                 </div>
-                <button
-                    type="button"
-                    class="toggle-switch"
-                    aria-label="Local OCR engine (tesseract.js)"
-                    class:on={settings.tesseractOcrInstalled}
-                    class:off={!settings.tesseractOcrInstalled}
-                    onclick={async () => {
+                <Toggle checked={settings.tesseractOcrInstalled} label="Local OCR engine (tesseract.js)" onToggle={async () => {
                         const next = !settings.tesseractOcrInstalled;
                         setTesseractOcrInstalled(next);
                         if (next) {
@@ -555,10 +485,7 @@
                         } else {
                             await teardownTesseract();
                         }
-                    }}
-                >
-                    <span class="toggle-knob"></span>
-                </button>
+                    }} />
             </div>
         </div>
 
@@ -626,32 +553,14 @@
                     <span class="row-label">Default to tracked</span>
                     <span class="muted small">New messages start with the spy pixel pre-enabled</span>
                 </div>
-                <button
-                    type="button"
-                    class="toggle-switch"
-                    aria-label="Default to tracked"
-                    class:on={settings.trackOpensDefault}
-                    class:off={!settings.trackOpensDefault}
-                    onclick={() => setTrackOpensDefault(!settings.trackOpensDefault)}
-                >
-                    <span class="toggle-knob"></span>
-                </button>
+                <Toggle checked={settings.trackOpensDefault} label="Default to tracked" onToggle={() => setTrackOpensDefault(!settings.trackOpensDefault)} />
             </div>
             <div class="ios-row toggle-row">
                 <div class="toggle-info">
                     <span class="row-label">AI subject on blur</span>
                     <span class="muted small">Suggest a subject the moment you leave the body</span>
                 </div>
-                <button
-                    type="button"
-                    class="toggle-switch"
-                    aria-label="AI subject on blur"
-                    class:on={settings.aiSuggestSubjectOnBlur}
-                    class:off={!settings.aiSuggestSubjectOnBlur}
-                    onclick={() => setAiSuggestSubjectOnBlur(!settings.aiSuggestSubjectOnBlur)}
-                >
-                    <span class="toggle-knob"></span>
-                </button>
+                <Toggle checked={settings.aiSuggestSubjectOnBlur} label="AI subject on blur" onToggle={() => setAiSuggestSubjectOnBlur(!settings.aiSuggestSubjectOnBlur)} />
             </div>
         </div>
 
@@ -729,27 +638,16 @@
         </button>
         {#if showAiProvider}
             <div class="ios-list">
-                <!-- Hard off switch, first row so it reads as the master
-                     control rather than another provider setting. Same
-                     wording as the desktop section: the consequence (all
-                     AI UI disappears) is the thing a user needs to know
-                     before they flip it. -->
+                <!-- Master switch, first row so it reads as the control for
+                     everything below rather than another provider setting.
+                     On = AI enabled; the hint says what switching it off
+                     removes. -->
                 <div class="ios-row toggle-row">
                     <div class="toggle-info">
-                        <span class="row-label">Turn off all AI features</span>
-                        <span class="muted small">Hides the AI tab, AI buttons and every suggestion</span>
+                        <span class="row-label">AI features</span>
+                        <span class="muted small">Switch off to hide the AI tab, AI buttons and every suggestion</span>
                     </div>
-                    <button
-                        type="button"
-                        class="toggle-switch"
-                        aria-label="Turn off all AI features"
-                        class:on={settings.aiFeatures}
-                        class:off={!settings.aiFeatures}
-                        onclick={() => setAiFeatures(!settings.aiFeatures)}
-                        data-testid="settings-ai-features"
-                    >
-                        <span class="toggle-knob"></span>
-                    </button>
+                    <Toggle checked={settings.aiFeatures} label="AI features" testid="settings-ai-features" onToggle={() => setAiFeatures(!settings.aiFeatures)} />
                 </div>
                 {#if !settings.aiFeatures}
                     <div class="ios-row" style="align-items:flex-start;flex-direction:column;gap:4px;">
@@ -766,16 +664,7 @@
                         <span class="row-label">Use my own provider</span>
                         <span class="muted small">Calls provider directly from this device</span>
                     </div>
-                    <button
-                        type="button"
-                        class="toggle-switch"
-                        aria-label="Use my own provider"
-                        class:on={settings.useCustomLlm}
-                        class:off={!settings.useCustomLlm}
-                        onclick={() => setUseCustomLlm(!settings.useCustomLlm)}
-                    >
-                        <span class="toggle-knob"></span>
-                    </button>
+                    <Toggle checked={settings.useCustomLlm} label="Use my own provider" onToggle={() => setUseCustomLlm(!settings.useCustomLlm)} />
                 </div>
                 {#if settings.useCustomLlm}
                     <div class="ios-row" style="padding: 6px 16px;flex-direction:column;align-items:stretch;gap:6px;">
@@ -837,17 +726,7 @@
                         <span class="row-label">New-mail push</span>
                         <span class="muted small">Get notified when new messages arrive</span>
                     </div>
-                    <button
-                        type="button"
-                        class="toggle-switch"
-                        aria-label="New-mail push"
-                        class:on={pushStatus === 'subscribed'}
-                        class:off={pushStatus !== 'subscribed'}
-                        disabled={pushLoading || pushStatus === 'denied'}
-                        onclick={togglePush}
-                    >
-                        <span class="toggle-knob"></span>
-                    </button>
+                    <Toggle checked={pushStatus === 'subscribed'} label="New-mail push" disabled={pushLoading || pushStatus === 'denied'} onToggle={togglePush} />
                 </div>
                 {#if pushStatus === 'denied'}
                     <div class="ios-row">
@@ -994,32 +873,6 @@
         min-width: 0;
         flex: 1;
     }
-    .toggle-switch {
-        width: 50px;
-        height: 30px;
-        border-radius: 15px;
-        border: none;
-        padding: 2px;
-        position: relative;
-        cursor: pointer;
-        transition: background-color 200ms ease;
-        flex-shrink: 0;
-        background: var(--border-soft);
-    }
-    .toggle-switch.on { background: var(--accent); }
-    .toggle-switch.off { background: var(--border-soft); }
-    .toggle-switch:disabled { opacity: 0.5; cursor: not-allowed; }
-    .toggle-knob {
-        display: block;
-        width: 26px;
-        height: 26px;
-        border-radius: 50%;
-        background: var(--bg-surface);
-        box-shadow: 0 1px 3px rgba(0,0,0,0.12);
-        transition: transform 200ms cubic-bezier(0.2, 0.7, 0.2, 1);
-    }
-    .toggle-switch.on .toggle-knob { transform: translateX(20px); }
-    .toggle-switch.off .toggle-knob { transform: translateX(0); }
     .small { font-size: 13px; }
     .muted { color: var(--text-tertiary); }
     .from-select {

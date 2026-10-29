@@ -4,32 +4,27 @@
     // tldraw-related is dynamically imported so the React + tldraw
     // chunk only ships when the user actually opens the drawing modal.
     //
-    // The "Insert" button asks tldraw's editor to export the current
-    // page as PNG, then hands the data URL back to RichEditor (which
-    // drops it in as an <img>).
+    // Save serialises the tldraw snapshot to a .tldr blob for Drive.
 
     import { onMount, onDestroy } from 'svelte';
     import Icon from '../Icon.svelte';
 
     interface Props {
-        /** 'email' = original compose flow (Insert PNG). 'create'|'edit' = Drive flow (Save .tldr). */
-        mode?: 'email' | 'create' | 'edit';
+        mode?: 'create' | 'edit';
         initialSnapshot?: object;
         defaultName?: string;
-        onDone?: (dataUrl: string) => void;
-        onSave?: (blob: Blob, filename: string) => void;
+        onSave: (blob: Blob, filename: string) => void;
         onCancel: () => void;
     }
-    let { mode = 'email', initialSnapshot, defaultName = 'drawing.tldr', onDone, onSave, onCancel }: Props = $props();
+    let { mode = 'create', initialSnapshot, defaultName = 'drawing.tldr', onSave, onCancel }: Props = $props();
 
     let mountEl: HTMLDivElement | undefined = $state();
     let loading = $state(true);
-    let exporting = $state(false);
     let saving = $state(false);
     let error = $state<string | null>(null);
 
     // The tldraw editor instance + the React root are stashed on these
-    // refs so the Insert/Save button can drive them without re-rendering React.
+    // refs so the Save button can drive them without re-rendering React.
     let editorRef: { current: unknown } = { current: null };
     let reactRoot: { unmount: () => void } | null = null;
 
@@ -53,6 +48,7 @@
                         console.warn('Failed to load tldraw snapshot', err);
                     }
                 }
+                baseline = documentJson();
                 loading = false;
             };
             root.render(
@@ -73,38 +69,7 @@
         editorRef.current = null;
     });
 
-    async function insert() {
-        if (mode !== 'email' || !onDone) return;
-        const ed = editorRef.current as {
-            getCurrentPageShapeIds: () => Set<string>;
-            toImage: (ids: string[], opts: Record<string, unknown>) => Promise<{ blob: Blob; width: number; height: number }>;
-        } | null;
-        if (!ed) return;
-        const ids = Array.from(ed.getCurrentPageShapeIds());
-        if (!ids.length) {
-            // Nothing drawn yet — just bail.
-            onCancel();
-            return;
-        }
-        exporting = true;
-        try {
-            const result = await ed.toImage(ids, {
-                format: 'png',
-                background: true,
-                padding: 16,
-                scale: 2
-            });
-            const dataUrl = await blobToDataUrl(result.blob);
-            onDone(dataUrl);
-        } catch (err) {
-            error = `Export failed: ${(err as Error).message}`;
-        } finally {
-            exporting = false;
-        }
-    }
-
     async function save() {
-        if (mode === 'email' || !onSave) return;
         const ed = editorRef.current as { getSnapshot: () => object } | null;
         if (!ed) return;
         saving = true;
@@ -121,51 +86,48 @@
         }
     }
 
-    function blobToDataUrl(blob: Blob): Promise<string> {
-        return new Promise((resolve, reject) => {
-            const fr = new FileReader();
-            fr.onload = () => resolve(fr.result as string);
-            fr.onerror = () => reject(new Error('FileReader failed'));
-            fr.readAsDataURL(blob);
-        });
+    // Document content as opened, to tell whether Cancel would lose work.
+    let baseline = '';
+    function documentJson(): string {
+        try {
+            const snap = (editorRef.current as { getSnapshot: () => { document?: object } } | null)?.getSnapshot();
+            return snap ? JSON.stringify(snap.document ?? snap) : '';
+        } catch {
+            return '';
+        }
+    }
+    function requestCancel() {
+        if (!loading && baseline && documentJson() !== baseline && !confirm('Discard your unsaved drawing changes?')) return;
+        onCancel();
     }
 
     function onKey(e: KeyboardEvent) {
-        if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+        // Escape inside the canvas belongs to tldraw (it cancels the active
+        // tool), so it must not also close the pad.
+        if (e.key !== 'Escape' || mountEl?.contains(e.target as Node)) return;
+        e.preventDefault();
+        requestCancel();
     }
 </script>
 
 <svelte:window onkeydown={onKey} />
 
-<div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) onCancel(); }} role="presentation">
+<div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) requestCancel(); }} role="presentation">
     <div class="dialog fade-in" role="dialog" aria-modal="true" aria-label="Drawing pad" data-testid="tldraw-pad">
         <header class="head">
-            <h2><Icon name="palette" size={14} /> {mode === 'email' ? 'Sketch a drawing' : mode === 'create' ? 'New drawing' : 'Edit drawing'}</h2>
+            <h2><Icon name="palette" size={14} /> {mode === 'create' ? 'New drawing' : 'Edit drawing'}</h2>
             <div class="head-actions">
-                <button type="button" class="btn btn-ghost" onclick={onCancel}>Cancel</button>
-                {#if mode === 'email'}
-                    <button
-                        type="button"
-                        class="btn btn-primary"
-                        onclick={insert}
-                        disabled={loading || exporting}
-                        data-testid="tldraw-insert"
-                    >
-                        {#if exporting}<span class="spinner"></span>{/if}
-                        <Icon name="check" size={13} /> Insert into email
-                    </button>
-                {:else}
-                    <button
-                        type="button"
-                        class="btn btn-primary"
-                        onclick={save}
-                        disabled={loading || saving}
-                        data-testid="tldraw-save"
-                    >
-                        {#if saving}<span class="spinner"></span>{/if}
-                        <Icon name="check" size={13} /> Save
-                    </button>
-                {/if}
+                <button type="button" class="btn btn-ghost" onclick={requestCancel}>Cancel</button>
+                <button
+                    type="button"
+                    class="btn btn-primary"
+                    onclick={save}
+                    disabled={loading || saving}
+                    data-testid="tldraw-save"
+                >
+                    {#if saving}<span class="spinner"></span>{/if}
+                    <Icon name="check" size={13} /> Save
+                </button>
             </div>
         </header>
 

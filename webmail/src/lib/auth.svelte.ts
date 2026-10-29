@@ -36,10 +36,15 @@ if (typeof navigator !== 'undefined' && navigator.storage?.persist) {
 
 // ---------- Cookie helpers (redundant fallback for mobile perma-sign-in) ----------
 
+function cookieAttrs(maxAge: number): string {
+    const secure = typeof location !== 'undefined' && location.protocol === 'https:' ? '; Secure' : '';
+    return `; path=/webmail; max-age=${maxAge}; SameSite=Strict${secure}`;
+}
+
 function setSessionCookie(value: string) {
     try {
         const maxAge = 60 * 60 * 24 * 365; // 1 year
-        document.cookie = `${COOKIE_NAME}=${encodeURIComponent(value)}; path=/webmail; max-age=${maxAge}; SameSite=Strict`;
+        document.cookie = `${COOKIE_NAME}=${encodeURIComponent(value)}${cookieAttrs(maxAge)}`;
     } catch { /* noop */ }
 }
 
@@ -52,7 +57,7 @@ function getSessionCookie(): string | null {
 
 function clearSessionCookie() {
     try {
-        document.cookie = `${COOKIE_NAME}=; path=/webmail; max-age=0; SameSite=Strict`;
+        document.cookie = `${COOKIE_NAME}=${cookieAttrs(0)}`;
     } catch { /* noop */ }
 }
 
@@ -82,6 +87,17 @@ interface AuthState {
 function hasRememberedCreds(user: string): boolean {
     try {
         return recallCreds(user) !== null;
+    } catch {
+        return false;
+    }
+}
+
+// Read straight from storage rather than importing settings.svelte, which
+// imports this module.
+function permanentSignInOn(): boolean {
+    try {
+        const raw = localStorage.getItem('webmail.settings.v1');
+        return !!(raw && JSON.parse(raw).permanentSignIn);
     } catch {
         return false;
     }
@@ -159,6 +175,12 @@ function clearPerm() {
     if (isMobile) clearSessionCookie();
 }
 
+// Permanent sign-in was switched off: forget the localStorage copy of the
+// sessions. Mobile always keeps one (see persist()), so it is left alone.
+export function dropPermanentSession() {
+    if (!isMobile) clearPerm();
+}
+
 const init = load();
 const state = $state<AuthState>({
     sessions: init.sessions,
@@ -210,43 +232,39 @@ export function upsertSession(session: Session) {
     // rather kick the user to a quick auto-relogin (vault has the creds
     // anyway because remember=true defaults on) than lose the session
     // every time the OS swaps our process.
-    try {
-        const raw = localStorage.getItem('webmail.settings.v1');
-        const settings = raw ? JSON.parse(raw) : {};
-        if (isMobile || settings.permanentSignIn) {
-            persistPerm(state);
-        }
-    } catch { /* noop */ }
+    if (isMobile || permanentSignInOn()) persistPerm(state);
 }
 
-// Drop a session (sign-out for one account).
-export function removeSession(user: string) {
+function dropSession(user: string) {
     const filtered = state.sessions.filter((s) => s.user !== user);
     state.sessions = filtered;
     if (state.activeUser === user) {
         state.activeUser = filtered[0]?.user || null;
     }
     persist(state);
-    persistPerm(state);
     if (!filtered.length) clearPerm();
+    else if (isMobile || permanentSignInOn()) persistPerm(state);
+}
+
+// Sign out one account on purpose: drop its session and its remembered
+// credentials, otherwise the login screen would sign it straight back in.
+export function removeSession(user: string) {
+    forgetCreds(user);
+    dropSession(user);
 }
 
 export function switchTo(user: string) {
     if (state.sessions.find((s) => s.user === user)) {
         state.activeUser = user;
         persist(state);
-        try {
-            const raw = localStorage.getItem('webmail.settings.v1');
-            const settings = raw ? JSON.parse(raw) : {};
-            if (settings.permanentSignIn) persistPerm(state);
-        } catch { /* noop */ }
+        if (permanentSignInOn()) persistPerm(state);
     }
 }
 
 // Backward-compat shim: components called setSession(null) for logout.
 export function setSession(s: Session | null) {
     if (!s) {
-        if (state.activeUser) removeSession(state.activeUser);
+        if (state.activeUser) dropSession(state.activeUser);
         return;
     }
     upsertSession(s);
@@ -260,9 +278,11 @@ export function setSession(s: Session | null) {
 //
 // A fragment is never sent to a server and never appears in a Referer, and it
 // is wiped from the address bar and this history entry before anything else
-// runs. The token is not trusted on its own either — it is presented to the
-// API, and only a session the server confirms is adopted, so a crafted link
-// cannot plant a fake session.
+// runs. The token is not trusted on its own either: it is presented to the
+// API, which must confirm both that it is live and that it belongs to the
+// mailbox named in the link. Without the second check a link carrying the
+// attacker's own token would drop the victim into the attacker's mailbox
+// under the victim's address.
 export function hasHandoff(): boolean {
     if (typeof location === 'undefined' || !location.hash) return false;
     const params = new URLSearchParams(location.hash.replace(/^#/, ''));
@@ -285,18 +305,16 @@ export async function adoptHandoffSession(): Promise<boolean> {
     clean();
 
     try {
-        const res = await fetch(apiUrl('/v1/auth/session'), {
-            headers: { authorization: `Bearer ${token}` }
-        });
+        const headers = { authorization: `Bearer ${token}` };
+        const res = await fetch(apiUrl('/v1/auth/session'), { headers });
         if (!res.ok) return false;
-        const data = await res.json();
-        upsertSession({
-            user,
-            token,
-            expiresAt: typeof data.expiresAt === 'string'
-                ? new Date(data.expiresAt).getTime()
-                : Number(data.expiresAt)
-        });
+        const expiresAt = parseExpiry((await res.json()).expiresAt);
+        if (!Number.isFinite(expiresAt)) return false;
+        const whoRes = await fetch(apiUrl('/v1/me/mailbox'), { headers });
+        if (!whoRes.ok) return false;
+        const owner = (await whoRes.json()).username;
+        if (typeof owner !== 'string' || owner.toLowerCase() !== user.trim().toLowerCase()) return false;
+        upsertSession({ user: owner, token, expiresAt });
         return true;
     } catch {
         return false;
@@ -304,6 +322,10 @@ export async function adoptHandoffSession(): Promise<boolean> {
 }
 
 // ---------- Auth flows ----------
+
+function parseExpiry(v: unknown): number {
+    return typeof v === 'string' ? new Date(v).getTime() : Number(v);
+}
 
 // btoa() only accepts Latin1 — passwords with emoji or non-ASCII letters
 // would throw InvalidCharacterError. Encode the credentials as UTF-8
@@ -338,13 +360,7 @@ export async function login(user: string, pass: string, opts: { remember?: boole
     // permanentSignIn implies "I want this to survive across browser
     // restarts forever" — that's worthless without saved creds, so
     // force-remember even if the user didn't tick the checkbox.
-    let shouldRemember = !!opts.remember;
-    try {
-        const raw = localStorage.getItem('webmail.settings.v1');
-        const settings = raw ? JSON.parse(raw) : {};
-        if (settings.permanentSignIn) shouldRemember = true;
-    } catch { /* */ }
-    if (shouldRemember) {
+    if (opts.remember || permanentSignInOn()) {
         try { rememberCreds(user, pass); } catch { /* noop */ }
     } else {
         try { forgetCreds(user); } catch { /* noop */ }
@@ -352,9 +368,7 @@ export async function login(user: string, pass: string, opts: { remember?: boole
     return {
         user,
         token: data.token,
-        expiresAt: typeof data.expiresAt === 'string'
-            ? new Date(data.expiresAt).getTime()
-            : Number(data.expiresAt)
+        expiresAt: parseExpiry(data.expiresAt)
     };
 }
 
@@ -425,16 +439,20 @@ export function isRemembered(user: string): boolean {
     return recallCreds(user) !== null;
 }
 
-// Server-side logout for the active session (best-effort).
+// Sign-out for the active session: forget its remembered credentials and
+// revoke the bearer token server-side (best-effort). Callers follow it with
+// setSession(null) to drop the local session.
 export async function logoutRemote(): Promise<void> {
     const session = getSession();
     if (!session) return;
+    forgetCreds(session.user);
     try {
-        await fetch(apiUrl('/v1/auth/logout'), {
-            method: 'POST',
-            headers: { authorization: bearerHeader(session) }
+        await fetch(apiUrl('/v1/auth/session'), {
+            method: 'DELETE',
+            headers: { authorization: bearerHeader(session) },
+            signal: AbortSignal.timeout(5000)
         });
-    } catch { /* server may not implement; ignore */ }
+    } catch { /* best-effort; the token still expires on its own */ }
 }
 
 const SOON_MS = 5 * 60 * 1000;
@@ -461,7 +479,7 @@ async function tick() {
         const fresh = getSession();
         if (!fresh || fresh.expiresAt <= Date.now()) {
             if (!recallCreds(session.user)) {
-                removeSession(session.user);
+                dropSession(session.user);
             }
         }
     } else if (remaining <= SOON_MS) {

@@ -227,3 +227,32 @@ test('deleteMessage encodes nested path', withMockAgent(async (agent) => {
     const res = await c.deleteMessage('parent/child', 42);
     assert.equal(res, null);
 }));
+
+test('downloadAttachment returns base64 plus metadata and tolerates a malformed filename', withMockAgent(async (agent) => {
+    const pool = agent.get('http://imap-rest:3001');
+    pool.intercept({ path: '/v1/mailboxes/INBOX/messages/7/attachments/1', method: 'GET' })
+        .reply(200, 'hello', { headers: { 'content-type': 'text/plain', 'content-disposition': 'attachment; filename="100%.txt"' } });
+    const res = await new RestClient(baseOpts).downloadAttachment('INBOX', 7, '1');
+    assert.equal(res.filename, '100%.txt');
+    assert.equal(res.size, 5);
+    assert.equal(Buffer.from(res.base64, 'base64').toString(), 'hello');
+}));
+
+test('downloadAttachment refuses a body over the byte cap', withMockAgent(async (agent) => {
+    const pool = agent.get('http://imap-rest:3001');
+    pool.intercept({ path: '/v1/mailboxes/INBOX/messages/7/attachments/1', method: 'GET' })
+        .reply(200, Buffer.alloc(2048));
+    await assert.rejects(
+        new RestClient(baseOpts).downloadAttachment('INBOX', 7, '1', { maxBytes: 1024 }),
+        (err) => err.status === 413 && /limit/.test(err.message)
+    );
+}));
+
+test('downloadAttachment wraps network errors like _call does', withMockAgent(async (agent) => {
+    const pool = agent.get('http://imap-rest:3001');
+    pool.intercept({ path: '/v1/mailboxes/INBOX/messages/7/attachments/1', method: 'GET' }).replyWithError(new Error('boom'));
+    await assert.rejects(
+        new RestClient(baseOpts).downloadAttachment('INBOX', 7, '1'),
+        (err) => err.status === 0 && /Network error/.test(err.message)
+    );
+}));

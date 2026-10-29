@@ -34,12 +34,14 @@
 
         var note = document.createElement('div');
         note.className = 'text-muted mt-1';
+        note.setAttribute('role', 'alert');
         note.style.cssText = 'font-size:.8rem;max-width:400px;text-align:center;display:none';
 
         function fail(msg) {
             note.textContent = msg;
             note.style.display = '';
             btn.disabled = false;
+            btn.removeAttribute('aria-busy');
             btn.innerHTML = '<i class="bi bi-envelope-fill"></i> New webmail';
         }
 
@@ -53,6 +55,7 @@
             }
             note.style.display = 'none';
             btn.disabled = true;
+            btn.setAttribute('aria-busy', 'true');
             btn.textContent = 'Signing in…';
 
             // btoa() is Latin1-only, so encode as UTF-8 bytes first — otherwise

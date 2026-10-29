@@ -5,9 +5,7 @@ const assert = require('node:assert/strict');
 const {
     compileRulesScript,
     compileCondition,
-    parseRules,
-    buildBlockedRecipientsScript,
-    parseBlockedRecipients
+    parseRules
 } = require('../../src/sieve-client');
 const { validateRuleCondition } = require('../../src/mail-rule-condition');
 
@@ -165,13 +163,6 @@ test('parseRules handles header-contains with custom header', () => {
     assert.equal(parsed.rules[0].condition.value, 'test');
 });
 
-test('buildBlockedRecipientsScript backward compat', () => {
-    const script = buildBlockedRecipientsScript(['a@b.com', 'c@d.com']);
-    assert.ok(script.includes('require ["envelope"];'));
-    const parsed = parseBlockedRecipients(script);
-    assert.deepEqual(parsed, ['a@b.com', 'c@d.com']);
-});
-
 test('compileCondition: allof with NOT sub-conditions', () => {
     const cond = {
         match: 'all',
@@ -251,12 +242,13 @@ test('single leaf with not:true round-trips', () => {
     assert.deepEqual(parsed.rules[0].condition, rules[0].condition);
 });
 
-test('parseBlockedRecipients backward compat with mixed rules', () => {
+test('parseRules only splits at a whole-line preserved marker, not at one inside a rule name', () => {
     const rules = [
-        { id: 'b1', name: 'Block a', condition: { type: 'envelope-to-is', value: 'a@b.com' }, action: { type: 'discard' } },
-        { id: 'r1', name: 'Redirect x', condition: { type: 'to-contains', value: 'x' }, action: { type: 'redirect', to: 'y@z.com' } }
+        { id: 'r1', name: 'x # --- preserved rules --- y', condition: { type: 'subject-contains', value: 'a' }, action: { type: 'discard' } },
+        { id: 'r2', name: 'second', condition: { type: 'subject-contains', value: 'b' }, action: { type: 'discard' } }
     ];
-    const script = compileRulesScript(rules);
-    const blocked = parseBlockedRecipients(script);
-    assert.deepEqual(blocked, ['a@b.com']);
+    const script = compileRulesScript(rules, 'keep;');
+    const parsed = parseRules(script);
+    assert.deepEqual(parsed.rules.map((r) => r.id), ['r1', 'r2']);
+    assert.equal(parsed.preservedContent, 'keep;');
 });

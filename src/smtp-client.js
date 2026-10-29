@@ -61,8 +61,15 @@ async function sendMessage({ smtpConfig, user, pass, from, to, cc, bcc, subject,
     try {
         const info = await transporter.sendMail(mailOptions);
         // Build the raw RFC822 so we can append a copy to the Sent folder.
-        const composer = new MailComposer(mailOptions);
-        const raw = await composer.compile().build();
+        // The mail is already accepted at this point, so a failure here must
+        // not reject the send (the caller would retry and duplicate it): the
+        // Sent copy is simply skipped.
+        let raw = null;
+        try {
+            raw = await new MailComposer(mailOptions).compile().build();
+        } catch {
+            raw = null;
+        }
         return { sent: true, messageId: info.messageId || messageId, raw };
     } finally {
         transporter.close();

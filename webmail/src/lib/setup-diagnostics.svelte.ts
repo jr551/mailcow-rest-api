@@ -1,3 +1,5 @@
+import { apiBase, apiUrl } from './api';
+
 export type SetupCheckStatus = 'pending' | 'ok' | 'warn' | 'fail';
 
 export interface SetupCheck {
@@ -42,12 +44,15 @@ const state = $state<{
     running: boolean;
     lastRunAt: number;
     origin: string;
+    /** Empty when the API is served from the same origin as the frontend. */
+    apiBase: string;
     checks: SetupCheck[];
 }>({
     checked: false,
     running: false,
     lastRunAt: 0,
     origin: typeof window === 'undefined' ? '' : window.location.origin,
+    apiBase: apiBase(),
     checks: DEFAULT_CHECKS.map((c) => ({ ...c }))
 });
 
@@ -71,7 +76,7 @@ async function checkEndpoint(check: SetupCheck): Promise<SetupCheck> {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), 5000);
     try {
-        const res = await fetch(check.path, {
+        const res = await fetch(apiUrl(check.path), {
             cache: 'no-store',
             credentials: 'omit',
             signal: ctl.signal
@@ -148,6 +153,7 @@ export async function runSetupDiagnostics() {
     state.running = true;
     state.checked = false;
     state.origin = typeof window === 'undefined' ? '' : window.location.origin;
+    state.apiBase = apiBase();
     resetChecks();
     const results = await Promise.all(state.checks.map(checkEndpoint));
     state.checks = results;

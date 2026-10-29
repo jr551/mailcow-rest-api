@@ -1,6 +1,7 @@
 'use strict';
 
-const { badRequest, notFound, unauthorized } = require('../errors');
+const crypto = require('node:crypto');
+const { badRequest, notFound, unauthorized, problem } = require('../errors');
 const { withClient } = require('../imap');
 const { hashCreds } = require('../cache');
 
@@ -14,7 +15,11 @@ const { hashCreds } = require('../cache');
 //
 // The ingest route is public-by-token: the token in the path is the whole
 // credential, so it stays under the global rate limiter and the token is
-// only ever stored hashed.
+// only ever stored hashed. A valid token is additionally capped per minute, so
+// a leaked one cannot flood the owner's INBOX.
+
+const INGEST_MAX_PER_MINUTE = 120;
+const INGEST_WINDOW_MS = 60_000;
 
 const inboxPublic = {
     type: 'object',
@@ -47,7 +52,7 @@ function buildMessage({ user, inbox, subject, bodyText, contentType }) {
         `To: <${user}>`,
         `Subject: ${encodePhrase(subject)}`,
         `Date: ${now.toUTCString()}`,
-        `Message-ID: <whk-${inbox.id}-${now.getTime()}@${domain}>`,
+        `Message-ID: <whk-${inbox.id}-${now.getTime()}-${crypto.randomBytes(4).toString('hex')}@${domain}>`,
         'MIME-Version: 1.0',
         'Content-Type: text/plain; charset=utf-8',
         'Content-Transfer-Encoding: 8bit',
@@ -81,6 +86,24 @@ module.exports = async function webhookInboxRoutes(app, { store, pool, getPublic
     if (!store) {
         app.log.info('webhook inboxes disabled — needs CREDENTIAL_ENCRYPTION_KEY');
         return;
+    }
+
+    // Keyed by inbox id and only ever touched after a token verified, so it
+    // is bounded by the number of inboxes, not by what a caller sends.
+    const ingestWindows = new Map();
+    function allowIngest(id, now) {
+        const w = ingestWindows.get(id);
+        if (!w || now - w.start >= INGEST_WINDOW_MS) {
+            if (ingestWindows.size >= 1000) {
+                for (const [key, win] of ingestWindows) {
+                    if (now - win.start >= INGEST_WINDOW_MS) ingestWindows.delete(key);
+                }
+            }
+            ingestWindows.set(id, { start: now, count: 1 });
+            return true;
+        }
+        w.count += 1;
+        return w.count <= INGEST_MAX_PER_MINUTE;
     }
 
     // The ingest endpoint accepts whatever a sender throws at it — JSON,
@@ -197,6 +220,10 @@ module.exports = async function webhookInboxRoutes(app, { store, pool, getPublic
         if (!result.ok) {
             req.log.warn({ reason: result.reason, ip: req.ip }, 'webhook inbox token rejected');
             throw unauthorized('Invalid webhook token');
+        }
+        if (!allowIngest(result.id, Date.now())) {
+            reply.header('retry-after', String(INGEST_WINDOW_MS / 1000));
+            throw problem(429, 'Too Many Requests', 'Too many deliveries to this webhook inbox; slow down.');
         }
 
         const { text, ct } = bodyToText(req);

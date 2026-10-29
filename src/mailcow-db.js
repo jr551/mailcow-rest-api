@@ -159,8 +159,8 @@ function createMailcowDbFromPool(pool) {
             const [rows] = await pool.execute(
                 `SELECT id, address, domain, goto, active, sogo_visible, internal, sender_allowed, created, modified
                  FROM alias
-                 WHERE address != goto AND (goto = ? OR goto LIKE CONCAT('%,', ?, ',%') OR goto LIKE CONCAT(?, ',%') OR goto LIKE CONCAT('%,', ?))`,
-                [email, email, email, email]
+                 WHERE address != goto AND FIND_IN_SET(?, REPLACE(goto, ' ', '')) > 0`,
+                [email]
             );
             return rows.map((r) => ({
                 id: r.id,
@@ -187,8 +187,8 @@ function createMailcowDbFromPool(pool) {
             const [aliasRows] = await pool.execute(
                 `SELECT address FROM alias
                  WHERE address != goto AND active = 1 AND sogo_visible = 1
-                   AND (goto = ? OR goto LIKE CONCAT('%,', ?, ',%') OR goto LIKE CONCAT(?, ',%') OR goto LIKE CONCAT('%,', ?))`,
-                [email, email, email, email]
+                   AND FIND_IN_SET(?, REPLACE(goto, ' ', '')) > 0`,
+                [email]
             );
             for (const r of aliasRows) {
                 if (!r.address) continue;

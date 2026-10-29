@@ -62,7 +62,7 @@
                                     onclick={() => onOpenEvent(e)}
                                     data-testid={`cal-schedule-evt-${e.id}`}
                                 >
-                                    <span class="dot" style={`background: ${colorFor(e)};`}></span>
+                                    <span class="dot" style:background={colorFor(e)}></span>
                                     <span class="time">{e.allDay ? 'All day' : `${format(parseISO(e.start), 'h:mma').toLowerCase()} – ${format(parseISO(e.end), 'h:mma').toLowerCase()}`}</span>
                                     <span class="title truncate">{e.title}</span>
                                     {#if e.location}<span class="loc muted truncate">{e.location}</span>{/if}

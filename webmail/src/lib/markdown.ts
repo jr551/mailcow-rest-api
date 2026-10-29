@@ -111,7 +111,7 @@ export function renderMarkdown(src: string): string {
 
     // Restore code blocks
     for (const cb of codeBlocks) {
-        text = text.replace(cb.placeholder, cb.html);
+        text = text.replace(cb.placeholder, () => cb.html);
     }
 
     // Paragraphs: split on blank lines, wrap non-block elements

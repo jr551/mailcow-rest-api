@@ -9,6 +9,8 @@
         leftLabel?: string;
         rightColor?: string;
         leftColor?: string;
+        /** Accessible name; include state (unread / starred) the visuals show. */
+        label?: string;
         children?: import('svelte').Snippet;
     }
     let {
@@ -20,6 +22,7 @@
         leftLabel = 'Action',
         rightColor = 'var(--accent)',
         leftColor = 'var(--danger)',
+        label,
         children
     }: Props = $props();
 
@@ -30,6 +33,10 @@
     let wrapEl: HTMLDivElement | undefined = $state();
     let longPressTimer: ReturnType<typeof setTimeout> | null = null;
     let longPressTriggered = false;
+    // A drag that crossed the slop distance must not also open the row
+    // via the click the browser fires after pointerup (mouse / stylus).
+    let moved = false;
+    let suppressClick = false;
 
     const THRESHOLD = 80;
     const MAX = 140;
@@ -46,6 +53,8 @@
         dragging = true;
         longPressTriggered = false;
         pastThreshold = false;
+        moved = false;
+        suppressClick = false;
         if (onLongPress) {
             longPressTimer = setTimeout(() => {
                 longPressTriggered = true;
@@ -60,6 +69,7 @@
     function onPointerMove(e: PointerEvent) {
         if (!dragging) return;
         const dx = e.clientX - startX;
+        if (Math.abs(dx) > 8) moved = true;
         if (Math.abs(dx) > 10 && longPressTimer) {
             clearTimeout(longPressTimer);
             longPressTimer = null;
@@ -84,6 +94,7 @@
         }
         if (!dragging) return;
         dragging = false;
+        suppressClick = moved;
         (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
         if (longPressTriggered) return;
         if (currentX > THRESHOLD && onSwipeRight) {
@@ -98,12 +109,24 @@
 
     function onClick() {
         if (longPressTriggered) return;
-        if (Math.abs(currentX) < 8) onOpen();
+        if (suppressClick) {
+            suppressClick = false;
+            return;
+        }
+        onOpen();
     }
+    // Keyboard / screen-reader path for the pointer-only gestures.
     function onKey(e: KeyboardEvent) {
+        if (e.target !== e.currentTarget) return;
         if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
             onOpen();
+        } else if (onLongPress && (e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey))) {
+            e.preventDefault();
+            onLongPress();
+        } else if (onSwipeLeft && e.key === 'Delete') {
+            e.preventDefault();
+            onSwipeLeft();
         }
     }
 </script>
@@ -131,6 +154,7 @@
         onkeydown={onKey}
         role="button"
         tabindex="0"
+        aria-label={label}
     >
         {@render children?.()}
     </div>
@@ -169,6 +193,9 @@
         transition: transform 180ms cubic-bezier(0.2, 0.7, 0.2, 1);
         cursor: pointer;
         width: 100%;
+        user-select: none;
+        -webkit-user-select: none;
+        -webkit-touch-callout: none;
     }
     .swipe-content.dragging {
         transition: none;

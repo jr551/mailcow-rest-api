@@ -3,7 +3,8 @@
 const webpush = require('web-push');
 const config = require('../config');
 const { problem, badRequest, notFound } = require('../errors');
-const { assertPublicDestination, createPinnedHttpsAgent } = require('../utils/ssrf-guard');
+const { assertPublicDestination } = require('../utils/ssrf-guard');
+const { sendPush } = require('../push-sender');
 
 // web-push POSTs to whatever endpoint the client registered, from the
 // server. Accepting any URL made this an outbound request-forgery and
@@ -173,43 +174,25 @@ module.exports = async function pushRoutes(app, { pushStore, lookup } = {}) {
         let sent = 0;
         let failed = 0;
         for (const sub of subs) {
-            // Pin the connection to the address we check HERE, at send time.
-            // The endpoint was validated at subscribe time, but a hostname
-            // the caller controls can be re-pointed at an internal address
-            // afterwards (DNS rebinding) — sending unpinned defeats the
-            // SSRF check entirely. Same discipline as push-sender.js; the
-            // two paths must stay in step.
-            let agent;
-            try {
-                agent = await createPinnedHttpsAgent(sub.endpoint, { lookup });
-            } catch (err) {
-                failed++;
-                endpoints.push({ endpoint: sub.endpoint, ok: false, error: `endpoint blocked: ${err.message}`, status: 0 });
-                continue;
-            }
-            try {
-                await webpush.sendNotification(
-                    { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth_key } },
-                    payload,
-                    agent ? { agent } : undefined
-                );
+            // sendPush pins the connection to the address checked at send
+            // time, so a hostname re-pointed at an internal address after
+            // subscribe (DNS rebinding) cannot be reached.
+            const result = await sendPush(sub, payload, { lookup });
+            if (result.ok) {
                 sent++;
                 endpoints.push({ endpoint: sub.endpoint, ok: true, error: '', status: 200 });
-            } catch (err) {
-                failed++;
-                const status = (err && err.statusCode) || 0;
-                if (status === 410 || status === 404) {
-                    pushStore.delete({ endpoint: sub.endpoint, user: req.creds.user });
-                }
-                endpoints.push({
-                    endpoint: sub.endpoint,
-                    ok: false,
-                    error: (err && err.message) || 'send failed',
-                    status
-                });
-            } finally {
-                if (agent && typeof agent.destroy === 'function') agent.destroy();
+                continue;
             }
+            failed++;
+            if (result.status === 410 || result.status === 404) {
+                pushStore.delete({ endpoint: sub.endpoint, user: req.creds.user });
+            }
+            endpoints.push({
+                endpoint: sub.endpoint,
+                ok: false,
+                error: result.blocked ? `endpoint blocked: ${result.error}` : result.error,
+                status: result.status
+            });
         }
         reply.code(200);
         return { sent, failed, endpoints };

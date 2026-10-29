@@ -3,7 +3,7 @@
 // the server has AI configured, otherwise the user's provider directly.
 // Each action returns a `prompt` you can drop into a new AI thread.
 
-import { settings, capabilities, aiAuthKey } from './settings.svelte';
+import { resolveProvider } from './llm-provider';
 
 export interface EmailAction {
     title: string;     // short label (≤ 6 words)
@@ -30,46 +30,6 @@ const SYSTEM_PROMPT = [
     '- Don\'t invent dates, names, or amounts.'
 ].join('\n');
 
-function resolveBaseUrl(): string {
-    if (capabilities.aiConfig?.configured) return capabilities.aiConfig.baseUrl.replace(/\/+$/, '');
-    const llm = settings.llm;
-    if (llm.baseUrl) return llm.baseUrl.replace(/\/+$/, '');
-    const presets: Record<string, string> = {
-        mistral: 'https://api.mistral.ai/v1',
-        openai: 'https://api.openai.com/v1',
-        groq: 'https://api.groq.com/openai/v1',
-        together: 'https://api.together.xyz/v1',
-        ollama: 'http://127.0.0.1:11434/v1',
-        perplexity: 'https://api.perplexity.ai',
-        openrouter: 'https://openrouter.ai/api/v1'
-    };
-    return presets[llm.preset] || presets.openai;
-}
-function resolveModel(): string {
-    if (capabilities.aiConfig?.configured) return capabilities.aiConfig.model;
-    const llm = settings.llm;
-    if (llm.model) return llm.model;
-    const defaults: Record<string, string> = {
-        mistral: 'mistral-small-latest',
-        openai: 'gpt-4o-mini',
-        groq: 'llama-3.1-70b-versatile',
-        together: 'meta-llama/Llama-3-8b-chat-hf',
-        ollama: 'llama3.1',
-        perplexity: 'llama-3.1-sonar-small-128k-chat',
-        openrouter: 'meta-llama/llama-3.1-8b-instruct'
-    };
-    return defaults[llm.preset] || defaults.openai;
-}
-function resolveApiKey(): string {
-    if (capabilities.aiConfig?.configured) return aiAuthKey();
-    return settings.llm.apiKey;
-}
-function isConfigured(): boolean {
-    if (capabilities.aiConfig?.configured) return true;
-    const llm = settings.llm;
-    return !!(settings.useCustomLlm && llm.apiKey && (llm.baseUrl || llm.preset));
-}
-
 function extractJson(text: string): string {
     const fence = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
     const candidate = (fence ? fence[1] : text).trim();
@@ -87,12 +47,10 @@ export async function suggestEmailActions(
     input: SuggestInput,
     opts: { signal?: AbortSignal } = {}
 ): Promise<EmailAction[]> {
-    if (!isConfigured()) {
+    const cfg = resolveProvider();
+    if (!cfg) {
         throw new Error('Configure an OpenAI-compatible provider + API key in Settings → AI.');
     }
-    const baseUrl = resolveBaseUrl();
-    const model = resolveModel();
-    const apiKey = resolveApiKey();
     const body = (input.body || '').slice(0, 5000);
     const userMsg = [
         `Subject: ${input.subject || '(no subject)'}`,
@@ -102,14 +60,14 @@ export async function suggestEmailActions(
         body
     ].join('\n');
 
-    const res = await fetch(`${baseUrl}/chat/completions`, {
+    const res = await fetch(`${cfg.baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
-            authorization: `Bearer ${apiKey}`,
+            authorization: `Bearer ${cfg.apiKey}`,
             'content-type': 'application/json'
         },
         body: JSON.stringify({
-            model,
+            model: cfg.model,
             messages: [
                 { role: 'system', content: SYSTEM_PROMPT },
                 { role: 'user', content: userMsg }
@@ -151,18 +109,18 @@ export async function suggestEmailActions(
         .map((a) => ({
             title: a.title.slice(0, 50),
             icon: a.icon ? String(a.icon).slice(0, 4) : '✨',
-            prompt: a.prompt,
+            prompt: a.prompt.slice(0, 600),
             web: !!a.web
         }));
     if (cleaned.length >= 2) return cleaned;
     // Graceful fallback — happens with reasoning models that ramble past the
     // token budget, providers that ignore JSON formatting hints, or 1×1 noise
-    // we get back from local Ollamas. Better to give the user 5 generic
+    // we get back from local Ollamas. Better to give the user 3 generic
     // actions than a red error popup.
-    return fallbackActions(input);
+    return fallbackActions();
 }
 
-function fallbackActions(_input: SuggestInput): EmailAction[] {
+function fallbackActions(): EmailAction[] {
     return [
         {
             icon: '📝',

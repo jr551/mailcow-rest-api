@@ -44,8 +44,44 @@ function prefixKey(key: string): string {
     return p + '/' + key;
 }
 
+// Object keys are built from user- and sender-controlled names. fetch()
+// collapses `.` and `..` path segments, which would move the request out of
+// the folder (or the configured prefix) the caller meant to stay in.
 function encodeKey(key: string): string {
-    return key.split('/').map(encodeURIComponent).join('/');
+    return key.split('/').map((seg) => {
+        if (seg === '.' || seg === '..') throw new Error('Invalid path segment');
+        return encodeURIComponent(seg);
+    }).join('/');
+}
+
+const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
+const MAX_NAME_LENGTH = 255;
+
+/** Validate a single file or folder name typed by the user. Returns the
+ *  trimmed name or throws a message fit for a toast. */
+export function validateDriveName(name: string): string {
+    const n = name.trim();
+    if (!n) throw new Error('Name cannot be empty');
+    if (n === '.' || n === '..') throw new Error('Name cannot be "." or ".."');
+    if (n.includes('/') || n.includes('\\')) throw new Error('Name cannot contain "/" or "\\"');
+    if (CONTROL_CHARS.test(n)) throw new Error('Name cannot contain control characters');
+    if (n.length > MAX_NAME_LENGTH) throw new Error(`Name is longer than ${MAX_NAME_LENGTH} characters`);
+    return n;
+}
+
+/** Reduce a sender-supplied attachment filename to something safe to use as
+ *  one object name: drop any directory part, control characters and dot
+ *  segments. */
+export function attachmentFileName(name: string): string {
+    const base = (name || '').split(/[\\/]/).pop()!.replace(/[\u0000-\u001f\u007f]/g, '_').trim();
+    if (!base || base === '.' || base === '..') return 'attachment';
+    return base.slice(0, MAX_NAME_LENGTH);
+}
+
+/** Validate a relative path (folder uploads keep their sub-folders). Each
+ *  segment must be a valid name; empty segments are dropped. */
+export function validateDriveRelPath(rel: string): string {
+    return rel.split('/').filter((seg) => seg !== '').map(validateDriveName).join('/');
 }
 
 function signedUrl(key: string): string {
@@ -182,9 +218,8 @@ export async function putObject(
     });
 }
 
-export async function deleteObject(path: string): Promise<void> {
-    if (!aws || !cfg) throw new Error('Drive not configured');
-    const key = prefixKey(path);
+async function deleteFullKey(key: string): Promise<void> {
+    if (!aws) throw new Error('Drive not configured');
     const url = `${getBaseUrl()}/${encodeKey(key)}`;
     const res = await aws.fetch(url, { method: 'DELETE' });
     if (!res.ok) {
@@ -193,10 +228,50 @@ export async function deleteObject(path: string): Promise<void> {
     }
 }
 
-export async function getObjectUrl(path: string): Promise<string> {
+export async function deleteObject(path: string): Promise<void> {
+    if (!aws || !cfg) throw new Error('Drive not configured');
+    await deleteFullKey(prefixKey(path));
+}
+
+/** Delete a folder and everything under it. A folder is only a key prefix
+ *  (plus an optional zero-byte placeholder), so removing the placeholder
+ *  alone would leave every file in the bucket. */
+export async function deleteFolder(path: string): Promise<void> {
+    if (!aws || !cfg) throw new Error('Drive not configured');
+    const clean = path.replace(/^\/+|\/+$/g, '');
+    if (!clean) throw new Error('Refusing to delete the drive root');
+    const prefix = prefixKey(clean + '/');
+    const keys: string[] = [];
+    let token = '';
+    do {
+        const url = `${getBaseUrl()}?list-type=2&prefix=${encodeKey(prefix)}` +
+            (token ? `&continuation-token=${encodeURIComponent(token)}` : '');
+        const res = await aws.fetch(url);
+        if (!res.ok) {
+            const text = await res.text();
+            throw new Error(`S3 list failed: ${res.status} ${text}`);
+        }
+        const doc = new DOMParser().parseFromString(await res.text(), 'application/xml');
+        doc.querySelectorAll('Contents > Key').forEach((k) => {
+            const key = k.textContent || '';
+            if (key.startsWith(prefix)) keys.push(key);
+        });
+        token = doc.querySelector('IsTruncated')?.textContent === 'true'
+            ? doc.querySelector('NextContinuationToken')?.textContent || ''
+            : '';
+    } while (token);
+    if (!keys.includes(prefix)) keys.push(prefix);
+    for (let i = 0; i < keys.length; i += 8) {
+        await Promise.all(keys.slice(i, i + 8).map(deleteFullKey));
+    }
+}
+
+/** Presigned GET URL. Defaults to aws4fetch's 24h; pass a shorter lifetime
+ *  for URLs that are only needed to render a preview. */
+export async function getObjectUrl(path: string, expiresSec?: number): Promise<string> {
     if (!aws || !cfg) throw new Error('Drive not configured');
     const key = prefixKey(path);
-    const url = `${getBaseUrl()}/${encodeKey(key)}`;
+    const url = `${getBaseUrl()}/${encodeKey(key)}${expiresSec ? `?X-Amz-Expires=${Math.floor(expiresSec)}` : ''}`;
     const signed = await aws.sign(url, { method: 'GET', aws: { signQuery: true } });
     return signed.url.toString();
 }

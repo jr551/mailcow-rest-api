@@ -50,6 +50,15 @@ function installSendRecorder({ onSend } = {}) {
     };
 }
 
+// The send response no longer carries the approval token (it is a bearer
+// capability on a public route), so tests read it from the approval email the
+// owner would receive.
+function lastApprovalToken(recorder) {
+    const mails = recorder.sent.filter((m) => /^Approve sending:/.test(m.subject || ''));
+    const m = mails[mails.length - 1];
+    return (m.text.match(/\/v1\/messages\/approve\/([a-f0-9]{64})/) || [])[1];
+}
+
 // IMAP pool stand-in. `client` mimics just enough of imapflow — including the
 // semantic that a `header` search query is an object keyed by header name
 // (imapflow's search-compiler iterates Object.keys, so an array-shaped query
@@ -194,7 +203,7 @@ test('approval send: a tracking-store failure must not destroy the approved draf
         payload: { to: ['c@example.com'], subject: 's', text: 't', trackOpens: true }
     });
     assert.equal(create.statusCode, 200, create.body);
-    const { token } = create.json();
+    const token = lastApprovalToken(recorder);
 
     const first = await app.inject({ method: 'POST', url: `/v1/messages/approve/${token}` });
     assert.equal(first.statusCode, 502, 'the failed attempt reports failure');
@@ -225,7 +234,7 @@ test('approval send: SMTP error text is HTML-escaped in the failure page', async
         headers: { authorization: basic() },
         payload: { to: ['c@example.com'], subject: 's', text: 't' }
     });
-    const { token } = create.json();
+    const token = lastApprovalToken(recorder);
     const res = await app.inject({ method: 'POST', url: `/v1/messages/approve/${token}` });
 
     assert.equal(res.statusCode, 502);
@@ -249,7 +258,7 @@ test('appendToSent: a cache-invalidation failure must not duplicate the Sent cop
         headers: { authorization: basic() },
         payload: { to: ['c@example.com'], subject: 's', text: 't' }
     });
-    const { token } = create.json();
+    const token = lastApprovalToken(recorder);
     const res = await app.inject({ method: 'POST', url: `/v1/messages/approve/${token}` });
 
     assert.equal(res.statusCode, 200, res.body);

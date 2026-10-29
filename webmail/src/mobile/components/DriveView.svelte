@@ -1,11 +1,7 @@
 <script lang="ts">
     import { onMount } from 'svelte';
-    import { driveState, loadDriveConfig, loadPath, navigateTo, toggleSelect, isImage, deleteSelected, createFolder, breadcrumbParts, openPreview, closePreview, uploadFiles } from '../../lib/drive.svelte';
-    import { showToast } from '../../lib/store.svelte';
-    import { capabilities } from '../../lib/settings.svelte';
-    import { getObjectUrl, fetchBlob } from '../../lib/drive-api';
-    import { authState } from '../../lib/auth.svelte';
-    import * as cache from '../../lib/drive-cache';
+    import { driveState, loadDriveConfig, loadPath, navigateTo, toggleSelect, deleteSelected, createFolder, breadcrumbParts, openPreview, closePreview, uploadFiles } from '../../lib/drive.svelte';
+    import { showToast, pushOverlay } from '../lib/store.svelte';
     import Icon from '../../components/Icon.svelte';
     import type { IconName } from '../../lib/icons';
     import DrivePreview from '../../components/drive/DrivePreview.svelte';
@@ -21,9 +17,43 @@
 
     let fileInput: HTMLInputElement | undefined = $state();
     let folderInput: HTMLInputElement | undefined = $state();
-    let showNewFolder = $state(false);
     let newFolderName = $state('');
-    let showUploadMenu = $state(false);
+
+    // One floating popup at a time. It is registered with the back-button
+    // stack so Android Back dismisses it instead of leaving the view.
+    let popup = $state<'folder' | 'upload' | null>(null);
+    let popupDispose: (() => void) | null = null;
+
+    function closePopup() {
+        popup = null;
+        if (popupDispose) { popupDispose(); popupDispose = null; }
+    }
+
+    function togglePopup(kind: 'folder' | 'upload') {
+        if (popup === kind) { closePopup(); return; }
+        if (popup === null) {
+            popupDispose = pushOverlay('drive-popup', () => {
+                popup = null;
+                popupDispose = null;
+            });
+        }
+        popup = kind;
+    }
+
+    // Bulk delete needs a second, explicit tap.
+    let confirmingDelete = $state(false);
+    $effect(() => {
+        if (driveState.selected.size === 0) confirmingDelete = false;
+    });
+
+    function clearSelection() {
+        driveState.selected = new Set();
+    }
+
+    async function onConfirmDelete() {
+        confirmingDelete = false;
+        await deleteSelected();
+    }
 
     // Pull-to-refresh state
     let pullStartY = $state(0);
@@ -43,7 +73,6 @@
         const dy = e.touches[0].clientY - pullStartY;
         if (dy > 0 && dy < 200) {
             pullOffset = Math.min(dy, 120);
-            e.preventDefault();
         }
     }
 
@@ -59,17 +88,13 @@
         pullOffset = 0;
     }
 
-    function onUpload() {
-        showUploadMenu = !showUploadMenu;
-    }
-
     function onFileUpload() {
-        showUploadMenu = false;
+        closePopup();
         fileInput?.click();
     }
 
     function onFolderUpload() {
-        showUploadMenu = false;
+        closePopup();
         folderInput?.click();
     }
 
@@ -94,7 +119,7 @@
         if (!name) return;
         createFolder(name);
         newFolderName = '';
-        showNewFolder = false;
+        closePopup();
     }
 
     function iconFor(item: typeof driveState.items[0]): IconName {
@@ -139,6 +164,7 @@
         <button
             type="button"
             class="back-btn"
+            aria-label="Up one folder"
             disabled={!driveState.currentPath}
             onclick={() => {
                 const parts = driveState.currentPath.split('/');
@@ -158,6 +184,7 @@
         <button
             type="button"
             class="refresh-btn"
+            aria-label="Refresh folder"
             disabled={driveState.itemsLoading}
             onclick={() => {
                 loadPath(driveState.currentPath || '');
@@ -220,7 +247,8 @@
                     class:selected={driveState.selected.has(item.path)}
                     data-testid="mobile-drive-item-{item.name}"
                     onclick={() => {
-                        if (item.isFolder) navigateTo(item.path);
+                        if (driveState.selected.size > 0) toggleSelect(item.path);
+                        else if (item.isFolder) navigateTo(item.path);
                         else openPreview(item);
                     }}
                     oncontextmenu={(e) => {
@@ -240,16 +268,27 @@
 
     {#if driveState.selected.size > 0}
         <div class="selection-bar">
-            <span>{driveState.selected.size} selected</span>
-            <button type="button" class="delete-btn" onclick={deleteSelected}>
-                <Icon name="trash" size={18} />
-            </button>
+            {#if confirmingDelete}
+                <span>Delete {driveState.selected.size} {driveState.selected.size === 1 ? 'item' : 'items'}?</span>
+                <div class="bar-actions">
+                    <button type="button" class="bar-btn" onclick={() => { confirmingDelete = false; }}>Keep</button>
+                    <button type="button" class="bar-btn confirm-delete-btn" data-testid="mobile-drive-confirm-delete" onclick={onConfirmDelete}>Delete</button>
+                </div>
+            {:else}
+                <span>{driveState.selected.size} selected</span>
+                <div class="bar-actions">
+                    <button type="button" class="bar-btn" onclick={clearSelection}>Cancel</button>
+                    <button type="button" class="delete-btn" aria-label="Delete selected" onclick={() => { confirmingDelete = true; }}>
+                        <Icon name="trash" size={18} />
+                    </button>
+                </div>
+            {/if}
         </div>
     {/if}
 
     {#if driveState.selected.size === 0}
         <div class="fab-group">
-            {#if showNewFolder}
+            {#if popup === 'folder'}
                 <div class="folder-input">
                     <input
                         type="text"
@@ -260,7 +299,7 @@
                     <button type="button" class="btn-primary" onclick={onCreateFolder}>Create</button>
                 </div>
             {/if}
-            {#if showUploadMenu}
+            {#if popup === 'upload'}
                 <div class="upload-menu">
                     <button type="button" class="menu-item" onclick={onFileUpload}>
                         <Icon name="file" size={18} />
@@ -272,10 +311,10 @@
                     </button>
                 </div>
             {/if}
-            <button type="button" class="fab" data-testid="mobile-drive-new-folder" onclick={() => showNewFolder = !showNewFolder}>
+            <button type="button" class="fab" data-testid="mobile-drive-new-folder" onclick={() => togglePopup('folder')} aria-label="New folder">
                 <Icon name="plus" size={24} />
             </button>
-            <button type="button" class="fab" data-testid="mobile-drive-upload" onclick={onUpload}>
+            <button type="button" class="fab" data-testid="mobile-drive-upload" onclick={() => togglePopup('upload')} aria-label="Upload">
                 <Icon name="upload" size={24} />
             </button>
         </div>
@@ -325,6 +364,8 @@
         border: none;
         color: var(--text-primary);
         padding: 4px;
+        min-width: 44px;
+        min-height: 44px;
         display: flex;
         align-items: center;
         justify-content: center;
@@ -348,6 +389,7 @@
         font-size: 15px;
         font-weight: 600;
         padding: 0;
+        min-height: 44px;
         white-space: nowrap;
     }
     .breadcrumbs span {
@@ -403,6 +445,7 @@
     .list {
         flex: 1;
         overflow-y: auto;
+        overscroll-behavior-y: contain;
         padding: 8px;
         display: flex;
         flex-direction: column;
@@ -565,19 +608,42 @@
         box-shadow: var(--shadow-md);
         z-index: 10;
     }
+    .bar-actions {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+    }
+    .bar-btn {
+        min-height: 44px;
+        padding: 0 12px;
+        border: none;
+        background: none;
+        color: var(--accent-text);
+        font-size: 15px;
+        font-weight: 600;
+        cursor: pointer;
+    }
+    .bar-btn.confirm-delete-btn {
+        color: var(--danger);
+    }
     .delete-btn {
         background: none;
         border: none;
         color: var(--danger);
+        min-width: 44px;
+        min-height: 44px;
         display: flex;
         align-items: center;
         justify-content: center;
+        cursor: pointer;
     }
     .refresh-btn {
         background: none;
         border: none;
         color: var(--text-primary);
         padding: 4px;
+        min-width: 44px;
+        min-height: 44px;
         display: flex;
         align-items: center;
         justify-content: center;

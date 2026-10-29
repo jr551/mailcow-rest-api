@@ -2,6 +2,7 @@
     import Icon from '../Icon.svelte';
     import MiniCalendar from './MiniCalendar.svelte';
     import { showToast } from '../../lib/store.svelte';
+    import { trapFocus } from '../../lib/focus-trap';
     import { getIcalPublicToken, issueIcalPublicToken, revokeIcalPublicToken, type IcalPublicToken } from '../../lib/api';
     import {
         calendarStore, setCalendarVisibility, getDefaultCalendarId, setDefaultCalendarId,
@@ -121,6 +122,25 @@
         return d.toLocaleString();
     }
 
+    // Both dialogs trap Tab and close on Escape. Capture phase so the page's
+    // own Escape handlers don't also act on whatever sits behind the dialog.
+    function trap(node: HTMLElement) {
+        return { destroy: trapFocus(node) };
+    }
+
+    $effect(() => {
+        if (!icalDialog && !subModalOpen) return;
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key !== 'Escape') return;
+            e.preventDefault();
+            e.stopPropagation();
+            if (subModalOpen) closeSubModal();
+            else closeIcalDialog();
+        };
+        window.addEventListener('keydown', onKey, true);
+        return () => window.removeEventListener('keydown', onKey, true);
+    });
+
     // Close context menu on click elsewhere
     $effect(() => {
         if (!ctxMenu) return;
@@ -213,10 +233,20 @@
                             onchange={(e) => setCalendarVisibility(cal.id, (e.currentTarget as HTMLInputElement).checked)}
                             data-testid={`cal-visibility-${cal.id}`}
                         />
-                        <span class="swatch" style={`background: ${cal.color}; border-color: ${cal.color};`}></span>
+                        <span class="swatch" style:background={cal.color} style:border-color={cal.color}></span>
                         <span class="cal-name truncate">{cal.name}</span>
                         {#if cal.primary}<span class="primary-dot" title="SOGo primary calendar">●</span>{/if}
                     </label>
+                    <button
+                        type="button"
+                        class="default-pin"
+                        title="Public iCal link"
+                        aria-label={`Public iCal link for ${cal.name}`}
+                        onclick={() => openIcalDialog(cal.id)}
+                        data-testid={`cal-ical-${cal.id}`}
+                    >
+                        <Icon name="link" size={12} />
+                    </button>
                     <button
                         type="button"
                         class={`default-pin ${isDefault ? 'active' : ''}`}
@@ -250,7 +280,7 @@
                             onchange={(e) => setCalendarVisibility(sub.id, (e.currentTarget as HTMLInputElement).checked)}
                             data-testid={`cal-visibility-${sub.id}`}
                         />
-                        <span class="swatch" style={`background: ${sub.color}; border-color: ${sub.color};`}></span>
+                        <span class="swatch" style:background={sub.color} style:border-color={sub.color}></span>
                         <span class="cal-name truncate">{sub.name}</span>
                         {#if isGoogleCalendar(sub.url)}
                             <span class="google-badge" title="Google Calendar">G</span>
@@ -292,7 +322,7 @@
 {#if icalDialog}
     {@const dlg = icalDialog}
     <div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) closeIcalDialog(); }} role="presentation">
-        <div class="dialog fade-in" role="dialog" aria-modal="true" aria-labelledby="ical-dlg-title" data-testid="ical-dialog">
+        <div class="dialog fade-in" role="dialog" aria-modal="true" aria-labelledby="ical-dlg-title" data-testid="ical-dialog" use:trap>
             <header class="head">
                 <h2 id="ical-dlg-title">
                     <Icon name="link" size={14} />
@@ -353,9 +383,9 @@
 
 {#if subModalOpen}
     <div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) closeSubModal(); }} role="presentation">
-        <div class="dialog fade-in" role="dialog" aria-modal="true" data-testid="cal-sub-modal">
+        <div class="dialog fade-in" role="dialog" aria-modal="true" aria-labelledby="sub-dlg-title" data-testid="cal-sub-modal" use:trap>
             <header class="head">
-                <h2>Add calendar subscription</h2>
+                <h2 id="sub-dlg-title">Add calendar subscription</h2>
                 <button type="button" class="btn btn-ghost" onclick={closeSubModal} aria-label="Close"><Icon name="close" size={14} /></button>
             </header>
             <div class="body">
@@ -491,7 +521,7 @@
         opacity: 0.5;
         transition: opacity var(--transition-fast), color var(--transition-fast), transform 120ms ease-out;
     }
-    .cal-li:hover .default-pin { opacity: 1; }
+    .cal-li:hover .default-pin, .cal-li:focus-within .default-pin { opacity: 1; }
     .default-pin:hover { color: var(--accent-text); transform: scale(1.08); }
     .default-pin.active {
         color: var(--star);

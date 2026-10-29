@@ -1,8 +1,10 @@
 // Reactive state for the S3 Drive surface.
 
 import { getDriveConfig, type DriveConfig } from './api';
-import { listObjects, putObject, deleteObject, fetchBlob, setDriveConfig, getConfig, type DriveItem } from './drive-api';
-import { getObjectUrl } from './drive-api';
+import {
+    listObjects, putObject, deleteObject, deleteFolder, fetchBlob, setDriveConfig, getConfig,
+    validateDriveName, validateDriveRelPath, attachmentFileName, type DriveItem
+} from './drive-api';
 export type { DriveItem };
 import * as cache from './drive-cache';
 import { authState } from './auth.svelte';
@@ -142,13 +144,14 @@ export function toggleSelect(path: string) {
     state.selected = next;
 }
 
-export async function createFolder(name: string): Promise<void> {
+export async function createFolder(rawName: string): Promise<void> {
     const cfg = getConfig();
     const user = authState.activeUser;
     if (!cfg || !user) return;
-    const target = state.currentPath ? `${state.currentPath}/${name}` : name;
     const placeholder = new File([], '');
     try {
+        const name = validateDriveName(rawName);
+        const target = state.currentPath ? `${state.currentPath}/${name}` : name;
         await putObject(target + '/', placeholder);
         await cache.invalidateTree(user, cfg.prefix, state.currentPath);
         await loadPath(state.currentPath);
@@ -159,10 +162,12 @@ export async function createFolder(name: string): Promise<void> {
     }
 }
 
-export async function saveAttachmentToDrive(blob: Blob, filename: string, targetPath?: string): Promise<void> {
+export async function saveAttachmentToDrive(blob: Blob, rawFilename: string, targetPath?: string): Promise<void> {
     const cfg = getConfig();
     const user = authState.activeUser;
     if (!cfg || !user) return;
+    // The filename comes from the sender's MIME headers.
+    const filename = attachmentFileName(rawFilename);
     const base = targetPath ?? state.currentPath;
     const path = base ? `${base}/${filename}` : filename;
 
@@ -225,8 +230,6 @@ export async function uploadFiles(files: File[], targetPath?: string): Promise<v
 
     for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        const relPath = file.webkitRelativePath || file.name;
-        const path = base ? `${base}/${relPath}` : relPath;
         const displayName = file.webkitRelativePath || file.name;
         const idx = state.uploads.findIndex((u) => u.name === displayName && !u.done);
         // EMA over (loaded delta / time delta). α=0.3 smooths jitter from
@@ -234,6 +237,8 @@ export async function uploadFiles(files: File[], targetPath?: string): Promise<v
         let lastLoaded = 0;
         let lastTickMs = state.uploads[idx]?.startedAt || Date.now();
         try {
+            const relPath = validateDriveRelPath(displayName);
+            const path = base ? `${base}/${relPath}` : relPath;
             await putObject(path, file, ({ loaded, total }) => {
                 if (idx < 0) return;
                 const nowMs = performance.now();
@@ -280,8 +285,8 @@ export async function deleteSelected(): Promise<void> {
     for (const p of paths) {
         try {
             const item = state.items.find(i => i.path === p);
-            const key = item?.isFolder ? p + '/' : p;
-            await deleteObject(key);
+            if (item?.isFolder) await deleteFolder(p);
+            else await deleteObject(p);
         } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
             showToast('error', `Delete failed: ${msg}`);
@@ -342,13 +347,14 @@ export function closeTextEditor() {
     state.textEditor = null;
 }
 
-export async function saveTextFile(blob: Blob, filename: string) {
+export async function saveTextFile(blob: Blob, rawFilename: string) {
     const cfg = getConfig();
     const user = authState.activeUser;
     if (!cfg || !user) return;
     const base = state.currentPath;
-    const path = base ? `${base}/${filename}` : filename;
     try {
+        const filename = validateDriveName(rawFilename);
+        const path = base ? `${base}/${filename}` : filename;
         const file = new File([blob], filename, { type: blob.type || 'text/plain' });
         await putObject(path, file);
         showToast('success', `Saved "${filename}"`);
@@ -366,9 +372,17 @@ export async function renameItem(oldPath: string, newName: string): Promise<void
     const user = authState.activeUser;
     if (!cfg || !user) return;
     const parent = oldPath.includes('/') ? oldPath.slice(0, oldPath.lastIndexOf('/')) : '';
-    const newPath = parent ? `${parent}/${newName}` : newName;
-    if (oldPath === newPath) return;
     try {
+        if (state.items.find((i) => i.path === oldPath)?.isFolder) {
+            throw new Error('Folders cannot be renamed');
+        }
+        newName = validateDriveName(newName);
+        const newPath = parent ? `${parent}/${newName}` : newName;
+        if (oldPath === newPath) return;
+        // putObject would silently overwrite whatever already has that name.
+        if (state.items.some((i) => i.path === newPath)) {
+            throw new Error(`"${newName}" already exists`);
+        }
         const blob = await fetchBlob(oldPath);
         const file = new File([blob], newName, { type: blob.type || 'application/octet-stream' });
         await putObject(newPath, file);
@@ -387,8 +401,8 @@ export async function deleteItem(path: string, isFolder: boolean): Promise<void>
     const user = authState.activeUser;
     if (!cfg || !user) return;
     try {
-        const key = isFolder ? path + '/' : path;
-        await deleteObject(key);
+        if (isFolder) await deleteFolder(path);
+        else await deleteObject(path);
         showToast('success', 'Deleted');
         await cache.invalidateTree(user, cfg.prefix, state.currentPath);
         await loadPath(state.currentPath);
@@ -403,18 +417,25 @@ export async function createDrawing(name: string) {
     const user = authState.activeUser;
     if (!cfg || !user) return;
     const base = state.currentPath;
-    const filename = name.endsWith('.tldr') ? name : `${name}.tldr`;
+    let filename: string;
+    try {
+        filename = validateDriveName(name.endsWith('.tldr') ? name : `${name}.tldr`);
+    } catch (e) {
+        showToast('error', e instanceof Error ? e.message : String(e));
+        return;
+    }
     const path = base ? `${base}/${filename}` : filename;
     state.drawingEditor = { mode: 'create', path };
 }
 
-export async function saveDrawing(blob: Blob, filename: string) {
+export async function saveDrawing(blob: Blob, rawFilename: string) {
     const cfg = getConfig();
     const user = authState.activeUser;
     if (!cfg || !user) return;
     const base = state.currentPath;
-    const path = base ? `${base}/${filename}` : filename;
     try {
+        const filename = validateDriveName(rawFilename);
+        const path = base ? `${base}/${filename}` : filename;
         const file = new File([blob], filename, { type: 'application/json' });
         await putObject(path, file);
         showToast('success', `Saved "${filename}"`);

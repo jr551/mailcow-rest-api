@@ -104,9 +104,11 @@ function createAppPasswordStore({ filePath, secretBox, maxPerUser = 25 } = {}) {
         FROM app_passwords WHERE user = ? AND revoked_at IS NULL
         ORDER BY created_at DESC
     `);
-    const countStmt = db.prepare('SELECT COUNT(*) AS n FROM app_passwords WHERE user = ? AND revoked_at IS NULL');
+    const countStmt = db.prepare('SELECT COUNT(*) AS n FROM app_passwords WHERE user = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)');
     const countAllStmt = db.prepare('SELECT COUNT(*) AS n FROM app_passwords WHERE revoked_at IS NULL');
-    const revokeStmt = db.prepare('UPDATE app_passwords SET revoked_at = ? WHERE id = ? AND user = ? AND revoked_at IS NULL');
+    // A revoked row never authenticates again, so it has no use for the sealed
+    // mailbox password.
+    const revokeStmt = db.prepare("UPDATE app_passwords SET revoked_at = ?, secret = '' WHERE id = ? AND user = ? AND revoked_at IS NULL");
     const touchStmt = db.prepare('UPDATE app_passwords SET last_used_at = ?, last_used_ip = ? WHERE id = ?');
     const rotateSecretStmt = db.prepare('UPDATE app_passwords SET secret = ? WHERE user = ? AND revoked_at IS NULL');
 
@@ -129,7 +131,7 @@ function createAppPasswordStore({ filePath, secretBox, maxPerUser = 25 } = {}) {
         const cleanLabel = String(label || '').trim();
         if (!cleanLabel) throw new Error('A label is required');
         if (cleanLabel.length > 100) throw new Error('Label must be 100 characters or fewer');
-        if (countStmt.get(user).n >= maxPerUser) {
+        if (countStmt.get(user, now).n >= maxPerUser) {
             throw new Error(`Too many app passwords (limit ${maxPerUser}) — revoke one first`);
         }
         if (!password) throw new Error('Cannot mint an app password without the mailbox password');

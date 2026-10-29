@@ -16,12 +16,13 @@
     const visibleTabs = $derived(tabs.filter((t) => t.key !== 'ai' || settings.aiFeatures));
 </script>
 
-<nav class="bottom-nav no-select">
-    {#each visibleTabs as t}
+<nav class="bottom-nav no-select" aria-label="Main">
+    {#each visibleTabs as t (t.key)}
         <button
             type="button"
             class="nav-item"
             class:active={mobileState.view === t.key}
+            aria-current={mobileState.view === t.key ? 'page' : undefined}
             onclick={() => navigate(t.key)}
         >
             <Icon name={t.icon} size={22} />

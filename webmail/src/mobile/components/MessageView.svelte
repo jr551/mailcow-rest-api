@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { mobileState, goBack, showToast, pushOverlay } from '../lib/store.svelte';
+    import { mobileState, goBack, navigate, showToast, pushOverlay } from '../lib/store.svelte';
     import { authState, setSession } from '../../lib/auth.svelte';
     import {
         modifyFlags,
@@ -27,6 +27,11 @@
     const loading = $derived(mobileState.detailLoading);
     const error = $derived(mobileState.detailError);
 
+    function authFailed(auth: { spf?: string | null; dkim?: string | null; dmarc?: string | null } | null | undefined): boolean {
+        if (!auth) return false;
+        return [auth.spf, auth.dkim, auth.dmarc].some((v) => v === 'fail' || v === 'softfail' || v === 'permerror');
+    }
+
     let proxiedSrcDoc = $state<string | null>(null);
     let hasRemote = $state(false);
     let iframeSrc = $state('');
@@ -50,7 +55,10 @@
     $effect(() => {
         const m = msg;
         const path = mobileState.selectedPath;
-        if (!m || !path) {
+        // Nothing leaves the device unless the user has scan switched on;
+        // the AI-conversation folders hold our own chat history, not mail.
+        const isAiThread = path === '.AI Conversations' || path === 'AI Conversations';
+        if (!m || !path || !settings.phishingScan || isAiThread) {
             phishingResult = null;
             phishingDismissed = false;
             phishingScanning = false;
@@ -69,7 +77,8 @@
             return;
         }
 
-        if (isTrustedSender(m.envelope.from?.[0]?.address)) {
+        // A trusted sender whose SPF/DKIM/DMARC failed is spoofable, so it is scanned anyway.
+        if (isTrustedSender(m.envelope.from?.[0]?.address) && !authFailed(m.auth)) {
             phishingResult = {
                 isPhishing: false,
                 confidence: 0,
@@ -115,6 +124,12 @@
             if (phishingAbort) { phishingAbort.abort(); phishingAbort = null; }
         };
     });
+
+    const phishingFlagged = $derived(
+        settings.phishingScan
+        && !!phishingResult?.isPhishing
+        && phishingResult.confidence >= settings.phishingScanConfidenceFloor
+    );
 
     $effect(() => {
         const html = msg?.html;
@@ -204,13 +219,19 @@
     }
 
 
+    // The list row backing the open message. In all-folders search rows from
+    // other folders can share its uid, so match the folder as well.
+    function isOpenRow(m: { uid: number; mailbox?: string }) {
+        return m.uid === msg?.uid && (m.mailbox ?? mobileState.selectedPath) === mobileState.selectedPath;
+    }
+
     async function toggleStar() {
         if (!msg) return;
         const isFlagged = msg.flags.includes('\\Flagged');
         try {
             const r = await modifyFlags(mobileState.selectedPath, msg.uid, isFlagged ? { remove: ['\\Flagged'] } : { add: ['\\Flagged'] });
             msg.flags = r.flags;
-            const li = mobileState.messages.find((m) => m.uid === msg.uid);
+            const li = mobileState.messages.find(isOpenRow);
             if (li) li.flags = r.flags;
             showToast('success', isFlagged ? 'Unstarred' : 'Starred');
         } catch {
@@ -224,7 +245,7 @@
         try {
             const r = await modifyFlags(mobileState.selectedPath, msg.uid, seen ? { remove: ['\\Seen'] } : { add: ['\\Seen'] });
             msg.flags = r.flags;
-            const li = mobileState.messages.find((m) => m.uid === msg.uid);
+            const li = mobileState.messages.find(isOpenRow);
             if (li) li.flags = r.flags;
             showToast('success', seen ? 'Marked unread' : 'Marked read');
         } catch {
@@ -239,7 +260,7 @@
         try {
             if (from === trashBox) await deleteMessage(from, msg.uid);
             else await moveMessage(from, msg.uid, trashBox);
-            mobileState.messages = mobileState.messages.filter((m) => m.uid !== msg.uid);
+            mobileState.messages = mobileState.messages.filter((m) => !isOpenRow(m));
             mobileState.messagesTotal = Math.max(0, mobileState.messagesTotal - 1);
             showToast('success', from === trashBox ? 'Deleted' : 'Moved to Trash');
             goBack();
@@ -254,7 +275,7 @@
         const archiveBox = mobileState.mailboxes.find((m) => m.specialUse === '\\Archive')?.path || 'Archive';
         try {
             await moveMessage(from, msg.uid, archiveBox);
-            mobileState.messages = mobileState.messages.filter((m) => m.uid !== msg.uid);
+            mobileState.messages = mobileState.messages.filter((m) => !isOpenRow(m));
             mobileState.messagesTotal = Math.max(0, mobileState.messagesTotal - 1);
             showToast('success', 'Archived');
             goBack();
@@ -275,7 +296,7 @@
             folderPickerBlob = blob;
             folderPickerAtt = att;
         } catch (err) {
-            showToast('error', `Couldn't save to Drive: ${(err as Error).message}`);
+            showToast('error', "Couldn't save to Drive", err);
         } finally {
             driveSaving = { ...driveSaving, [att.id]: false };
         }
@@ -293,8 +314,7 @@
         if (!msg) return;
         mobileState.composeReplyTo = msg;
         mobileState.composeMode = mode;
-        mobileState.previousView = mobileState.view;
-        mobileState.view = 'compose';
+        navigate('compose');
     }
 
     let headersDispose: (() => void) | null = null;
@@ -319,7 +339,7 @@
             const idx = raw.indexOf('\r\n\r\n');
             headersText = idx !== -1 ? raw.slice(0, idx) : raw.indexOf('\n\n') !== -1 ? raw.slice(0, raw.indexOf('\n\n')) : raw;
         } catch (err) {
-            showToast('error', `Couldn't load headers: ${(err as Error).message}`);
+            showToast('error', "Couldn't load headers", err);
             closeHeaders();
         } finally {
             headersLoading = false;
@@ -331,15 +351,15 @@
 
 <div class="message-view">
     <header class="mheader">
-        <button type="button" class="mbtn mbtn-ghost back-btn" onclick={goBack}>
+        <button type="button" class="mbtn mbtn-ghost back-btn" onclick={goBack} aria-label="Back to list">
             <Icon name="chevronLeft" size={20} />
             <span>Back</span>
         </button>
         <div class="actions">
-            <button type="button" class="mbtn mbtn-ghost action-icon" onclick={toggleStar}>
+            <button type="button" class="mbtn mbtn-ghost action-icon" onclick={toggleStar} aria-label={msg?.flags.includes('\\Flagged') ? 'Unstar' : 'Star'} title="Star">
                 <Icon name={msg?.flags.includes('\\Flagged') ? 'starFilled' : 'star'} size={18} />
             </button>
-            <button type="button" class="mbtn mbtn-ghost action-icon" onclick={() => reply('reply')}>
+            <button type="button" class="mbtn mbtn-ghost action-icon" onclick={() => reply('reply')} aria-label="Reply" title="Reply">
                 <Icon name="reply" size={18} />
             </button>
         </div>
@@ -404,7 +424,7 @@
                 </div>
             </div>
 
-            <div class="msg-content" class:blurred={phishingResult?.isPhishing && !phishingDismissed}>
+            <div class="msg-content" class:blurred={phishingFlagged && !phishingDismissed}>
                 {#if msg.html}
                     <iframe bind:this={iframeEl} srcdoc={proxiedSrcDoc ?? iframeSrc} title="Message body" sandbox="allow-same-origin" frameborder="0" onload={resizeIframe}></iframe>
                 {:else if msg.text}
@@ -446,7 +466,7 @@
                         </div>
                     {/if}
                 {/if}
-                {#if phishingResult?.isPhishing && !phishingDismissed}
+                {#if phishingFlagged && !phishingDismissed}
                     <div class="phishing-overlay" data-testid="phishing-overlay">
                         <div class="phishing-card">
                             <Icon name="shieldAlert" size={32} />
@@ -508,13 +528,13 @@
             <button type="button" class="toolbar-btn" onclick={() => reply('forward')}>
                 <Icon name="send" size={16} /> Forward
             </button>
-            <button type="button" class="toolbar-btn icon-only" onclick={archive}>
+            <button type="button" class="toolbar-btn icon-only" onclick={archive} title="Archive" aria-label="Archive">
                 <Icon name="archive" size={16} />
             </button>
             <button type="button" class="toolbar-btn icon-only" onclick={viewHeaders} title="View headers" aria-label="View headers">
                 <Icon name="fileText" size={16} />
             </button>
-            <button type="button" class="toolbar-btn icon-only danger" onclick={trash}>
+            <button type="button" class="toolbar-btn icon-only danger" onclick={trash} title="Delete" aria-label="Delete">
                 <Icon name="trash" size={16} />
             </button>
         </div>
@@ -562,8 +582,8 @@
         padding-left: 4px;
     }
     .action-icon {
-        width: 40px;
-        height: 40px;
+        width: 44px;
+        height: 44px;
         padding: 0;
         border-radius: 50%;
     }
@@ -730,7 +750,7 @@
         display: flex;
         align-items: center;
         gap: 6px;
-        padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+        padding: 8px 12px;
         background: var(--bg-surface);
         border-top: 0.5px solid var(--border-subtle);
         overflow-x: auto;
@@ -740,6 +760,7 @@
         align-items: center;
         justify-content: center;
         gap: 4px;
+        min-height: 44px;
         padding: 7px 12px;
         font-size: 13px;
         font-weight: 500;
@@ -754,8 +775,8 @@
     }
     .toolbar-btn:active { background: var(--bg-active); }
     .toolbar-btn.icon-only {
-        width: 34px;
-        height: 34px;
+        width: 44px;
+        height: 44px;
         padding: 0;
         border-radius: 50%;
     }

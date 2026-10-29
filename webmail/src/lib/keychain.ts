@@ -24,7 +24,8 @@ function installKey(): string {
     try {
         let id = localStorage.getItem(KEY_INSTALL);
         if (!id) {
-            id = Math.random().toString(36).slice(2) + Date.now().toString(36);
+            const bytes = crypto.getRandomValues(new Uint8Array(32));
+            id = btoa(String.fromCharCode(...bytes));
             localStorage.setItem(KEY_INSTALL, id);
         }
         return id;

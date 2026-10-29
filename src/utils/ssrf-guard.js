@@ -67,8 +67,9 @@ function ipv6Groups(ip) {
     return out;
 }
 
-// Loopback, private, link-local, CGNAT, ULA, and the cloud metadata
-// address. Takes a normalized host (see normalizeHost).
+// Loopback, private, link-local, CGNAT, benchmarking, ULA, Teredo, and the
+// cloud metadata address, including IPv6 forms that embed an IPv4 address.
+// Takes a normalized host (see normalizeHost).
 function isPrivateIp(rawIp) {
     const ip = normalizeHost(rawIp);
 
@@ -84,6 +85,7 @@ function isPrivateIp(rawIp) {
         if (o[0] === 0) return true;                                    // this network
         if (o[0] >= 224) return true;                                   // multicast + reserved
         if (o[0] === 192 && o[1] === 0 && o[2] === 0) return true;      // IETF protocol assignments
+        if (o[0] === 198 && (o[1] === 18 || o[1] === 19)) return true;  // benchmarking
         return false;
     }
 
@@ -94,16 +96,21 @@ function isPrivateIp(rawIp) {
     if ((g[0] & 0xfe00) === 0xfc00) return true;                                // fc00::/7 (ULA)
     if ((g[0] & 0xffc0) === 0xfe80) return true;                                // fe80::/10 (link-local)
     if (g[0] === 0xff00 || (g[0] & 0xff00) === 0xff00) return true;             // ff00::/8 multicast
+    const v4Tail = (hi, lo) => [(hi >> 8) & 255, hi & 255, (lo >> 8) & 255, lo & 255].join('.');
+    const zeroPrefix = (n) => g.slice(0, n).every((x) => x === 0);
     // IPv4-mapped that survived normalization (e.g. ::ffff:0:0/96 forms).
-    if (g[0] === 0 && g[1] === 0 && g[2] === 0 && g[3] === 0 && g[4] === 0 && g[5] === 0xffff) {
-        const v4 = [(g[6] >> 8) & 255, g[6] & 255, (g[7] >> 8) & 255, g[7] & 255].join('.');
-        return isPrivateIp(v4);
-    }
+    if (zeroPrefix(5) && g[5] === 0xffff) return isPrivateIp(v4Tail(g[6], g[7]));
+    // Forms that carry an IPv4 address a gateway or host may route onward:
+    // IPv4-compatible ::/96, NAT64 64:ff9b::/96 and 6to4 2002::/16.
+    if (zeroPrefix(6)) return isPrivateIp(v4Tail(g[6], g[7]));
+    if (g[0] === 0x64 && g[1] === 0xff9b && g.slice(2, 6).every((x) => x === 0)) return isPrivateIp(v4Tail(g[6], g[7]));
+    if (g[0] === 0x2002) return isPrivateIp(v4Tail(g[1], g[2]));
+    if (g[0] === 0x2001 && g[1] === 0) return true;                             // 2001::/32 Teredo
     return false;
 }
 
 function isPrivateHostname(hostname) {
-    const lower = String(hostname).toLowerCase();
+    const lower = String(hostname).toLowerCase().replace(/\.$/, '');
     if (lower === 'localhost') return true;
     if (lower.endsWith('.local')) return true;
     if (lower.endsWith('.localhost')) return true;

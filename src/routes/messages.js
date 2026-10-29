@@ -1,7 +1,7 @@
 'use strict';
 
 const { withClient, withMailbox, serializeListItem, serializeEnvelope, countAttachments,
-    walkStructure, streamToBuffer, downloadPartText } = require('../imap');
+    walkStructure, streamToBuffer, downloadPartText, parseAuthResultsHeader } = require('../imap');
 const {
     messageListItemSchema,
     messageDetailSchema,
@@ -37,36 +37,56 @@ function parseUidParam(req) {
     return uid;
 }
 
-// Parse one or more Authentication-Results headers into discrete
-// SPF / DKIM / DMARC verdicts. Returns null when no header is present.
-//
-// Format reference: RFC 8601. Headers look like:
-//   Authentication-Results: mx.example.org;
-//       spf=pass smtp.mailfrom=foo@x.com;
-//       dkim=pass header.d=x.com;
-//       dmarc=pass action=none header.from=x.com
-//
-// Multiple headers can be present (one per receiving MTA hop). We use
-// the strongest verdict found ('pass' wins over 'neutral'/'fail') so a
-// hop that doesn't run the check doesn't downgrade an upstream pass.
-function parseAuthResults(rawHeader) {
-    if (!rawHeader) return null;
-    const text = String(rawHeader);
-    const findVerdict = (key) => {
-        const matches = [...text.matchAll(new RegExp(`(?:^|[\\s;])${key}\\s*=\\s*([a-z]+)`, 'gi'))];
-        if (matches.length === 0) return null;
-        const verdicts = matches.map((m) => m[1].toLowerCase());
-        // Strongest first.
-        for (const v of ['pass', 'fail', 'softfail', 'neutral', 'permerror', 'temperror', 'none']) {
-            if (verdicts.includes(v)) return v;
-        }
-        return verdicts[0];
-    };
-    const spf = findVerdict('spf');
-    const dkim = findVerdict('dkim');
-    const dmarc = findVerdict('dmarc');
-    if (!spf && !dkim && !dmarc) return { spf: null, dkim: null, dmarc: null, raw: text };
-    return { spf, dkim, dmarc, raw: text };
+// A text/html or text/plain body far larger than any real message would be
+// buffered, decoded and serialised to JSON on every open of it.
+const MAX_BODY_PART_BYTES = 5 * 1024 * 1024;
+
+// RFC 6266 Content-Disposition for a download: a plain ASCII fallback for
+// old clients plus the RFC 5987 UTF-8 form for the real name. The name is
+// attacker-chosen, so quotes, backslashes and line breaks never reach the
+// quoted string.
+function attachmentDisposition(filename) {
+    const name = String(filename || 'attachment').toWellFormed();
+    const fallback = name.replace(/[\r\n"\\]/g, '').replace(/[^\x20-\x7e]/g, '_').trim() || 'attachment';
+    const encoded = encodeURIComponent(name).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+    return `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`;
+}
+
+// Bytes from a message are untrusted: never let a browser sniff them into
+// something executable or render them with this origin's privileges.
+function hardenDownload(reply) {
+    reply.header('x-content-type-options', 'nosniff');
+    reply.header('content-security-policy', 'sandbox');
+}
+
+// A pattern is an exact address or contains `*` wildcards matched against the
+// whole address, the same two shapes rspamd's blacklist_from accepts.
+function senderMatcher(pattern) {
+    const want = pattern.toLowerCase();
+    if (!want.includes('*')) return (address) => address.toLowerCase() === want;
+    const re = new RegExp(
+        '^' + want.replace(/[.*+?^${}()|[\]\\]/g, (c) => (c === '*' ? '[\\s\\S]*' : '\\' + c)) + '$',
+        'i'
+    );
+    return (address) => re.test(address);
+}
+
+// IMAP FROM is a case-insensitive substring match, so it can only narrow:
+// the longest literal run of the pattern is searched, and the envelope's
+// From address is then held to the pattern itself.
+async function findUidsBySender(client, pattern) {
+    const literal = pattern.split('*').reduce((best, part) => (part.length > best.length ? part : best), '');
+    // A pattern of only wildcards names no sender; it must not become "everything".
+    if (!literal) return [];
+    const candidates = (await client.search({ from: literal }, { uid: true })) || [];
+    if (!candidates.length) return [];
+    const matches = senderMatcher(pattern);
+    const uids = [];
+    for await (const msg of client.fetch(candidates, { uid: true, envelope: true }, { uid: true })) {
+        const address = msg.envelope?.from?.[0]?.address;
+        if (address && matches(address)) uids.push(msg.uid);
+    }
+    return uids;
 }
 
 // Parse a free-text search string into IMAP SEARCH criteria. Supports
@@ -281,7 +301,7 @@ module.exports = async function messageRoutes(app, { pool, ocrCache, imapCache }
                 };
                 if (includes.has('attachments')) fetchQuery.bodyStructure = true;
                 if (includes.has('auth')) {
-                    fetchQuery.headers = ['authentication-results', 'arc-authentication-results'];
+                    fetchQuery.headers = ['authentication-results'];
                 }
                 let uids;
 
@@ -335,11 +355,15 @@ module.exports = async function messageRoutes(app, { pool, ocrCache, imapCache }
                     }
 
                     const uidValidity = client.mailbox?.uidValidity || 0;
+                    const uidNext = client.mailbox?.uidNext;
                     const cached = cache?.getUids(userHash, mboxPath, uidValidity);
-                    // Cheap invalidation: if the cached UID count matches EXISTS,
-                    // the manifest is still valid. This avoids a SEARCH call on
-                    // every page load while the mailbox is quiet.
-                    if (cached && cached.length === exists) {
+                    // Cheap invalidation: if the cached UID count matches EXISTS
+                    // and UIDNEXT has not moved, the manifest is still valid.
+                    // The count alone is not enough — an expunge plus an arrival
+                    // leaves it unchanged while swapping a UID. This avoids a
+                    // SEARCH call on every page load while the mailbox is quiet.
+                    if (cached && cached.length === exists &&
+                        (!uidNext || cache.getUidNext(userHash, mboxPath, uidValidity) === uidNext)) {
                         uids = cached;
                     } else if (cached && cached.length && cached.length < exists) {
                         // Mail arrived since the manifest was written. The
@@ -352,19 +376,19 @@ module.exports = async function messageRoutes(app, { pool, ocrCache, imapCache }
                         const merged = [...(fresh || []).sort((a, b) => b - a), ...cached];
                         if (merged.length === exists) {
                             uids = merged;
-                            cache?.setUids(userHash, mboxPath, uidValidity, merged);
+                            cache?.setUids(userHash, mboxPath, uidValidity, merged, uidNext);
                         } else {
                             // Expunges (or anything else that moved more than
                             // the tail) make the merge unauthoritative — only
                             // a full search is.
                             uids = await client.search({ all: true }, { uid: true });
                             uids = (uids || []).sort((a, b) => b - a);
-                            cache?.setUids(userHash, mboxPath, uidValidity, uids);
+                            cache?.setUids(userHash, mboxPath, uidValidity, uids, uidNext);
                         }
                     } else {
                         uids = await client.search({ all: true }, { uid: true });
                         uids = (uids || []).sort((a, b) => b - a);
-                        cache?.setUids(userHash, mboxPath, uidValidity, uids);
+                        cache?.setUids(userHash, mboxPath, uidValidity, uids, uidNext);
                     }
                 }
 
@@ -399,11 +423,10 @@ module.exports = async function messageRoutes(app, { pool, ocrCache, imapCache }
             })
         );
 
-        // Cache message lists briefly so refreshes don't hammer IMAP.
-        // Search results are more volatile so we skip caching them.
-        if (!search) {
-            reply.header('cache-control', 'private, max-age=30');
-        }
+        // Revalidate every time: a fresh max-age window served a deleted,
+        // moved or re-flagged message back from the browser cache. The
+        // server-side imap-cache already bounds the cost of a refresh.
+        reply.header('cache-control', 'private, no-cache');
         return result;
     });
 
@@ -426,10 +449,10 @@ module.exports = async function messageRoutes(app, { pool, ocrCache, imapCache }
                     size: true,
                     internalDate: true,
                     bodyStructure: true,
-                    // Pull just the auth-related headers — much cheaper
+                    // Pull just the auth-related header — much cheaper
                     // than a full BODY[HEADER] fetch and enough to power
                     // the padlock / skull badge on the sender chip.
-                    headers: ['authentication-results', 'received-spf', 'arc-authentication-results']
+                    headers: ['authentication-results']
                 }, { uid: true });
                 if (!msg) throw notFound('Message not found');
 
@@ -437,8 +460,8 @@ module.exports = async function messageRoutes(app, { pool, ocrCache, imapCache }
                 walkStructure(msg.bodyStructure, msg.bodyStructure?.part || '1', acc);
 
                 const [text, html] = await Promise.all([
-                    downloadPartText(client, uid, acc.textPart),
-                    downloadPartText(client, uid, acc.htmlPart)
+                    downloadPartText(client, uid, acc.textPart, MAX_BODY_PART_BYTES),
+                    downloadPartText(client, uid, acc.htmlPart, MAX_BODY_PART_BYTES)
                 ]);
 
                 let authHeaderText = '';
@@ -459,12 +482,12 @@ module.exports = async function messageRoutes(app, { pool, ocrCache, imapCache }
                     text,
                     html,
                     attachments: acc.attachments,
-                    auth: parseAuthResults(authHeaderText)
+                    auth: parseAuthResultsHeader(authHeaderText, { includeRaw: true })
                 };
             })
         );
 
-        reply.header('cache-control', 'private, max-age=60');
+        reply.header('cache-control', 'private, no-cache');
         return result;
     });
 
@@ -479,6 +502,7 @@ module.exports = async function messageRoutes(app, { pool, ocrCache, imapCache }
                 const dl = await client.download(String(uid), undefined, { uid: true });
                 if (!dl || !dl.content) throw notFound('Message not found');
                 reply.header('content-type', 'message/rfc822');
+                hardenDownload(reply);
                 if (dl.meta && dl.meta.size) reply.header('content-length', dl.meta.size);
                 return reply.send(dl.content);
             })
@@ -498,9 +522,8 @@ module.exports = async function messageRoutes(app, { pool, ocrCache, imapCache }
                 if (!dl || !dl.content) throw notFound('Attachment not found');
                 const meta = dl.meta || {};
                 reply.header('content-type', meta.contentType || 'application/octet-stream');
-                if (meta.filename) {
-                    reply.header('content-disposition', `attachment; filename="${encodeURIComponent(meta.filename)}"`);
-                }
+                reply.header('content-disposition', attachmentDisposition(meta.filename));
+                hardenDownload(reply);
                 return reply.send(dl.content);
             })
         );
@@ -659,12 +682,11 @@ module.exports = async function messageRoutes(app, { pool, ocrCache, imapCache }
     // halfway, and — worst — a partial delete the client cannot report
     // honestly. One authorised call, one UID EXPUNGE, one result.
     //
-    // `sender` runs the pattern as an IMAP SEARCH rather than trusting the
-    // client to hand over the uids it happened to have loaded: the list is
-    // paged, so a client-side match would silently leave the sender's older
-    // mail behind while the confirmation said "12 deleted". Doing the
-    // search server-side is what makes the count in the response equal the
-    // count that was expunged.
+    // `sender` is resolved server-side rather than trusting the client to
+    // hand over the uids it happened to have loaded: the list is paged, so a
+    // client-side match would silently leave the sender's older mail behind
+    // while the confirmation said "12 deleted". Resolving it here is what
+    // makes the count in the response equal the count that was expunged.
     app.delete('/v1/mailboxes/:path(^.*)/messages', {
         schema: {
             tags: ['messages'],
@@ -693,10 +715,10 @@ module.exports = async function messageRoutes(app, { pool, ocrCache, imapCache }
         // Checked explicitly rather than left to the schema's minProperties,
         // because `dryRun` has a default: a body of {} comes out of
         // validation carrying { dryRun: false }, which satisfies the
-        // property count and falls through to search({ from: undefined }).
-        // An IMAP SEARCH with an undefined FROM is not an empty search —
-        // it is a malformed one, and depending on the server it can match
-        // everything and hand the result to an expunge.
+        // property count and falls through to a sender search with no
+        // sender. An IMAP SEARCH with an undefined FROM is not an empty
+        // search — it is a malformed one, and depending on the server it can
+        // match everything and hand the result to an expunge.
         if (!hasUids && !hasSender) {
             throw badRequest('Provide either uids or sender');
         }
@@ -717,9 +739,7 @@ module.exports = async function messageRoutes(app, { pool, ocrCache, imapCache }
                 // One UID EXPUNGE per request either way. The uid-list form
                 // is what the bulk-select path uses; the sender form is
                 // what the block flow uses.
-                const list = Array.isArray(uids)
-                    ? uids
-                    : (await client.search({ from: sender }, { uid: true })) || [];
+                const list = Array.isArray(uids) ? uids : await findUidsBySender(client, sender);
                 // A dry run opens the mailbox READ-ONLY as well as skipping
                 // the expunge. Belt and braces: `readonly` is what actually
                 // makes a delete impossible here, and a future edit that

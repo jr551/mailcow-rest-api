@@ -6,6 +6,10 @@
 
 const Database = require('better-sqlite3');
 
+// Each subscription is a server-side POST target, so the per-user count is
+// bounded.
+const MAX_SUBSCRIPTIONS_PER_USER = 20;
+
 function createPushStore({ filePath }) {
     const db = new Database(filePath);
     db.pragma('journal_mode = WAL');
@@ -35,7 +39,7 @@ function createPushStore({ filePath }) {
     const removeForUserEndpoint = db.prepare('DELETE FROM push_subs WHERE endpoint = ? AND user = ?');
     const removeForUser = db.prepare('DELETE FROM push_subs WHERE user = ?');
     const listForUser = db.prepare('SELECT endpoint, p256dh, auth_key FROM push_subs WHERE user = ?');
-    const listAll = db.prepare('SELECT endpoint, user, p256dh, auth_key FROM push_subs');
+    const countOthersForUser = db.prepare('SELECT COUNT(*) AS n FROM push_subs WHERE user = ? AND endpoint != ?');
     const countStmt = db.prepare('SELECT COUNT(*) AS n FROM push_subs');
 
     return {
@@ -43,6 +47,9 @@ function createPushStore({ filePath }) {
             const endpoint = subscription && subscription.endpoint;
             const keys = subscription && subscription.keys;
             if (!endpoint || !keys || !keys.p256dh || !keys.auth) throw new Error('invalid subscription');
+            if (countOthersForUser.get(user, endpoint).n >= MAX_SUBSCRIPTIONS_PER_USER) {
+                throw new Error(`too many push subscriptions (max ${MAX_SUBSCRIPTIONS_PER_USER})`);
+            }
             insert.run({
                 endpoint,
                 user,
@@ -60,8 +67,6 @@ function createPushStore({ filePath }) {
         },
         deleteForUser({ user }) { removeForUser.run(user); },
         listForUser({ user }) { return listForUser.all(user); },
-        listUsers() { return db.prepare('SELECT DISTINCT user FROM push_subs').all().map((r) => r.user); },
-        listAll() { return listAll.all(); },
         count() { return countStmt.get().n; },
         close() { db.close(); }
     };

@@ -29,8 +29,9 @@
     }
     function openEdit(e: CalEvent) {
         // The event id may carry an "@yyyymmdd" suffix when it was expanded
-        // from a recurring rule — strip it to find the base event.
-        const baseId = e.id.split('@')[0];
+        // from a recurring rule — strip only that suffix: server UIDs are
+        // themselves "<uuid>@host".
+        const baseId = e.id.replace(/@\d{8}$/, '');
         const base = calendarStore.events.find((ev) => ev.id === baseId) ?? e;
         editing = base;
         modalOpen = true;
@@ -47,6 +48,9 @@
         const t = e.target as HTMLElement;
         if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
         if (modalOpen) return;
+        // Ctrl/Cmd+C is copy and Ctrl/Cmd+1 switches browser tabs: leave
+        // every modified key press alone.
+        if (e.ctrlKey || e.metaKey || e.altKey) return;
         if (e.key === '1') view = 'month';
         else if (e.key === '2') view = 'schedule';
         else if (e.key === 't' || e.key === 'T') cursor = new Date();

@@ -99,11 +99,23 @@
         }
     });
     onDestroy(() => {
+        renderTask?.cancel();
         loadingTask?.destroy().catch(() => { /* noop */ });
     });
 
+    // pdf.js rejects a second render() on a canvas that is still being drawn,
+    // so a newer render waits for the previous one to be cancelled first.
+    let renderTask: pdfjsLib.RenderTask | null = null;
+    let renderGen = 0;
+
     async function renderPage(num: number) {
         if (!pdfDoc) return;
+        const gen = ++renderGen;
+        if (renderTask) {
+            renderTask.cancel();
+            try { await renderTask.promise; } catch { /* cancelled */ }
+            if (gen !== renderGen) return;
+        }
         // The canvas only mounts when mode==='view'. After 'docReady' flips
         // we may briefly tick before bind:this runs — re-poll if needed so
         // the first render isn't a silent no-op.
@@ -118,6 +130,7 @@
         }
         try {
             const page = await pdfDoc.getPage(num);
+            if (gen !== renderGen) return;
             const viewport = page.getViewport({ scale: zoom });
             // Set the canvas dimensions BEFORE pulling the 2D context so the
             // context isn't stale (changing canvas.width resets the context).
@@ -128,9 +141,12 @@
                 loadError = 'Internal: could not get 2D context.';
                 return;
             }
-            await page.render({ canvas, canvasContext: ctx, viewport }).promise;
-            loadError = null;
+            const task = page.render({ canvas, canvasContext: ctx, viewport });
+            renderTask = task;
+            await task.promise;
+            if (gen === renderGen) loadError = null;
         } catch (err) {
+            if ((err as Error)?.name === 'RenderingCancelledException') return;
             console.error('PDF page render failed', err);
             loadError = (err as Error).message || 'Could not render this page.';
         }
@@ -204,7 +220,10 @@
         if (ctx) {
             ctx.beginPath();
             ctx.arc(lastX, lastY, penWidth / 2, 0, Math.PI * 2);
-            ctx.fillStyle = tool === 'erase' ? '#ffffff' : penColor;
+            // The page is a CSS background under this transparent canvas, so
+            // erasing must clear ink alpha rather than paint white over it.
+            ctx.globalCompositeOperation = tool === 'erase' ? 'destination-out' : 'source-over';
+            ctx.fillStyle = penColor;
             ctx.fill();
         }
     }
@@ -216,7 +235,8 @@
         ctx.beginPath();
         ctx.moveTo(lastX, lastY);
         ctx.lineTo(x, y);
-        ctx.strokeStyle = tool === 'erase' ? '#ffffff' : penColor;
+        ctx.globalCompositeOperation = tool === 'erase' ? 'destination-out' : 'source-over';
+        ctx.strokeStyle = penColor;
         ctx.lineWidth = tool === 'erase' ? Math.max(12, penWidth * 4) : penWidth;
         ctx.stroke();
         lastX = x; lastY = y;
@@ -362,11 +382,16 @@
     }
 
     const hasAnnotations = $derived(strokeCount > 0 || textBoxes.length > 0);
+
+    function requestClose() {
+        if (hasAnnotations && !confirm('Close the viewer and discard your annotations?')) return;
+        onClose();
+    }
 </script>
 
-<svelte:window onkeydown={(e) => { if (e.key === 'Escape') onClose(); }} />
+<svelte:window onkeydown={(e) => { if (e.key === 'Escape') requestClose(); }} />
 
-<div class="overlay" class:inline onclick={(e) => { if (e.target === e.currentTarget) onClose(); }} role="presentation">
+<div class="overlay" class:inline onclick={(e) => { if (e.target === e.currentTarget) requestClose(); }} role="presentation">
     <div class="dialog fade-in" class:inline role="dialog" aria-modal="true" aria-label="PDF viewer" data-testid="pdf-viewer">
         <header class="head">
             <div class="head-left">
@@ -375,7 +400,7 @@
                     <span class="muted small">page {pageNum} of {totalPages}</span>
                 {/if}
             </div>
-            <button type="button" class="btn btn-ghost" onclick={onClose} aria-label="Close"><Icon name="close" size={14} /></button>
+            <button type="button" class="btn btn-ghost" onclick={requestClose} aria-label="Close"><Icon name="close" size={14} /></button>
         </header>
 
         <div class="toolbar">
@@ -450,7 +475,7 @@
                 <div class="viewer-state" role="alert">
                     <Icon name="info" size={20} />
                     <p>{loadError}</p>
-                    <button type="button" class="btn btn-ghost" onclick={onClose}>Close</button>
+                    <button type="button" class="btn btn-ghost" onclick={requestClose}>Close</button>
                 </div>
             {:else if !docReady && mode === 'view'}
                 <div class="viewer-state" aria-live="polite">

@@ -48,10 +48,17 @@ const LABELLED_SECRET = new RegExp(
     '\\b(password|passwd|pwd|passphrase|secret|api[_ -]?key|apikey|access[_ -]?token|' +
     'auth[_ -]?token|bearer|client[_ -]?secret|private[_ -]?key|otp|one[- ]time[- ]code|' +
     '2fa[_ -]?code|verification[_ -]?code|security[_ -]?code|pin)' +
-    '\\s*(?:is|=|:)\\s*' +
-    '(["\']?)([^\\s"\'<>,;]{4,120})\\2',
+    '(\\s+is\\s*[=:]?\\s*|\\s*[=:]\\s*)' +
+    '(?:"([^"\\n]{4,120})"|\'([^\'\\n]{4,120})\'|([^\\s"\'<>,;]{4,120}))',
     'gi'
 );
+
+// "Bearer <token>" and "Authorization: Basic <base64>". Bearer needs a digit
+// in the token so prose like "bearer of good news" is left alone.
+const AUTH_HEADER_PATTERNS = [
+    [/\b(Bearer\s+)(?=[A-Za-z0-9._~+\/-]*\d)[A-Za-z0-9._~+\/-]{16,}=*/gi, 'bearer-token'],
+    [/\b(Authorization\s*:\s*Basic\s+)[A-Za-z0-9+\/]{8,}=*/gi, 'basic-auth']
+];
 
 // Basic auth embedded in a URL: https://user:secret@host
 const URL_CREDENTIALS = /\b([a-z][a-z0-9+.-]*:\/\/)([^\s/:@]+):([^\s/@]+)@/gi;
@@ -91,14 +98,22 @@ function scrubText(input, counts) {
         return `${scheme}${user}:[redacted:password]@`;
     });
 
-    out = out.replace(LABELLED_SECRET, (match, label, quote, value) => {
+    for (const [re, kind] of AUTH_HEADER_PATTERNS) {
+        out = out.replace(re, (_m, prefix) => {
+            counts[kind] = (counts[kind] || 0) + 1;
+            return `${prefix}[redacted]`;
+        });
+    }
+
+    out = out.replace(LABELLED_SECRET, (match, label, sep, dq, sq, bare) => {
+        const value = dq ?? sq ?? bare;
         // A label followed by an obvious placeholder is not a secret, and
         // redacting it just makes the text harder to read.
         if (/^(?:\*+|x+|•+|-+|none|n\/a|null|unchanged|hidden|redacted)$/i.test(value)) return match;
-        counts[label.toLowerCase().replace(/[_ -]/g, '')] =
-            (counts[label.toLowerCase().replace(/[_ -]/g, '')] || 0) + 1;
-        const sep = match.slice(label.length, match.indexOf(value, label.length));
-        return `${label}${sep}[redacted]`;
+        const kind = label.toLowerCase().replace(/[_ -]/g, '');
+        counts[kind] = (counts[kind] || 0) + 1;
+        const quote = dq !== undefined ? '"' : sq !== undefined ? "'" : '';
+        return `${label}${sep}${quote}[redacted]${quote}`;
     });
 
     out = out.replace(CARD_CANDIDATE, (m) => {

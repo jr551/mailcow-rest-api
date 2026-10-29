@@ -5,8 +5,11 @@
 // and a per-calendar `visible` flag is persisted client-side because the
 // server doesn't track that.
 
+import { untrack } from 'svelte';
 import { format, parseISO, isAfter, isBefore } from 'date-fns';
+import { authState } from './auth.svelte';
 import {
+    ApiError,
     listCalendars as apiListCalendars,
     listCalendarEvents as apiListEvents,
     createCalendarEvent as apiCreateEvent,
@@ -20,11 +23,25 @@ import {
     type CalendarSubscription
 } from './api';
 
+// Every key is suffixed with the signed-in account (`<base>.<user>`) so a
+// second account on this browser never sees the first one's calendars.
 const CAL_CACHE = 'webmail.calendar.v1.calendars';
 const SUB_CACHE = 'webmail.calendar.v1.subscriptions';
 const EVT_CACHE = 'webmail.calendar.v1.events';
 const VIS_KEY = 'webmail.calendar.v1.visibility';
 const DEFAULT_KEY = 'webmail.calendar.v1.default';
+const ALL_KEYS = [CAL_CACHE, SUB_CACHE, EVT_CACHE, VIS_KEY, DEFAULT_KEY];
+
+// Read lazily for the same reason as in ai-threads.svelte.ts: this module is
+// evaluated through an import cycle before authState is ready.
+let scopeUser: string | null = null;
+
+function scoped(base: string, user: string | null = scopeUser): string | null {
+    return user ? `${base}.${user}` : null;
+}
+
+// Earlier builds stored one shared copy under the bare keys.
+try { for (const k of ALL_KEYS) localStorage.removeItem(k); } catch { /* storage disabled */ }
 
 // --- Types -------------------------------------------------------------
 
@@ -77,17 +94,26 @@ export const EVENT_COLORS = [
 
 const DEFAULT_COLOR = '#1a73e8';
 
+// Colours come from CalDAV, shared calendars and subscriptions and end up in
+// style attributes, so only plain hex colours are let through.
+function safeColor(c: string | null | undefined): string {
+    return typeof c === 'string' && /^#[0-9a-f]{3,8}$/i.test(c.trim()) ? c.trim() : DEFAULT_COLOR;
+}
+
 // --- Persistence helpers ----------------------------------------------
 
-function readStore<T>(key: string, fallback: T): T {
+function readStore<T>(base: string, fallback: T): T {
     try {
-        const raw = localStorage.getItem(key);
+        const key = scoped(base);
+        const raw = key && localStorage.getItem(key);
         if (!raw) return fallback;
         return JSON.parse(raw) as T;
     } catch { return fallback; }
 }
 
-function writeStore(key: string, value: unknown) {
+function writeStore(base: string, value: unknown) {
+    const key = scoped(base);
+    if (!key) return;
     try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* quota / disabled */ }
 }
 
@@ -109,7 +135,10 @@ export function getDefaultCalendarId(): string | null { return _defaultId.id; }
 export function setDefaultCalendarId(id: string | null) {
     _defaultId.id = id;
     if (id) writeStore(DEFAULT_KEY, id);
-    else { try { localStorage.removeItem(DEFAULT_KEY); } catch { /* */ } }
+    else {
+        const key = scoped(DEFAULT_KEY);
+        try { if (key) localStorage.removeItem(key); } catch { /* */ }
+    }
 }
 
 // Resolve which calendar new events should land in: the explicit user
@@ -150,7 +179,7 @@ function fromApiCalendar(c: NormalizedCalendar, vis: Record<string, boolean>): C
     return {
         id: c.id,
         name: c.name,
-        color: c.color || DEFAULT_COLOR,
+        color: safeColor(c.color),
         visible,
         primary: isPrimary,
         source: 'caldav'
@@ -207,6 +236,39 @@ const state = $state<CalState>({
 
 export const calendarStore = state;
 
+// Bumped whenever the active account changes so in-flight loads for the
+// previous account can tell their results are stale.
+let generation = 0;
+
+function resetForUser(user: string | null) {
+    const wasActive = state.loaded || state.loading;
+    scopeUser = user;
+    generation++;
+    state.calendars = [];
+    state.events = [];
+    state.loaded = false;
+    state.loading = false;
+    state.error = null;
+    _defaultId.id = readStore<string | null>(DEFAULT_KEY, null);
+    if (wasActive && user) void loadCalendar();
+}
+
+let knownUsers: string[] = [];
+$effect.root(() => {
+    $effect(() => {
+        const users = authState.sessions.map((s) => s.user);
+        const active = authState.activeUser;
+        untrack(() => {
+            for (const u of knownUsers) {
+                if (users.includes(u)) continue;
+                try { for (const k of ALL_KEYS) localStorage.removeItem(`${k}.${u}`); } catch { /* storage disabled */ }
+            }
+            knownUsers = users;
+            if (active !== scopeUser) resetForUser(active);
+        });
+    });
+});
+
 function cryptoId(): string {
     if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID();
     return Math.random().toString(36).slice(2, 11) + Date.now().toString(36);
@@ -225,6 +287,7 @@ function defaultRange(): { from: Date; to: Date } {
 // First-load entry point. Renders the SWR cache instantly, then refetches.
 export async function loadCalendar(): Promise<void> {
     if (state.loaded || state.loading) return;
+    const gen = generation;
     state.loading = true;
     state.error = null;
 
@@ -237,7 +300,7 @@ export async function loadCalendar(): Promise<void> {
         ...cachedSubs.map((s) => ({
             id: s.id,
             name: s.name,
-            color: s.color || DEFAULT_COLOR,
+            color: safeColor(s.color),
             visible: vis[s.id] ?? true,
             readOnly: true,
             source: 'subscription' as CalendarSource,
@@ -253,12 +316,13 @@ export async function loadCalendar(): Promise<void> {
             apiListCalendars(),
             apiListSubs().catch(() => [] as CalendarSubscription[])
         ]);
+        if (gen !== generation) return;
         const mergedCals: Calendar[] = [
             ...cals.map((c) => fromApiCalendar(c, vis)),
             ...subs.map((s) => ({
                 id: s.id,
                 name: s.name,
-                color: s.color || DEFAULT_COLOR,
+                color: safeColor(s.color),
                 visible: vis[s.id] ?? true,
                 readOnly: true,
                 source: 'subscription' as CalendarSource,
@@ -286,6 +350,7 @@ export async function loadCalendar(): Promise<void> {
             )
         ]);
 
+        if (gen !== generation) return;
         const allCaldav = caldavFetched.flat().map(fromApiEvent);
         const allSub = subFetched.map((events, idx) =>
             events.map((e) => fromSubEvent(e, visibleSubs[idx]))
@@ -294,9 +359,9 @@ export async function loadCalendar(): Promise<void> {
         writeStore(EVT_CACHE, mergedRaw(state.events));
         state.loaded = true;
     } catch (err) {
-        state.error = (err as Error).message || 'Failed to load calendar';
+        if (gen === generation) state.error = (err as Error).message || 'Failed to load calendar';
     } finally {
-        state.loading = false;
+        if (gen === generation) state.loading = false;
     }
 }
 
@@ -305,6 +370,7 @@ async function refreshCalendarEvents(calendarId: string): Promise<void> {
     const cal = state.calendars.find((c) => c.id === calendarId);
     if (!cal) return;
     const { from, to } = defaultRange();
+    const gen = generation;
     try {
         let refreshed: CalEvent[];
         if (cal.source === 'subscription') {
@@ -314,12 +380,13 @@ async function refreshCalendarEvents(calendarId: string): Promise<void> {
             const evs = await apiListEvents(calendarId, { start: from, end: to });
             refreshed = evs.map(fromApiEvent);
         }
+        if (gen !== generation) return;
         const others = state.events.filter((e) => e.calendarId !== calendarId);
         const merged = [...others, ...refreshed];
         state.events = merged;
         writeStore(EVT_CACHE, mergedRaw(state.events));
     } catch (err) {
-        state.error = (err as Error).message;
+        if (gen === generation) state.error = (err as Error).message;
     }
 }
 
@@ -373,6 +440,7 @@ export async function addEvent(input: Omit<CalEvent, 'id' | 'createdAt' | 'updat
     const cal = getCalendar(input.calendarId);
     if (cal?.readOnly) throw new Error('This calendar is read-only');
     const { calendarId } = input;
+    const gen = generation;
     const created = await apiCreateEvent(calendarId, {
         title: input.title,
         start: input.start,
@@ -393,22 +461,24 @@ export async function addEvent(input: Omit<CalEvent, 'id' | 'createdAt' | 'updat
         recurrence: input.recurrence || 'none',
         color: input.color
     };
-    state.events = [...state.events, evt];
-    writeStore(EVT_CACHE, mergedRaw(state.events));
+    if (gen === generation) {
+        state.events = [...state.events, evt];
+        writeStore(EVT_CACHE, mergedRaw(state.events));
+    }
     return evt;
 }
 
-// Server has no PATCH/PUT; an "edit" is delete-then-create. The new event
-// gets a fresh UID, so client-side references switch over too.
+// The server has no PATCH/PUT, so an "edit" is create-then-delete: the
+// replacement exists before the original is touched, and the original stays
+// if either step fails. The new event gets a fresh UID, so client-side
+// references switch over too.
 export async function updateEvent(id: string, patch: Partial<Omit<CalEvent, 'id' | 'createdAt'>>): Promise<CalEvent | undefined> {
     const existing = state.events.find((e) => e.id === id);
     if (!existing) return undefined;
     const cal = getCalendar(existing.calendarId);
     if (cal?.readOnly) throw new Error('This calendar is read-only');
+    const gen = generation;
     const merged: CalEvent = { ...existing, ...patch, updatedAt: new Date().toISOString() };
-    try {
-        await apiDeleteEvent(existing.calendarId, existing.id);
-    } catch { /* tolerate — proceed to recreate */ }
     const created = await apiCreateEvent(merged.calendarId, {
         title: merged.title,
         start: merged.start,
@@ -416,9 +486,20 @@ export async function updateEvent(id: string, patch: Partial<Omit<CalEvent, 'id'
         description: merged.description,
         location: merged.location
     });
+    try {
+        await apiDeleteEvent(existing.calendarId, existing.id);
+    } catch (err) {
+        if (!(err instanceof ApiError && err.status === 404)) {
+            // Undo the copy so a failed edit does not leave a duplicate.
+            if (created.uid) await apiDeleteEvent(merged.calendarId, created.uid).catch(() => { /* best effort */ });
+            throw new Error(`Could not update the event: ${(err as Error).message}`);
+        }
+    }
     const next: CalEvent = { ...merged, id: created.uid || merged.id };
-    state.events = state.events.map((e) => e.id === id ? next : e);
-    writeStore(EVT_CACHE, mergedRaw(state.events));
+    if (gen === generation) {
+        state.events = state.events.map((e) => e.id === id ? next : e);
+        writeStore(EVT_CACHE, mergedRaw(state.events));
+    }
     return next;
 }
 
@@ -427,11 +508,18 @@ export async function deleteEvent(id: string): Promise<boolean> {
     if (!existing) return false;
     const cal = getCalendar(existing.calendarId);
     if (cal?.readOnly) throw new Error('This calendar is read-only');
+    const gen = generation;
     try {
         await apiDeleteEvent(existing.calendarId, existing.id);
-    } catch { /* still drop locally so the UI doesn't get stuck */ }
-    state.events = state.events.filter((e) => e.id !== id);
-    writeStore(EVT_CACHE, mergedRaw(state.events));
+    } catch (err) {
+        // Already gone on the server: fine to drop it here too. Anything
+        // else leaves the event in place so the user sees the failure.
+        if (!(err instanceof ApiError && err.status === 404)) throw err;
+    }
+    if (gen === generation) {
+        state.events = state.events.filter((e) => e.id !== id);
+        writeStore(EVT_CACHE, mergedRaw(state.events));
+    }
     return true;
 }
 
@@ -442,7 +530,7 @@ export async function addSubscription(input: { name: string; url: string; color?
     const cal: Calendar = {
         id: sub.id,
         name: sub.name,
-        color: sub.color || DEFAULT_COLOR,
+        color: safeColor(sub.color),
         visible: true,
         readOnly: true,
         source: 'subscription',
@@ -458,7 +546,9 @@ export async function addSubscription(input: { name: string; url: string; color?
 export async function removeSubscription(id: string): Promise<boolean> {
     try {
         await apiDeleteSub(id);
-    } catch { /* tolerate */ }
+    } catch (err) {
+        if (!(err instanceof ApiError && err.status === 404)) throw err;
+    }
     state.calendars = state.calendars.filter((c) => c.id !== id);
     state.events = state.events.filter((e) => e.calendarId !== id);
     writeStore(SUB_CACHE, state.calendars.filter((c) => c.source === 'subscription').map((c) => ({ id: c.id, name: c.name, url: c.url || '', color: c.color })));

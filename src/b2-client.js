@@ -4,6 +4,9 @@ const https = require('node:https');
 const http = require('node:http');
 const { URL } = require('node:url');
 
+const REQUEST_TIMEOUT_MS = 30000;
+const MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
+
 class B2Client {
     constructor({ keyId, applicationKey, logger }) {
         this.keyId = keyId;
@@ -27,25 +30,39 @@ class B2Client {
                 parsed,
                 { method: opts.method || 'GET', headers },
                 (res) => {
-                    let data = '';
-                    res.on('data', (chunk) => { data += chunk; });
+                    const chunks = [];
+                    let size = 0;
+                    res.on('data', (chunk) => {
+                        size += chunk.length;
+                        if (size > MAX_RESPONSE_BYTES) {
+                            req.destroy(new Error('B2 response too large'));
+                            return;
+                        }
+                        chunks.push(chunk);
+                    });
+                    res.on('error', reject);
                     res.on('end', () => {
+                        let parsedData = null;
                         try {
-                            const parsedData = JSON.parse(data);
-                            if (res.statusCode >= 400) {
-                                const err = new Error(parsedData.message || `B2 API error ${res.statusCode}`);
-                                (err).statusCode = res.statusCode;
-                                (err).code = parsedData.code;
-                                reject(err);
-                            } else {
-                                resolve(parsedData);
-                            }
-                        } catch {
-                            resolve(data);
+                            parsedData = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+                        } catch { /* handled below */ }
+                        const isObject = parsedData !== null && typeof parsedData === 'object';
+                        if (res.statusCode >= 400) {
+                            const err = new Error((isObject && parsedData.message) || `B2 API error ${res.statusCode}`);
+                            err.statusCode = res.statusCode;
+                            err.code = isObject ? parsedData.code : undefined;
+                            reject(err);
+                        } else if (!isObject) {
+                            const err = new Error(`B2 API returned a non-JSON response (${res.statusCode})`);
+                            err.statusCode = res.statusCode;
+                            reject(err);
+                        } else {
+                            resolve(parsedData);
                         }
                     });
                 }
             );
+            req.setTimeout(REQUEST_TIMEOUT_MS, () => req.destroy(new Error('B2 request timed out')));
             req.on('error', reject);
             if (body) req.write(body);
             req.end();
@@ -64,6 +81,7 @@ class B2Client {
         // B2 v3 nests apiUrl inside apiInfo.storageApi
         res.apiUrl = res.apiUrl || res.apiInfo?.storageApi?.apiUrl;
         res.s3ApiUrl = res.s3ApiUrl || res.apiInfo?.storageApi?.s3ApiUrl;
+        if (!res.apiUrl || !res.authorizationToken) throw new Error('B2 authorize response is missing apiUrl or authorizationToken');
         this.auth = res;
         // Auth tokens are valid for 24h; back off a bit.
         this.authExpiresAt = Date.now() + 23 * 60 * 60 * 1000;
@@ -133,13 +151,18 @@ class B2Client {
     }
 
     async createKey({ keyName, capabilities, bucketId }) {
+        // Without a bucketId B2 would mint a key covering every bucket in
+        // the account.
+        if (typeof bucketId !== 'string' || !bucketId) {
+            throw new Error('createKey requires a bucketId');
+        }
         const auth = await this.authorize();
         const body = {
             accountId: auth.accountId,
             keyName,
-            capabilities: capabilities || ['listBuckets', 'listFiles', 'readFiles', 'writeFiles', 'deleteFiles']
+            capabilities: capabilities || ['listBuckets', 'listFiles', 'readFiles', 'writeFiles', 'deleteFiles'],
+            bucketId
         };
-        if (bucketId) body.bucketId = bucketId;
         const res = await this._request(`${auth.apiUrl}/b2api/v3/b2_create_key`, {
             method: 'POST',
             headers: { authorization: auth.authorizationToken },

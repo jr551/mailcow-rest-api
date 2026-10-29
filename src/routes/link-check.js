@@ -192,7 +192,7 @@ module.exports = function linkCheckRoutes(app) {
                 type: 'object',
                 additionalProperties: false,
                 required: ['url'],
-                properties: { url: { type: 'string', minLength: 1 } }
+                properties: { url: { type: 'string', minLength: 1, maxLength: 2048 } }
             },
             response: {
                 200: {

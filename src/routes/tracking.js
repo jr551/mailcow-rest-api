@@ -2,23 +2,37 @@
 
 const { sendMessage } = require('../smtp-client');
 const { problem } = require('../errors');
+const { problemSchema } = require('../schemas');
 const { buildOpenNotice } = require('../tracking-enrich');
 
 // 1x1 transparent GIF (43 bytes)
 const TRANSPARENT_GIF = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
 
-const problemSchema = {
-    type: 'object',
-    properties: {
-        type: { type: 'string' },
-        title: { type: 'string' },
-        status: { type: 'integer' },
-        detail: { type: 'string' }
-    }
-};
-
 module.exports = async function trackingRoutes(app, { store, smtp }) {
     const smtpEnabled = !!(smtp && smtp.host);
+
+    // SMTP AUTH is the mailbox that sent the mail, which may differ from the
+    // From alias the notification is sent as and to.
+    async function notifySender(req, record, ip, ua) {
+        const { text, html } = await buildOpenNotice({
+            subject: record.subject,
+            recipient: record.recipient,
+            openedAt: record.openedAt,
+            ip,
+            ua
+        });
+        await sendMessage({
+            smtpConfig: smtp,
+            user: record.owner,
+            pass: record.senderPass,
+            from: record.sender,
+            to: [record.sender],
+            subject: `📬 Opened: ${record.subject}`,
+            text,
+            html
+        });
+        req.log.info({ ref: record.ref, recipient: record.recipient }, 'tracking notification sent');
+    }
 
     // Public tracking pixel — loaded when a recipient opens an HTML email.
     app.get('/v1/track/:ref.gif', {
@@ -52,36 +66,31 @@ module.exports = async function trackingRoutes(app, { store, smtp }) {
             return reply.type('image/gif').send(TRANSPARENT_GIF);
         }
 
+        // The pixel is returned straight away: the notification below does a
+        // geo lookup and an SMTP login, and a mail client or image proxy that
+        // times out on a slow pixel shows a broken image.
+        reply.type('image/gif').send(TRANSPARENT_GIF);
+
         // On first open, send a notification email to the original sender
         // — enriched with country flag, ISP, browser, and device parsed
         // from IP + UA so the sender gets useful context, not just a raw
         // IP they have to look up themselves.
-        if (record.wasFirstOpen && smtpEnabled) {
-            try {
-                const { text, html } = await buildOpenNotice({
-                    subject: record.subject,
-                    recipient: record.recipient,
-                    openedAt: record.openedAt,
-                    ip,
-                    ua
-                });
-                await sendMessage({
-                    smtpConfig: smtp,
-                    user: record.sender,
-                    pass: record.senderPass,
-                    from: record.sender,
-                    to: [record.sender],
-                    subject: `📬 Opened: ${record.subject}`,
-                    text,
-                    html
-                });
-                req.log.info({ ref, recipient: record.recipient }, 'tracking notification sent');
-            } catch (err) {
-                req.log.warn({ err, ref }, 'tracking notification email failed');
-            }
+        if (record.wasFirstOpen) {
+            const notified = smtpEnabled
+                ? notifySender(req, record, ip, ua)
+                    .catch((err) => req.log.warn({ err, ref }, 'tracking notification email failed'))
+                : Promise.resolve();
+            // The stored password has no further use once that one attempt is over.
+            notified.finally(() => {
+                try {
+                    store.clearSenderPass(ref);
+                } catch (err) {
+                    req.log.warn({ err, ref }, 'could not clear stored tracking credentials');
+                }
+            });
         }
 
-        return reply.type('image/gif').send(TRANSPARENT_GIF);
+        return reply;
     });
 
     // List tracking pixels created by the authenticated user.

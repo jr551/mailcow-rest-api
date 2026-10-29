@@ -37,6 +37,13 @@
         showNewFolder = false;
     }
 
+    function onDeleteSelected() {
+        const n = driveState.selected.size;
+        if (!n) return;
+        if (!confirm(`Delete ${n} selected item${n === 1 ? '' : 's'}? Folders are deleted with everything in them. This cannot be undone.`)) return;
+        void deleteSelected();
+    }
+
     const crumbs = $derived(breadcrumbParts(driveState.currentPath));
 </script>
 
@@ -71,7 +78,7 @@
         <DriveQuota />
         {#if driveState.selected.size > 0}
             <span class="selection-hint">{driveState.selected.size} selected</span>
-            <button type="button" class="btn danger" onclick={deleteSelected}>
+            <button type="button" class="btn danger" onclick={onDeleteSelected}>
                 <Icon name="trash" size={16} />
                 Delete
             </button>

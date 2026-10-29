@@ -5,6 +5,35 @@ const { createPinnedHttpsAgent } = require('./utils/ssrf-guard');
 const Database = require('better-sqlite3');
 const { withClient } = require('./imap');
 
+const SEND_TIMEOUT_MS = 10_000;
+
+// One Web Push delivery. The connection is pinned to the address checked
+// here: the endpoint was validated at subscribe time, but the name can be
+// re-pointed at an internal address afterwards. Each send builds its own
+// Agent (a connection pool plus keep-alive timers), so it is always
+// destroyed, and the request is timed out so a tarpit endpoint cannot hold
+// a poll tick or a request open forever.
+async function sendPush(sub, payload, { lookup } = {}) {
+    let agent;
+    try {
+        agent = await createPinnedHttpsAgent(sub.endpoint, lookup ? { lookup } : undefined);
+    } catch (err) {
+        return { ok: false, blocked: true, status: 0, error: err.message };
+    }
+    try {
+        await webpush.sendNotification(
+            { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth_key } },
+            payload,
+            { ...(agent ? { agent } : {}), timeout: SEND_TIMEOUT_MS }
+        );
+        return { ok: true, status: 200, error: '' };
+    } catch (err) {
+        return { ok: false, status: (err && err.statusCode) || 0, error: (err && err.message) || 'send failed' };
+    } finally {
+        if (agent && typeof agent.destroy === 'function') agent.destroy();
+    }
+}
+
 function createPushSender({ config, pushStore, pool, cache, logger }) {
     const vapidPublicKey = config.push.vapidPublicKey || '';
     const vapidPrivateKey = config.push.vapidPrivateKey || '';
@@ -93,41 +122,22 @@ function createPushSender({ config, pushStore, pool, cache, logger }) {
                 const watermark = deliveredRow ? deliveredRow.unseen : lastUnseen;
                 if (unseen <= watermark) continue;
 
-                let agent;
-                try {
-                    // Pin the connection to the address we checked. The
-                    // endpoint was validated at subscribe time, but the name
-                    // can be re-pointed at an internal address afterwards.
-                    agent = await createPinnedHttpsAgent(sub.endpoint);
-                } catch (err) {
-                    if (logger) logger.warn({ err: err.message, user }, 'push endpoint blocked');
-                    continue;
-                }
-                try {
-                    await webpush.sendNotification(
-                        { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth_key } },
-                        payload,
-                        agent ? { agent } : undefined
-                    );
+                const result = await sendPush(sub, payload);
+                if (result.ok) {
                     markDelivered.run(user, sub.endpoint, unseen);
-                } catch (err) {
-                    if (err.statusCode === 410 || err.statusCode === 404) {
-                        pushStore.delete({ endpoint: sub.endpoint, user });
-                        dropDelivered.run(user, sub.endpoint);
-                        if (logger) logger.info({ user, endpoint: sub.endpoint }, 'removed expired push subscription');
-                    } else {
-                        // Retryable failure: keep this endpoint's watermark
-                        // where it is so the next tick retries it, and hold
-                        // back the user-level watermark so the notification
-                        // cannot be dropped for good.
-                        settled = false;
-                        if (logger) logger.warn({ err: err.message, user }, 'push send failed');
-                    }
-                } finally {
-                    // Each send builds its own pinned Agent, which owns a
-                    // connection pool and keep-alive timers. Without this,
-                    // repeated sends accumulate one pool each.
-                    if (agent && typeof agent.destroy === 'function') agent.destroy();
+                } else if (result.blocked) {
+                    if (logger) logger.warn({ err: result.error, user }, 'push endpoint blocked');
+                } else if (result.status === 410 || result.status === 404) {
+                    pushStore.delete({ endpoint: sub.endpoint, user });
+                    dropDelivered.run(user, sub.endpoint);
+                    if (logger) logger.info({ user, endpoint: sub.endpoint }, 'removed expired push subscription');
+                } else {
+                    // Retryable failure: keep this endpoint's watermark
+                    // where it is so the next tick retries it, and hold
+                    // back the user-level watermark so the notification
+                    // cannot be dropped for good.
+                    settled = false;
+                    if (logger) logger.warn({ err: result.error, user }, 'push send failed');
                 }
             }
 
@@ -222,4 +232,4 @@ function createPushSender({ config, pushStore, pool, cache, logger }) {
     return { start, stop, tick, enabled };
 }
 
-module.exports = { createPushSender };
+module.exports = { createPushSender, sendPush };

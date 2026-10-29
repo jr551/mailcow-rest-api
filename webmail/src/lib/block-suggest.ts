@@ -4,7 +4,7 @@
 // "@spam.example", "*@*.mail.spam.example") or null when the model thinks
 // only the exact address should be blocked.
 
-import { settings, capabilities, aiAuthKey } from './settings.svelte';
+import { resolveProvider } from './llm-provider';
 
 const SYSTEM_PROMPT = [
     'You suggest a sender-block pattern for a mail server policy.',
@@ -31,53 +31,21 @@ const MAJOR_DOMAINS: Record<string, true> = {
     'mail.com': true, 'zoho.com': true, 'gmx.com': true, 'gmx.net': true
 };
 
-const PRESET_URLS: Record<string, string> = {
-    mistral: 'https://api.mistral.ai/v1',
-    openai: 'https://api.openai.com/v1',
-    groq: 'https://api.groq.com/openai/v1',
-    together: 'https://api.together.xyz/v1',
-    ollama: 'http://127.0.0.1:11434/v1',
-    perplexity: 'https://api.perplexity.ai',
-    openrouter: 'https://openrouter.ai/api/v1',
-    deepseek: 'https://api.deepseek.com/v1'
-};
-
-const PRESET_MODELS: Record<string, string> = {
-    mistral: 'mistral-small-latest',
-    openai: 'gpt-4o-mini',
-    groq: 'llama-3.1-70b-versatile',
-    together: 'meta-llama/Llama-3-8b-chat-hf',
-    ollama: 'llama3.1',
-    perplexity: 'llama-3.1-sonar-small-128k-chat',
-    openrouter: 'meta-llama/llama-3.1-8b-instruct',
-    deepseek: 'deepseek-v4-flash'
-};
-
 export async function suggestBlockPattern(
     input: { from: string; fromName?: string; subject?: string },
     opts: { signal?: AbortSignal } = {}
 ): Promise<string | null> {
-    const llm = settings.llm;
-    const configured = capabilities.aiConfig?.configured
-        || (settings.useCustomLlm && llm.apiKey && (llm.baseUrl || llm.preset));
-    if (!configured) return null;
+    const cfg = resolveProvider();
+    if (!cfg) return null;
 
-    const baseUrl = (capabilities.aiConfig?.configured
-        ? capabilities.aiConfig.baseUrl
-        : (llm.baseUrl || PRESET_URLS[llm.preset] || PRESET_URLS.openai)).replace(/\/+$/, '');
-    const model = capabilities.aiConfig?.configured
-        ? capabilities.aiConfig.model
-        : (llm.model || PRESET_MODELS[llm.preset] || PRESET_MODELS.openai);
-    const apiKey = capabilities.aiConfig?.configured ? aiAuthKey() : llm.apiKey;
-
-    const res = await fetch(`${baseUrl}/chat/completions`, {
+    const res = await fetch(`${cfg.baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
-            authorization: `Bearer ${apiKey}`,
+            authorization: `Bearer ${cfg.apiKey}`,
             'content-type': 'application/json'
         },
         body: JSON.stringify({
-            model,
+            model: cfg.model,
             messages: [
                 { role: 'system', content: SYSTEM_PROMPT },
                 {

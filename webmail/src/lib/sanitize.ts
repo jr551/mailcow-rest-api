@@ -10,7 +10,8 @@
 //   - inline event-handler attributes (onclick, onerror, …)
 //   - href/src/xlink:href values starting with javascript:, vbscript:,
 //     data:text/html, file: (privacy + XSS)
-//   - <img> with remote http(s) src when allowRemoteImages is false
+//   - <img> with remote http(s) or protocol-relative src, and remote
+//     background/poster attributes, when allowRemoteImages is false
 //   - background-image / list-style-image url() pointing at remote URLs
 //     in inline style attributes (privacy)
 //   - srcset attributes (sender-controlled remote loads)
@@ -18,18 +19,47 @@
 const BLOCK_TAGS = ['script', 'style', 'iframe', 'object', 'embed', 'link', 'meta', 'base', 'form', 'frame', 'frameset'];
 const BLOCK_REGEX = new RegExp(`<(${BLOCK_TAGS.join('|')})\\b[^>]*>[\\s\\S]*?<\\/\\1\\s*>|<(?:${BLOCK_TAGS.join('|')})\\b[^>]*\\/?>`, 'gi');
 
-const HANDLER_ATTR = /\s+on[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi;
+// HTML treats whitespace, `/` and a directly-following quote as attribute
+// separators, so `<svg/onload=…>` and `<img src="x"onerror=…>` are handlers too.
+// Group 1 keeps the closing quote of the preceding attribute.
+const HANDLER_ATTR = /(?:[\s/]+|(["']))on[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi;
 
-// Match dangerous URI schemes in href/src/xlink:href whether the value is
-// single-, double-, or unquoted. Covers javascript:, vbscript:, file:, and
-// data:text/html (data:image/* is allowed elsewhere by the regex below).
-const DANGEROUS_HREF = /(\b(?:href|src|xlink:href|action|formaction|background|poster))\s*=\s*(?:"\s*(?:javascript|vbscript|file):[^"]*"|'\s*(?:javascript|vbscript|file):[^']*'|\s*(?:javascript|vbscript|file):[^\s>]+|"\s*data:text\/html[^"]*"|'\s*data:text\/html[^']*'|\s*data:text\/html[^\s>]+)/gi;
+// Link/source attributes whose value may carry a URI scheme. The value is
+// normalised (entities decoded, whitespace and control characters removed)
+// before the scheme test, because browsers resolve `&#106;avascript:` and
+// `java\tscript:` as javascript:.
+const URL_ATTR = /(\b(?:href|src|xlink:href|action|formaction|background|poster))\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi;
+
+const NAMED_ENTITIES: Record<string, string> = { colon: ':', tab: '\t', newline: '\n' };
+
+function decodeEntities(value: string): string {
+    return value.replace(/&(?:#x([0-9a-f]+)|#(\d+)|([a-z]+));?/gi, (m, hex, dec, name) => {
+        if (name) return NAMED_ENTITIES[name.toLowerCase()] ?? m;
+        const cp = hex ? parseInt(hex, 16) : parseInt(dec, 10);
+        return cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : m;
+    });
+}
+
+// javascript:, vbscript:, file: and data:text/html (data:image/* is fine).
+function isDangerousScheme(rawValue: string): boolean {
+    const flat = decodeEntities(rawValue.replace(/^["']|["']$/g, ''))
+        .replace(/[\s\u0000-\u001f\u007f]/g, '')
+        .toLowerCase();
+    return /^(?:javascript|vbscript|file):/.test(flat) || /^data:text\/html/.test(flat);
+}
 
 // srcset can carry remote http(s) just like src — strip the whole attribute.
 const SRCSET_ATTR = /\s+srcset\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi;
 
-// Remote images blocked by default (privacy).
-const IMG_SRC = /<img\b([^>]*?)\bsrc\s*=\s*("https?:[^"]*"|'https?:[^']*'|https?:[^\s>]+)/gi;
+// An <img> whose src is remote: absolute http(s) or protocol-relative (`//host`,
+// which resolves to https inside a srcdoc frame). Fresh RegExp per call so
+// callers never share `lastIndex` state.
+export function remoteImgRegex(): RegExp {
+    return /<img\b([^>]*?)\bsrc\s*=\s*("(?:https?:|\/\/)[^"]*"|'(?:https?:|\/\/)[^']*'|(?:https?:|\/\/)[^\s>]+)/gi;
+}
+
+// background=/poster= attributes load remote images too.
+const REMOTE_MEDIA_ATTR = /\s(?:background|poster)\s*=\s*(?:"(?:https?:|\/\/)[^"]*"|'(?:https?:|\/\/)[^']*'|(?:https?:|\/\/)[^\s>]+)/gi;
 
 // Remote url() inside inline style attributes — covers background-image,
 // list-style-image, cursor, mask-image, etc.
@@ -41,8 +71,8 @@ export interface SanitizeOptions {
 
 function scrubStyleValue(value: string, allowRemoteImages: boolean): string {
     if (allowRemoteImages) return value;
-    // Replace url(http…) and url('http…') and url("http…") with url(about:blank).
-    return value.replace(/url\(\s*(?:"|')?\s*https?:[^)"']*(?:"|')?\s*\)/gi, 'url(about:blank)');
+    // Replace url(http…), url('//host…') and url("http…") with url(about:blank).
+    return value.replace(/url\(\s*(?:"|')?\s*(?:https?:|\/\/)[^)"']*(?:"|')?\s*\)/gi, 'url(about:blank)');
 }
 
 export function sanitizeHtml(html: string, opts: SanitizeOptions = {}): string {
@@ -57,19 +87,20 @@ export function sanitizeHtml(html: string, opts: SanitizeOptions = {}): string {
     out = out.replace(BLOCK_REGEX, '');
 
     // Strip inline event handlers everywhere.
-    out = out.replace(HANDLER_ATTR, '');
+    out = out.replace(HANDLER_ATTR, '$1');
 
-    // Strip srcset (avoids remote loads slipping past the IMG_SRC rule).
+    // Strip srcset (avoids remote loads slipping past the remote-image rule).
     out = out.replace(SRCSET_ATTR, '');
 
     // Neutralise dangerous URI schemes in any link/source attribute.
-    out = out.replace(DANGEROUS_HREF, '$1="#"');
+    out = out.replace(URL_ATTR, (m, name, value) => (isDangerousScheme(value) ? `${name}="#"` : m));
 
     // Privacy: rewrite remote url() in inline styles.
     out = out.replace(STYLE_REMOTE_URL, (_m, prefix, quoted) => `${prefix}${scrubStyleValue(quoted, allowRemoteImages)}`);
 
     if (!allowRemoteImages) {
-        out = out.replace(IMG_SRC, '<img $1data-blocked-src=$2 alt="(remote image blocked)"');
+        out = out.replace(remoteImgRegex(), '<img $1data-blocked-src=$2 alt="(remote image blocked)"');
+        out = out.replace(REMOTE_MEDIA_ATTR, '');
     }
     return out;
 }
@@ -82,7 +113,7 @@ export function sanitizeHtml(html: string, opts: SanitizeOptions = {}): string {
 // so the layout is stable and the state is legible.
 export function placeholderRemoteImages(html: string): string {
     return html.replace(
-        /<img\b([^>]*?)\bsrc\s*=\s*("https?:[^"]*"|'https?:[^']*'|https?:[^\s>]+)/gi,
+        remoteImgRegex(),
         '<img $1data-loading-src=$2 class="imr-img-loading" alt="Loading image…"'
     );
 }
@@ -111,7 +142,9 @@ export function placeholderRemoteImages(html: string): string {
 //     not a guarantee.
 //   - Sender-authored script is stripped by sanitizeHtml before this runs,
 //     and inline on* handlers by HANDLER_ATTR, so the only script in the
-//     frame is this one in the ordinary case.
+//     frame is this one in the ordinary case. buildIframeSrcDoc also pins a
+//     Content-Security-Policy whose script-src is this script's nonce, so a
+//     handler or javascript: URL the regexes miss still does not execute.
 //
 // The nonce exists to reject messages from any *other* frame on the page
 // (there are several: the .eml preview renders its own iframe) rather than to
@@ -122,7 +155,7 @@ export function placeholderRemoteImages(html: string): string {
 // and blocking it makes the browser feel broken; the user still has the URL
 // on screen and can copy it.
 export function linkCheckShim(nonce: string): string {
-    return `<script>(function(){
+    return `<script nonce="${nonce.replace(/[^\w-]/g, '')}">(function(){
 var N=${JSON.stringify(nonce)};
 function report(e){
   var t=e.target;
@@ -142,6 +175,19 @@ document.addEventListener('auxclick',function(e){if(e.button===1)report(e);},tru
 }());</script>`;
 }
 
+// CSP for the body frame, the backstop for whatever the regex sanitizer
+// misses (inline handlers, javascript: URLs, fetch/beacon from a script).
+// Images are the one thing mail needs from the network: when the HTML still
+// carries remote <img src> (proxy off, or an image the proxy could not fetch)
+// http(s) stays open, otherwise only data: (proxied or inline) may load, which
+// also blocks background=, inline-style url() and protocol-relative trackers
+// the proxy never saw. Script runs only with the shim's nonce.
+function frameCsp(html: string, shim: string): string {
+    const nonce = /<script nonce="([\w-]+)"/.exec(shim)?.[1];
+    const img = remoteImgRegex().test(html) ? 'data: http: https:' : 'data:';
+    return `default-src 'none'; img-src ${img}; style-src 'unsafe-inline'${nonce ? `; script-src 'nonce-${nonce}'` : ''}`;
+}
+
 // `shim` is the link-click reporter (see linkCheckShim). Optional and
 // off by default so every other caller — and the .eml preview frame, which
 // has no prompt to offer — gets exactly the document it got before.
@@ -156,6 +202,7 @@ export function buildIframeSrcDoc(html: string, theme: 'light' | 'dark', shim = 
     // emails leave colors unspecified — color-scheme alone keeps them
     // readable in dark mode.
     return `<!doctype html><html><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="${frameCsp(html, shim)}">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="${theme}">
 <base target="_blank" rel="noopener noreferrer">

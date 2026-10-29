@@ -48,11 +48,11 @@ function createOcrCache(opts) {
     );
 
     function get(buffer, model) {
-        const key = hashContent(buffer, model);
-        const row = getStmt.get(key);
-        if (!row) return null;
+        // A disposable cache: a locked, read-only or corrupt database is a
+        // miss, never a failed OCR request.
         try {
-            return JSON.parse(row.response);
+            const row = getStmt.get(hashContent(buffer, model));
+            return row ? JSON.parse(row.response) : null;
         } catch {
             return null;
         }
@@ -61,10 +61,14 @@ function createOcrCache(opts) {
     function set(buffer, model, response, now = Date.now()) {
         const key = hashContent(buffer, model);
         setStmt.run(key, JSON.stringify(response), now);
-        const count = sizeStmt.get().c;
-        if (count > maxEntries) {
-            evictStmt.run(Math.min(evictBatch, count - maxEntries + evictBatch));
-        }
+        // Eviction is maintenance: a failed trim must not report the write,
+        // which landed, as failed.
+        try {
+            const count = sizeStmt.get().c;
+            if (count > maxEntries) {
+                evictStmt.run(Math.min(evictBatch, count - maxEntries + evictBatch));
+            }
+        } catch { /* best-effort */ }
     }
 
     function size() {

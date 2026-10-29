@@ -159,6 +159,7 @@
         --border-subtle: #2f333a;
         --border-soft: #3b4048;
         --border-strong: #4e545e;
+        --border-focus: #6cb2f7;
         --accent: #6cb2f7;
         --accent-hover: #8ab4f8;
         --accent-soft: #1b2a3a;
@@ -367,4 +368,11 @@ input.error-field, textarea.error-field, select.error-field {
     clip: rect(0, 0, 0, 0);
     white-space: nowrap;
     border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .btn:hover,
+    .btn:active { transform: none; }
+    .fade-in,
+    .shake { animation: none; }
 }

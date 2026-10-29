@@ -45,6 +45,7 @@
             <input
                 type="search"
                 placeholder="Search events"
+                aria-label="Search events"
                 value={search}
                 oninput={(e) => onSearch((e.currentTarget as HTMLInputElement).value)}
                 data-testid="cal-search"

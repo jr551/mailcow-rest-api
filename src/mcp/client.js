@@ -6,6 +6,10 @@ const { request } = require('undici');
 // Each method is one HTTP call. Errors are normalized to Error with a `.status`
 // field so the MCP server can render structured failures back to the LLM.
 
+// Attachments come back to the LLM as base64 text, so the tool refuses anything
+// that would bloat the MCP process or overflow a context window.
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+
 class RestClient {
     constructor({ baseUrl, user, pass, timeoutMs = 90_000 }) {
         if (!baseUrl) throw new Error('baseUrl is required');
@@ -181,18 +185,44 @@ class RestClient {
         return this._call('GET', `/v1/mailboxes/${encodeURIComponent(path)}/messages/${uid}/raw`, { accept: 'message/rfc822' });
     }
 
-    async downloadAttachment(path, uid, attachmentId) {
-        const url = new URL(this.baseUrl + `/v1/mailboxes/${encodeURIComponent(path)}/messages/${uid}/attachments/${encodeURIComponent(attachmentId)}`);
+    async downloadAttachment(path, uid, attachmentId, { maxBytes = MAX_ATTACHMENT_BYTES } = {}) {
+        const apiPath = `/v1/mailboxes/${encodeURIComponent(path)}/messages/${uid}/attachments/${encodeURIComponent(attachmentId)}`;
+        const url = new URL(this.baseUrl + apiPath);
         const headers = { 'authorization': this.authHeader };
         const signal = AbortSignal.timeout(this.timeoutMs);
-        const res = await request(url, { method: 'GET', headers, signal });
+        const tooLarge = () => {
+            const e = new Error(`Attachment is larger than the ${Math.round(maxBytes / 1024 / 1024)} MB limit for this tool`);
+            e.status = 413;
+            return e;
+        };
+        const networkError = (err) => {
+            const e = new Error(`Network error calling GET ${apiPath}: ${err.message}`);
+            e.status = 0;
+            return e;
+        };
+        let res;
+        try {
+            res = await request(url, { method: 'GET', headers, signal });
+        } catch (err) {
+            throw networkError(err);
+        }
         const status = res.statusCode;
-        const ctype = res.headers['content-type'] || 'application/octet-stream';
-        const filename = res.headers['content-disposition']
-            ? decodeURIComponent((res.headers['content-disposition'].match(/filename="([^"]+)"/) || [])[1] || '')
-            : null;
+        const declared = Number(res.headers['content-length']);
+        if (status < 400 && declared > maxBytes) {
+            res.body.destroy();
+            throw tooLarge();
+        }
         const chunks = [];
-        for await (const chunk of res.body) chunks.push(chunk);
+        let size = 0;
+        try {
+            for await (const chunk of res.body) {
+                size += chunk.length;
+                if (size > maxBytes) throw tooLarge();
+                chunks.push(chunk);
+            }
+        } catch (err) {
+            throw err.status === 413 ? err : networkError(err);
+        }
         const buf = Buffer.concat(chunks);
         if (status >= 400) {
             const text = buf.toString('utf8');
@@ -203,8 +233,18 @@ class RestClient {
             e.status = status;
             throw e;
         }
+        let filename = null;
+        const disposition = res.headers['content-disposition'];
+        if (disposition) {
+            const raw = (disposition.match(/filename="([^"]+)"/) || [])[1] || '';
+            try {
+                filename = decodeURIComponent(raw);
+            } catch {
+                filename = raw;
+            }
+        }
         return {
-            contentType: ctype,
+            contentType: res.headers['content-type'] || 'application/octet-stream',
             filename,
             size: buf.length,
             base64: buf.toString('base64')

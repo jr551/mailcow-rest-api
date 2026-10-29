@@ -340,7 +340,7 @@ test('GET /v1/ai/models honours a public custom base URL from the query', async 
     try {
         const res = await app.inject({
             method: 'GET',
-            url: '/v1/ai/models?kind=openai&baseUrl=https%3A%2F%2F93.184.216.34%2Fv1',
+            url: '/v1/ai/models?kind=openai&baseUrl=https%3A%2F%2F93.184.216.34%2Fv1&apiKey=sk-user',
             headers: { authorization: BASIC }
         });
         assert.equal(res.statusCode, 200);

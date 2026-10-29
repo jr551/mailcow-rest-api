@@ -42,8 +42,10 @@ COPY src ./src
 # Built assets only — the SPA's sources and node_modules stay out of the image.
 COPY --from=webmail-build /webmail/dist ./webmail/dist
 
+# Only /data is writable by the runtime user; the application code stays
+# root-owned so a bug in the app cannot rewrite it.
 RUN mkdir -p /data \
-    && chown -R mailcowrest:mailcowrest /app /data
+    && chown mailcowrest:mailcowrest /data
 
 USER mailcowrest
 EXPOSE 3001

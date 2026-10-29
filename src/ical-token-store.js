@@ -13,6 +13,7 @@ const crypto = require('node:crypto');
 // is no worse than the existing in-memory session vault.
 
 const TOKEN_BYTES = 32;
+const TOKEN_RE = /^[0-9a-f]{64}$/;
 // Tokens never expire by default — users complained about subscriptions
 // silently breaking after 90 days. Pass a positive ttlMs explicitly to
 // opt back in to expiry (we still honour it on read).
@@ -74,24 +75,17 @@ class IcalTokenStore {
         if (changed) this._save();
     }
 
+    // Temp file + rename so a crash mid-write cannot leave a truncated
+    // file that _load would read back as "no tokens".
     _save() {
+        const tmp = `${this.filePath}.${process.pid}.tmp`;
         try {
-            fs.writeFileSync(this.filePath, JSON.stringify(this._data), { mode: 0o600 });
+            fs.writeFileSync(tmp, JSON.stringify(this._data), { mode: 0o600 });
+            fs.renameSync(tmp, this.filePath);
         } catch (err) {
+            try { fs.rmSync(tmp, { force: true }); } catch { /* */ }
             console.warn('[ical-token-store] save failed:', err.message);
         }
-    }
-
-    _purgeExpired() {
-        const now = Date.now();
-        let changed = false;
-        for (const [k, v] of Object.entries(this._data)) {
-            if (v.expiresAt && v.expiresAt < now) {
-                delete this._data[k];
-                changed = true;
-            }
-        }
-        if (changed) this._save();
     }
 
     // List a user's existing token for a given calendar (one per
@@ -135,9 +129,13 @@ class IcalTokenStore {
 
     /** Look up a token. Returns null if missing or expired. */
     get(token) {
-        if (!token) return null;
+        // The token comes straight from a public URL segment: anything that
+        // is not one of our hex tokens must not reach the plain-object
+        // lookup, where "constructor" or "__proto__" would resolve.
+        if (typeof token !== 'string' || !TOKEN_RE.test(token)) return null;
+        if (!Object.hasOwn(this._data, token)) return null;
         const rec = this._data[token];
-        if (!rec) return null;
+        if (!rec || typeof rec.user !== 'string' || typeof rec.pass !== 'string') return null;
         if (rec.expiresAt && rec.expiresAt < Date.now()) {
             delete this._data[token];
             this._save();
