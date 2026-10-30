@@ -11,6 +11,7 @@ All notable changes to this project are documented here. Version numbers follow
 - Conversation stacking in the reading pane when threads are grouped.
 - Reading pane on the right (default), at the bottom, or hidden; set it in Settings, the list header, or with Alt+Shift+R / B / H.
 - Optional AI features are now off by default; turn them on in Settings.
+- README and webmail docs refreshed; README screenshots regenerated from Playwright mocks.
 - New unit and Playwright tests.
 
 ### Dependencies (since v0.26.7)

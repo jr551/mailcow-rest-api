@@ -60,21 +60,44 @@ Clicking a link inside a message never opens it straight away. The destination i
 
 The check is deliberately hard to misread. **Never scanned** is not an all-clear and says so in words; **not checked** and **check timed out** are distinct from **harmless**; a plain-`http://` destination is called out separately from its verdict; and a malicious hit is labelled as malicious with the count of engines that flagged it. The way through is always there and always says what it does — a link is never trapped, because a prompt you cannot dismiss is just a wall. Cancel closes without opening anything.
 
-The lookup is a server call to `GET /v1/link-check?url=…` (VirusTotal, with the key server-side), so the provider key stays off the browser as with every other AI-backed feature. It needs AI features switched on; with them off the prompt does not appear and links behave like ordinary links. Turn it off independently under **Settings → Junk email → Link safety**.
+The lookup is a server call to `GET /v1/link-check?url=…` (VirusTotal, with the key server-side), so the provider key stays off the browser as with every other AI-backed feature. It needs **Settings → AI → AI features** turned on (off by default in v0.27.0) and **Settings → Junk email → Link safety** enabled; with AI off, links behave like ordinary links.
+
+## Outlook-style mail layout
+
+Recent releases add Outlook-on-the-web behaviour without requiring AI:
+
+- **Focused / Other** — on INBOX only, rule-based tabs (`focused-inbox.ts`); your choice is stored in `settings.inboxTab`. See [`docs/OUTLOOK-PARITY.md`](docs/OUTLOOK-PARITY.md).
+- **Conversation stacking** — when **Settings → Mail → Group messages by conversation** is on, the reading pane shows a stacked transcript for multi-message threads (`ConversationStack.svelte`).
+- **Reading pane position** — **right** (default), **bottom**, or **hidden** (list full width; opening a message uses a flyout). Change it in **Settings → Mail → Reading pane**, the layout control in the message list header, or with **Alt+Shift+R** (right), **Alt+Shift+B** (bottom), or **Alt+Shift+H** (hidden).
+- **AI features off by default** — new profiles load with **Settings → AI → AI features** off. Turn it on when you want the assistant, AI sort, link safety, compose helpers, and related surfaces. The mail UI is fully usable with AI disabled.
+
+![Focused inbox tab](docs/assets/outlook-slice1/26-inbox-focused-tab.png)
+
+![Reading pane at bottom](docs/assets/outlook-slice3/30-reading-pane-bottom.png)
+
+## Keyboard shortcuts (mail)
+
+Global shortcuts are listed under **Settings → General → Keyboard shortcuts**. Reading-pane placement (also in that list):
+
+| Chord | Action |
+|-------|--------|
+| **Alt+Shift+R** | Reading pane on the **right** |
+| **Alt+Shift+B** | Reading pane at the **bottom** |
+| **Alt+Shift+H** | **Hide** reading pane (flyout when a message is open) |
 
 ## Screenshots
 
 | | |
 |---|---|
-| ![AI panel](docs/screenshots/desktop-ai-panel.png) AI assistant panel | ![Compose](docs/screenshots/desktop-compose.png) Compose |
+| ![AI panel](docs/screenshots/desktop-ai-panel.png) AI assistant panel (opt-in) | ![Compose](docs/screenshots/desktop-compose.png) Compose |
 | ![Message](docs/screenshots/desktop-message-dark.png) Message reading (dark) | ![Mobile](docs/screenshots/mobile-inbox.png) Mobile/PWA inbox |
 | ![Link safety](docs/screenshots/link-safety-prompt.png) Link-safety prompt | ![Inbox](docs/screenshots/outlook-inbox.png) Outlook inbox, light |
 
 ## What it includes
 
-- Desktop mailbox UI: folders, search, filters, message detail, attachments, compose, reply, forward, right-click context menu and multi-select.
+- Desktop mailbox UI: folders, search, filters, **Focused / Other** INBOX tabs, message detail, **conversation stacking**, **reading pane layout** (right / bottom / hidden), attachments, compose, reply, forward, right-click context menu and multi-select.
 - Calendar and drive views backed by the REST API.
-- AI workflows for summarising, drafting, inbox sorting, action extraction, translation, phishing checks, link-safety checks and TTS where configured.
+- Optional AI workflows (off by default): summarising, drafting, inbox sorting, action extraction, translation, phishing checks, link-safety checks and TTS when you enable **AI features** in Settings and configure a provider.
 - Tracking, sender policy, blocked recipients, shortcuts, density, theme, and PWA install surfaces.
 - Mobile entry point with an iOS Mail-inspired layout for inbox, message reading, compose, folders and settings.
 
