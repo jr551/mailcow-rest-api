@@ -14,7 +14,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 |------------------|-------|--------------|
 | **App chrome / command bar** | Outlook skin default (`skins.svelte.ts`), top search, account menu, app rail (Mail / Calendar / AI / Drive) | Medium: rail is broader than OWA; unify launcher later |
 | **Folder pane** | `Sidebar.svelte` tree, **Favorites** pin list, drag-drop move, shortcuts row | Medium: no folder groups |
-| **Message list** | `MessageList.svelte`, density, **Outlook Filter / Sort** menus (All/Unread/Flagged/To me/Has files/Mentions), **colour categories**, **pin / snooze** row actions, optional AI sort | Medium: sweep one-click |
+| **Message list** | `MessageList.svelte`, density, **Outlook Filter / Sort** menus (All/Unread/Flagged/To me/Has files/Mentions), **colour categories**, **pin / snooze** row actions, **Sweep** submenu | Low–medium: quick steps |
 | **Focused / Other** | `focused-inbox.ts` + INBOX tabs | Low–medium: optional AI refinement later |
 | **Reading pane** | `MessageDetail.svelte`, reply/forward, conversation stack when grouped | Low–medium: richer HTML parity; pane position done (slice 3) |
 | **Conversation view** | List grouping via `threads.ts`; reading-pane stack via `conversation-view.ts` + `ConversationStack.svelte` | Medium: attachments per message in stack; richer HTML parity |
@@ -46,7 +46,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 ### P2 — Compose & handling
 
 8. Scheduled send, undo send window, explicit Save draft UX.
-9. **Sweep** one-click on message row (align with Settings → Sweep).
+9. **Sweep** one-click on message row (align with Settings → Sweep) — **slice 10 (this PR)**.
 10. Quick Steps (templated multi-action).
 
 ### P3 — AI (opt-in only)
@@ -147,7 +147,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 9 (this PR)
+## Slice 9 (done)
 
 - **`webmail/src/lib/message-pin-snooze.ts`**: pin-to-top ordering, snooze presets, local overlay (`webmail.message-pin-snooze.v1`).
 - **`message-pin-snooze.svelte.ts`**: hydrate, toggle pin, snooze until wake time.
@@ -157,9 +157,19 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 10 (this PR)
+
+- **`webmail/src/lib/message-sender-sweep.ts`**: OWA **Sweep** actions (delete all / keep latest / archive all) scoped to the current folder via `from:` search.
+- **`message-sender-sweep-fetch.ts`**: loads matches with `listMessages` + `from:` token before selection.
+- **`MessageList.svelte`**: **Sweep** context submenu on rows with a From address; bulk move through existing `bulkMove` helper.
+- Tests: unit (`message-sender-sweep.test.mjs`) + Playwright (`outlook-sender-sweep.spec.ts`) against API mocks (search + move routes in `fixtures.ts`).
+- Screenshot: `webmail/docs/assets/outlook-slice10/39-sender-sweep-menu.png`.
+
+---
+
 ## Next planned slice
 
-**Sweep** one-click on message rows, **compose pop-out** window parity, or **dark mode / mobile** polish.
+**Compose pop-out** window parity, **scheduled send / undo send**, or **dark mode / mobile** polish.
 
 ---
 

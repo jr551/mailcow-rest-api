@@ -589,7 +589,17 @@ export async function applyMocks(page: Page) {
         });
     });
 
-    await page.route(/\/v1\/mailboxes\/INBOX\/messages(\?|$)/, (route) => {
+    await page.route(/\/v1\/mailboxes\/INBOX\/messages(\?|$)/, (route, request) => {
+        const url = new URL(request.url());
+        const search = (url.searchParams.get('search') || '').trim();
+        let filtered = messages;
+        const fromMatch = search.match(/^from:(.+)$/i);
+        if (fromMatch) {
+            const addr = fromMatch[1].trim().toLowerCase();
+            filtered = messages.filter(
+                (m) => (m.envelope.from?.[0]?.address || '').toLowerCase() === addr
+            );
+        }
         route.fulfill({
             status: 200,
             contentType: 'application/json',
@@ -597,9 +607,19 @@ export async function applyMocks(page: Page) {
                 path: 'INBOX',
                 page: 0,
                 pageSize: 25,
-                total: messages.length,
-                messages
+                total: filtered.length,
+                messages: filtered
             })
+        });
+    });
+
+    await page.route(/\/v1\/mailboxes\/INBOX\/messages\/(\d+)\/move$/, (route, request) => {
+        const uid = Number(request.url().match(/messages\/(\d+)\/move$/)?.[1]);
+        const body = JSON.parse(request.postData() || '{}') as { path?: string };
+        route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({ uid, path: body.path || 'Trash', destUid: null })
         });
     });
 
