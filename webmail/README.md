@@ -69,11 +69,15 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 - **Focused / Other** — on INBOX only, rule-based tabs (`focused-inbox.ts`); your choice is stored in `settings.inboxTab`. See [`docs/OUTLOOK-PARITY.md`](docs/OUTLOOK-PARITY.md).
 - **Conversation stacking** — when **Settings → Mail → Group messages by conversation** is on, the reading pane shows a stacked transcript for multi-message threads (`ConversationStack.svelte`).
 - **Reading pane position** — **right** (default), **bottom**, or **hidden** (list full width; opening a message uses a flyout). Change it in **Settings → Mail → Reading pane**, the layout control in the message list header, or with **Alt+Shift+R** (right), **Alt+Shift+B** (bottom), or **Alt+Shift+H** (hidden).
+- **Folder Favorites** — pin common folders above the tree (Inbox / Sent / Drafts by default); reorder and edit via the sidebar context menu.
+- **Natural-language search (opt-in)** — with **AI features** on and a configured provider, enable **Settings → AI → Natural-language search** to translate plain-language header queries into tag syntax (`from:`, `has:attachment`, …). Tag syntax is always available without AI.
 - **AI features off by default** — new profiles load with **Settings → AI → AI features** off. Turn it on when you want the assistant, AI sort, link safety, compose helpers, and related surfaces. The mail UI is fully usable with AI disabled.
 
 ![Focused inbox tab](docs/assets/outlook-slice1/26-inbox-focused-tab.png)
 
 ![Reading pane at bottom](docs/assets/outlook-slice3/30-reading-pane-bottom.png)
+
+![Natural-language search hint](docs/assets/outlook-slice5/34-nl-search-hint.png)
 
 ## Keyboard shortcuts (mail)
 

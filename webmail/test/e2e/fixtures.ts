@@ -513,6 +513,7 @@ export async function applyMocks(page: Page) {
         // gets the prose reply below.
         const body = (route.request().postData() || '') as string;
         const isInboxSort = body.includes('Triage these') && body.includes('rankings');
+        const isNlSearch = body.includes('natural-language mail search');
         const content = isInboxSort
             ? JSON.stringify({
                 rankings: [
@@ -528,6 +529,8 @@ export async function applyMocks(page: Page) {
                     { uid: 998, level: 1, category: 'info', human: false, reason: 'Tracking notification' }
                 ]
             })
+            : isNlSearch
+                ? JSON.stringify({ search: 'from:billing@acme.example subject:invoice' })
             : 'This is a mocked AI response for the test suite.';
         route.fulfill({
             status: 200,
