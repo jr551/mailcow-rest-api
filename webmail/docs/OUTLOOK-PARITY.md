@@ -24,6 +24,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 | **AI features** | Master switch **`aiFeatures`**; defaults **off** for new profiles; every AI entry point hidden when off | Low — opt-in provider config remains in Settings |
 | **People / VIP** | VIP list in Settings; local address book | Medium vs OWA People app |
 | **Deep links** | Session storage only, no `/mail/...` URLs | Medium |
+| **Accessibility** | Landmark regions + skip link (slice 17) | Low–medium: mobile focus order polish |
 
 ---
 
@@ -210,7 +211,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 15 (this PR)
+## Slice 15 (done in #102)
 
 - **`webmail/src/lib/compose-popout.ts`**: sessionStorage hand-off, pop-out URL builder, `window.open` helper.
 - **`ComposePopoutShell.svelte`** + **`App.svelte`**: `?composePopout=1&sid=…` route renders compose-only shell.
@@ -221,9 +222,19 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 17 (this PR)
+
+- **`webmail/src/lib/mail-landmarks.ts`**: OWA-aligned region labels and skip-link target ids.
+- **`Layout.svelte`**: **Skip to message list** link, `banner` command bar, folder **`navigation`**, message list **`region`**, reading pane **`main`** landmark; flyout reading pane uses the same label.
+- **`Settings.svelte`**: **General → Accessibility** documents landmarks and tab order.
+- Tests: unit (`mail-landmarks.test.mjs`) + Playwright (`outlook-mail-landmarks.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice17/46-skip-link-focused.png`.
+
+---
+
 ## Next planned slice
 
-**Deep links / shareable message URLs**, **dark mode / mobile** polish, or **accessibility** landmarks.
+**Deep links / shareable message URLs**, **dark mode / mobile** polish, or opt-in **AI thread summarise**.
 
 ---
 
