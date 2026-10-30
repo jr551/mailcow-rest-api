@@ -72,6 +72,7 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 - **Folder Favorites** — pin common folders above the tree (Inbox / Sent / Drafts by default); reorder and edit via the sidebar context menu.
 - **Natural-language search (opt-in)** — with **AI features** on and a configured provider, enable **Settings → AI → Natural-language search** to translate plain-language header queries into tag syntax (`from:`, `has:attachment`, …). Tag syntax is always available without AI.
 - **Quick filter bar** — Outlook-style **Filter** menu (All, Unread, Flagged, To me, Has files, Mentions me) and **Sort** menu on the message list; IMAP tag tokens for supported filters when paging server-side.
+- **Colour categories** — right-click **Categorize** on a message row to assign Outlook-style colour categories (IMAP `$Category*` keywords when the server keeps them; local overlay fallback otherwise). A colour stripe appears on the row.
 - **AI features off by default** — new profiles load with **Settings → AI → AI features** off. Turn it on when you want the assistant, AI sort, link safety, compose helpers, and related surfaces. The mail UI is fully usable with AI disabled.
 
 ![Focused inbox tab](docs/assets/outlook-slice1/26-inbox-focused-tab.png)
@@ -81,6 +82,8 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 ![Natural-language search hint](docs/assets/outlook-slice5/34-nl-search-hint.png)
 
 ![Quick filter menu](docs/assets/outlook-slice6/35-quick-filter-menu-open.png)
+
+![Message category stripe](docs/assets/outlook-slice7/36-message-category-stripe.png)
 
 ## Keyboard shortcuts (mail)
 

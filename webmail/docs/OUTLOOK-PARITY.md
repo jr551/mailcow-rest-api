@@ -39,8 +39,8 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 ### P1 — Search & triage
 
 5. **Natural-language search** (only when AI + user provider configured); fallback keeps tag syntax — **slice 5 (done)**.
-6. **Quick filter bar** parity (Filter: All / Unread / Flagged / To me / Has files / Mentions; Sort menu) — **slice 6 (this PR)**.
-7. **Categories / flags** (user-assigned colours) synced via IMAP keywords or local overlay.
+6. **Quick filter bar** parity (Filter: All / Unread / Flagged / To me / Has files / Mentions; Sort menu) — **slice 6 (done in #93)**.
+7. **Categories / flags** (user-assigned colours) synced via IMAP keywords or local overlay — **slice 7 (this PR)**.
 
 ### P2 — Compose & handling
 
@@ -116,7 +116,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 6 (this PR)
+## Slice 6 (done)
 
 - **`webmail/src/lib/list-quick-filters.ts`**: Outlook Filter menu values, To me / Mentions heuristics, Sort comparators, IMAP filter tokens.
 - **`MessageList.svelte`**: **Filter** and **Sort** dropdowns (replaces chip row); `settings.listSort` persisted.
@@ -126,9 +126,19 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 7 (this PR)
+
+- **`webmail/src/lib/message-categories.ts`**: OWA colour categories, `$Category*` IMAP keywords, flag merge helpers.
+- **`webmail/src/lib/message-categories.svelte.ts`**: `webmail.message-categories.v1` local overlay when the server drops custom keywords.
+- **`MessageList.svelte`**: list colour stripe + **Categorize** context submenu; **`Layout.svelte`**: persists via `modifyFlags` with overlay fallback.
+- Tests: unit (`message-categories.test.mjs`) + Playwright (`outlook-message-categories.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice7/36-message-category-stripe.png`.
+
+---
+
 ## Next planned slice
 
-**Categories / flags** (user-assigned colours) synced via IMAP keywords or local overlay.
+**Keyboard shortcuts** parity (global mail chords beyond reading-pane layout) and compose pop-out polish.
 
 ---
 

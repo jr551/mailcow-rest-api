@@ -676,14 +676,32 @@ export async function applyMocks(page: Page) {
         });
     });
 
-    await page.route('**/v1/mailboxes/INBOX/messages/1001/flags', (route) => {
-        const op = JSON.parse(route.request().postData() || '{}');
-        const flags = ['\\Seen'];
-        if (op.add) flags.push(...op.add);
+    await page.route(/\/v1\/mailboxes\/INBOX\/messages\/(\d+)\/flags$/, (route, request) => {
+        if (request.method() !== 'PUT') return route.continue();
+        const m = request.url().match(/\/messages\/(\d+)\/flags/);
+        const uid = m ? Number(m[1]) : NaN;
+        const row = messages.find((x) => x.uid === uid);
+        if (!row) {
+            route.fulfill({
+                status: 404,
+                contentType: 'application/problem+json',
+                body: JSON.stringify({ status: 404, title: 'Not Found' })
+            });
+            return;
+        }
+        const op = JSON.parse(route.request().postData() || '{}') as { add?: string[]; remove?: string[] };
+        let flags = [...row.flags];
+        if (op.remove?.length) flags = flags.filter((f) => !op.remove!.includes(f));
+        if (op.add?.length) {
+            for (const f of op.add) {
+                if (!flags.includes(f)) flags.push(f);
+            }
+        }
+        row.flags = flags;
         route.fulfill({
             status: 200,
             contentType: 'application/json',
-            body: JSON.stringify({ uid: 1001, flags })
+            body: JSON.stringify({ uid, flags })
         });
     });
 

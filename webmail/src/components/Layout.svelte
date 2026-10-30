@@ -3,6 +3,17 @@
     import { authState, setSession, logoutRemote, startExpiryWatch, switchTo, removeSession, setAddingAccount } from '../lib/auth.svelte';
     import { ui, showToast, clearToast } from '../lib/store.svelte';
     import { onFolderDeleted, onFolderRenamed } from '../lib/folder-favorites.svelte';
+    import {
+        buildCategoryFlagUpdate,
+        applyCategoryToFlags,
+        categoryFromFlags,
+        type MessageCategoryId
+    } from '../lib/message-categories';
+    import {
+        hydrateMessageCategories,
+        setMessageCategoryOverlay,
+        remapCategoryOverlay
+    } from '../lib/message-categories.svelte';
     import { recordView } from '../lib/recent-views.svelte';
     import {
         listMailboxes,
@@ -434,6 +445,7 @@
         await renameMailbox(oldPath, newPath);
         if (ui.selectedPath === oldPath) ui.selectedPath = newPath;
         onFolderRenamed(oldPath, newPath);
+        remapCategoryOverlay(oldPath, newPath);
         await refreshMailboxes();
         showToast('success', `Renamed to ${newPath}`);
     }
@@ -1090,6 +1102,32 @@
         }
     }
 
+    async function setMessageCategory(uid: number, category: MessageCategoryId | null) {
+        const li = ui.messages.find((m) => m.uid === uid);
+        if (!li) return;
+        const op = buildCategoryFlagUpdate(li.flags, category);
+        let flags = li.flags;
+        try {
+            if (Object.keys(op).length) {
+                const r = await modifyFlags(ui.selectedPath, uid, op);
+                flags = r.flags;
+            } else {
+                flags = applyCategoryToFlags(li.flags, category);
+            }
+        } catch (err) {
+            flags = applyCategoryToFlags(li.flags, category);
+            setMessageCategoryOverlay(ui.selectedPath, uid, category);
+            showToast('error', describe(err, 'Category saved locally only'));
+        }
+        li.flags = flags;
+        if (ui.detail && ui.detail.uid === uid) ui.detail.flags = flags;
+        if (categoryFromFlags(flags)) {
+            setMessageCategoryOverlay(ui.selectedPath, uid, null);
+        } else {
+            setMessageCategoryOverlay(ui.selectedPath, uid, category);
+        }
+    }
+
     async function toggleUnread(uid: number) {
         const li = ui.messages.find((m) => m.uid === uid);
         if (!li) return;
@@ -1670,6 +1708,7 @@
         // compose works before this resolves, and a failure only downgrades
         // the book to browser-local (which Settings then says out loud).
         loadAddressBook().catch(() => { /* offline / server predates the feature */ });
+        hydrateMessageCategories();
         // Skip the probe while the tab is hidden or the browser knows it's
         // offline. It used to run unconditionally forever, so a backgrounded
         // or disconnected tab generated a failed /v1/ai/config every 30s —
@@ -2221,6 +2260,7 @@
             <MessageList
                 onSelect={selectMessage}
                 onStar={toggleStar}
+                onSetCategory={setMessageCategory}
                 onUnread={toggleUnread}
                 onTrash={trashMessage}
                 onArchive={archiveMessage}
