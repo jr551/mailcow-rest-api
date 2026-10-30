@@ -1,8 +1,8 @@
 /** Outlook-style pin-to-top and snooze (local overlay — no IMAP dependency). */
 
 import type { MessageListItem } from './api';
-import type { Thread } from './threads.ts';
-import { sortMessageList, type ListSort } from './list-quick-filters.ts';
+import type { Thread } from './threads';
+import { sortMessageList, type ListSort } from './list-quick-filters';
 
 export const MESSAGE_PIN_SNOOZE_STORAGE_KEY = 'webmail.message-pin-snooze.v1';
 
