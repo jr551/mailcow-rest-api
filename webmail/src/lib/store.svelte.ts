@@ -2,6 +2,7 @@
 
 import type { Mailbox, MessageDetail, MessageListItem } from './api';
 import type { CalEvent } from './calendar.svelte';
+import { parseMailDeepLinkHash } from './mail-deep-link';
 import { playError } from './sounds.svelte';
 
 export interface UiState {
@@ -113,10 +114,14 @@ function saveSession(patch: Partial<UiState>) {
 
 const session = loadSession();
 
+const deepLinkAtBoot = typeof window !== 'undefined'
+    ? parseMailDeepLinkHash(window.location.hash)
+    : null;
+
 const initial: UiState = {
     mailboxes: [],
     mailboxesLoading: false,
-    selectedPath: session.selectedPath || 'INBOX',
+    selectedPath: deepLinkAtBoot?.folder || session.selectedPath || 'INBOX',
     messages: [],
     messagesTotal: 0,
     messagesPage: 0,
@@ -124,7 +129,7 @@ const initial: UiState = {
     messagesError: null,
     search: session.search || '',
     searchScope: 'folder',
-    selectedUid: session.selectedUid ?? null,
+    selectedUid: deepLinkAtBoot?.uid ?? session.selectedUid ?? null,
     detail: null,
     detailLoading: false,
     detailError: null,

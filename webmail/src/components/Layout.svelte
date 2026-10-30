@@ -16,6 +16,10 @@
     } from '../lib/message-categories.svelte';
     import { hydrateMessagePinSnooze, remapPinSnoozeOverlay } from '../lib/message-pin-snooze.svelte';
     import { hydrateScheduledSends, processDueScheduledSends } from '../lib/scheduled-send.svelte';
+    import {
+        parseMailDeepLinkHash,
+        replaceMailDeepLinkInHistory
+    } from '../lib/mail-deep-link';
     import { recordView } from '../lib/recent-views.svelte';
     import {
         listMailboxes,
@@ -225,6 +229,18 @@
     let calendarTickerVisible = $derived(
         settings.calendarTicker && !skinHidesAmbientChips
     );
+
+    /** Avoid history.replaceState loops while applying hash navigation. */
+    let suppressDeepLinkSync = false;
+    let deepLinkBoot = typeof window !== 'undefined' ? parseMailDeepLinkHash(window.location.hash) : null;
+
+    $effect(() => {
+        if (suppressDeepLinkSync || typeof history === 'undefined') return;
+        const path = ui.selectedPath;
+        const uid = ui.selectedUid;
+        if (uid != null && path) replaceMailDeepLinkInHistory(path, uid);
+        else replaceMailDeepLinkInHistory(null, null);
+    });
 
     // Server health ping. Round-trip /health every 15 s and surface the
     // latency in the topbar (with a radar pulse). Slow/offline states
@@ -1814,7 +1830,19 @@
 
     onMount(() => {
         refreshMailboxes();
-        refreshMessages();
+        void refreshMessages().then(() => {
+            const fromHash = deepLinkBoot;
+            deepLinkBoot = null;
+            if (fromHash) {
+                suppressDeepLinkSync = true;
+                ui.selectedPath = fromHash.folder;
+                ui.search = '';
+                ui.searchScope = 'folder';
+                void selectMessage(fromHash.uid).finally(() => { suppressDeepLinkSync = false; });
+            } else if (ui.selectedUid != null) {
+                void selectMessage(ui.selectedUid);
+            }
+        });
         probeCapabilities();
         initImapSync();
         // Settings & trusted-senders sync via the hidden IMAP folder.
@@ -1908,9 +1936,32 @@
         }
 
         const stopExpiryWatch = startExpiryWatch();
+
+        const onHashChange = () => {
+            const target = parseMailDeepLinkHash(window.location.hash);
+            if (!target) return;
+            suppressDeepLinkSync = true;
+            void (async () => {
+                try {
+                    if (ui.selectedPath !== target.folder || ui.searchScope !== 'folder') {
+                        ui.search = '';
+                        searchInput = '';
+                        ui.searchScope = 'folder';
+                        ui.selectedPath = target.folder;
+                        await refreshMessages({ resetPage: true });
+                    }
+                    await selectMessage(target.uid);
+                } finally {
+                    suppressDeepLinkSync = false;
+                }
+            })();
+        };
+        window.addEventListener('hashchange', onHashChange);
+
         return () => {
             document.removeEventListener('keydown', handler);
             document.removeEventListener('click', onDocClick);
+            window.removeEventListener('hashchange', onHashChange);
             clearInterval(pollInterval);
             clearInterval(scheduledSendTimer);
             clearInterval(pingTimer);

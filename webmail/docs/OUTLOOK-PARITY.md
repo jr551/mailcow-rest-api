@@ -23,7 +23,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 | **Settings shell** | `Settings.svelte` 3-column Outlook-like modal, 19 sections | Low–medium: content differs |
 | **AI features** | Master switch **`aiFeatures`**; defaults **off** for new profiles; every AI entry point hidden when off | Low — opt-in provider config remains in Settings |
 | **People / VIP** | VIP list in Settings; local address book | Medium vs OWA People app |
-| **Deep links** | Session storage only, no `/mail/...` URLs | Medium |
+| **Deep links** | `#mail?folder=…&uid=…` hash URLs + **Copy link** in reading pane | Low–medium: no server-side permalink API yet |
 
 ---
 
@@ -199,7 +199,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 14 (this PR)
+## Slice 14 (done in #101)
 
 - **`webmail/src/lib/compose-draft.ts`**: RFC822 builder + Drafts folder resolution for IMAP APPEND.
 - **`compose-draft.svelte.ts`**: **`saveComposeDraftToImap`** via `/v1/mailboxes/:path/messages?flags=Draft`.
@@ -210,9 +210,31 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 15 (open PR #102)
+
+- **`webmail/src/lib/compose-popout.ts`**: sessionStorage hand-off, pop-out URL builder, `window.open` helper.
+- **`ComposePopoutShell.svelte`** + **`App.svelte`**: `?composePopout=1&sid=…` route renders compose-only shell.
+- **`FloatingPanel.svelte`**: **Open in new window** title-bar control; hidden in the pop-out itself.
+- **`Compose.svelte`**: snapshots in-progress fields into the session before opening the child window.
+- Tests: unit (`compose-popout.test.mjs`) + Playwright (`outlook-compose-popout.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice15/44-compose-pop-out.png`.
+
+---
+
+## Slice 16 (this PR)
+
+- **`webmail/src/lib/mail-deep-link.ts`**: parse/build `#mail?folder=…&uid=…` hash links; clipboard helper.
+- **`Layout.svelte`**: syncs hash on message selection; applies hash on load and `hashchange`.
+- **`MessageDetail.svelte`**: **Copy link** button in the reading-pane toolbar.
+- **`Settings.svelte`**: General section documents shareable message URLs.
+- Tests: unit (`mail-deep-link.test.mjs`) + Playwright (`outlook-mail-deep-link.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice16/45-mail-deep-link.png`.
+
+---
+
 ## Next planned slice
 
-**Compose pop-out** window parity or **dark mode / mobile** polish.
+**Dark mode / mobile** polish, **accessibility** landmarks, or opt-in **AI thread summarise**.
 
 ---
 

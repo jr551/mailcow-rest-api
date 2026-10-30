@@ -109,6 +109,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Save draft in compose](docs/assets/outlook-slice14/43-save-draft-compose.png)
 
+- **Message links** — **Copy link** in the reading pane copies a shareable URL with `#mail?folder=…&uid=…`. Opening that hash (bookmark, paste in address bar) returns to the same folder and message.
+
+![Mail deep link reading pane](docs/assets/outlook-slice16/45-mail-deep-link.png)
+
 ## Keyboard shortcuts (mail)
 
 Global shortcuts are listed under **Settings → General → Keyboard shortcuts** (press **?** in the inbox for the same list). Reading-pane placement:
