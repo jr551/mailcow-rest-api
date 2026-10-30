@@ -87,6 +87,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Keyboard shortcuts help](docs/assets/outlook-slice8/37-keyboard-shortcuts-help.png)
 
+- **Pin & snooze** — hover a row for **Pin to top** (stays above the current sort) or right-click **Snooze** (Later today / Tomorrow / Next week). Snoozed mail hides until the reminder time. **Flag for follow-up** uses the star control and `\Flagged` on the server.
+
+![Pinned message row](docs/assets/outlook-slice9/38-pinned-message-row.png)
+
 ## Keyboard shortcuts (mail)
 
 Global shortcuts are listed under **Settings → General → Keyboard shortcuts** (press **?** in the inbox for the same list). Reading-pane placement:

@@ -12,7 +12,6 @@
         OUTLOOK_FILTER_MENU,
         OUTLOOK_SORT_MENU,
         filterMessagesByOutlookFilter,
-        sortMessageList,
         outlookFilterLabel,
         listSortLabel
     } from '../lib/list-quick-filters';
@@ -23,6 +22,20 @@
         type MessageCategoryId
     } from '../lib/message-categories';
     import { messageCategoryOverlay } from '../lib/message-categories.svelte';
+    import {
+        filterOutSnoozedMessages,
+        sortWithPinnedFirst,
+        sortThreadsWithPinnedFirst,
+        isMessagePinned,
+        snoozeSubmenuItems,
+        type SnoozePresetId
+    } from '../lib/message-pin-snooze';
+    import {
+        pinSnoozeOverlay,
+        toggleMessagePin,
+        snoozeMessage,
+        tickPinSnoozeOverlay
+    } from '../lib/message-pin-snooze.svelte';
     import { authState } from '../lib/auth.svelte';
     import { getCachedScan } from '../lib/phishing-scan';
     import Icon from './Icon.svelte';
@@ -636,6 +649,31 @@
     function flagged(flags: string[]) {
         return flags.includes('\\Flagged');
     }
+    function rowPinned(uid: number): boolean {
+        return isMessagePinned(pinSnoozeOverlay(), ui.selectedPath, uid);
+    }
+    function onTogglePin(uid: number) {
+        toggleMessagePin(ui.selectedPath, uid);
+        playClick();
+    }
+    function onSnooze(uid: number, preset: SnoozePresetId) {
+        snoozeMessage(ui.selectedPath, uid, preset);
+        if (ui.selectedUid === uid) ui.selectedUid = null;
+        showToast('success', 'Message snoozed — it will return when the reminder is due.');
+        playClick();
+    }
+    const snoozeCtxItems = snoozeSubmenuItems();
+
+    let pinSnoozeNow = $state(Date.now());
+    $effect(() => {
+        if (typeof window === 'undefined') return;
+        pinSnoozeOverlay();
+        const id = window.setInterval(() => {
+            pinSnoozeNow = Date.now();
+            tickPinSnoozeOverlay(pinSnoozeNow);
+        }, 30_000);
+        return () => clearInterval(id);
+    });
     function unread(flags: string[]) {
         return !flags.includes('\\Seen');
     }
@@ -669,12 +707,13 @@
         if (showInboxTabs) {
             list = filterMessagesByInboxTab(list, settings.inboxTab, { isVip: isVipAddress });
         }
+        list = filterOutSnoozedMessages(list, ui.selectedPath, pinSnoozeOverlay(), pinSnoozeNow);
         return list;
     });
 
     const sortedFiltered = $derived.by(() => {
-        if (settings.listFilter === 'ai-sorted') return filtered;
-        return sortMessageList(filtered, settings.listSort);
+        const sort = settings.listFilter === 'ai-sorted' ? 'date-desc' : settings.listSort;
+        return sortWithPinnedFirst(filtered, ui.selectedPath, pinSnoozeOverlay(), sort);
     });
 
     // A message the active filter hides must not stay selected: BulkBar acts
@@ -712,7 +751,8 @@
     // LLM's level (5→1) wins. Unranked threads sink below every ranked one.
     const CAT_RANK: Record<string, number> = { family: 0, human: 1, important: 2, purchase: 3, notification: 4, info: 5, marketing: 6 };
     const threads = $derived.by(() => {
-        if (settings.listFilter !== 'ai-sorted' || aiRankings.length === 0) return baseThreads;
+        let base = sortThreadsWithPinnedFirst(baseThreads, ui.selectedPath, pinSnoozeOverlay());
+        if (settings.listFilter !== 'ai-sorted' || aiRankings.length === 0) return base;
         const indexFor = new Map<number, number>();
         aiRankings.forEach((r, i) => indexFor.set(r.uid, i));
         const bucketOf = (r: InboxSortRanking | null): string | null => {
@@ -725,7 +765,7 @@
             if (r.human) return 'human';
             return r.category ?? null;
         };
-        return [...baseThreads].sort((a, b) => {
+        return [...base].sort((a, b) => {
             const ra = rankingFor(a.latest.uid);
             const rb = rankingFor(b.latest.uid);
             const catA = bucketOf(ra);
@@ -1681,6 +1721,7 @@
                     ...((headMsg.envelope.cc || []).map((a) => a.address))
                 ])}
                 {@const headCategory = rowCategory(headMsg.uid, headMsg.flags)}
+                {@const headIsPinned = rowPinned(headMsg.uid)}
                 <li class={isThread ? 'thread-wrap' : ''}>
                     <div
                         class="row"
@@ -1689,6 +1730,7 @@
                         class:selected={ui.selectedUid === headMsg.uid}
                         class:bulk-selected={headSelected}
                         class:starred={headIsStarred}
+                        class:pinned={headIsPinned}
                         class:spy-tracked={headIsTracked}
                         class:notice-row={headIsNotice}
                         class:sms-row={headIsSms}
@@ -1733,6 +1775,7 @@
                         oncontextmenu={(e) => openCtx(e, headMsg.uid)}
                         data-testid={`msg-row-${headMsg.uid}`}
                         data-category={headCategory ?? ''}
+                        data-pinned={headIsPinned ? 'true' : 'false'}
                     >
                         {#if headCategory}
                             <span
@@ -1836,9 +1879,19 @@
                             {/if}
                             <button
                                 type="button"
+                                class={`icon-btn ${headIsPinned ? 'pin-on' : ''}`}
+                                title={headIsPinned ? 'Unpin' : 'Pin to top'}
+                                aria-label={headIsPinned ? 'Unpin' : 'Pin to top'}
+                                onclick={(e) => { e.stopPropagation(); onTogglePin(headMsg.uid); }}
+                                data-testid={`msg-pin-${headMsg.uid}`}
+                            >
+                                <Icon name="pin" size={15} />
+                            </button>
+                            <button
+                                type="button"
                                 class={`icon-btn ${headIsStarred ? 'star-on' : ''}`}
-                                title={headIsStarred ? 'Remove star' : 'Star'}
-                                aria-label={headIsStarred ? 'Remove star' : 'Star'}
+                                title={headIsStarred ? 'Remove flag' : 'Flag for follow-up'}
+                                aria-label={headIsStarred ? 'Remove flag' : 'Flag for follow-up'}
                                 onclick={(e) => { e.stopPropagation(); onStar(headMsg.uid); }}
                             >
                                 <Icon name={headIsStarred ? 'starFilled' : 'star'} size={15} />
@@ -2070,8 +2123,21 @@
                 <Icon name="mail" size={12} /> Open
             </button></li>
             <li><button type="button" role="menuitem" onclick={() => { onStar(ctx!.uid); closeCtx(); }}>
-                <Icon name={isFlagged ? 'starFilled' : 'star'} size={12} /> {isFlagged ? 'Unstar' : 'Star'}
+                <Icon name={isFlagged ? 'starFilled' : 'star'} size={12} /> {isFlagged ? 'Clear flag' : 'Flag for follow-up'}
             </button></li>
+            <li><button type="button" role="menuitem" onclick={() => { onTogglePin(ctx!.uid); closeCtx(); }} data-testid="ctx-pin-toggle">
+                <Icon name="pin" size={12} /> {rowPinned(ctx!.uid) ? 'Unpin' : 'Pin to top'}
+            </button></li>
+            <MenuSubmenu
+                label="Snooze"
+                icon="clock"
+                items={snoozeCtxItems}
+                onSelect={(key) => {
+                    onSnooze(ctx!.uid, key as SnoozePresetId);
+                    closeCtx();
+                }}
+                testid="ctx-snooze"
+            />
             {#if onSetCategory}
                 <MenuSubmenu
                     label="Categorize"
@@ -3599,6 +3665,15 @@
     }
     .icon-btn:hover { background: var(--accent-soft); color: var(--accent-text); }
     .icon-btn.danger:hover { background: var(--danger-soft); color: var(--danger); }
+    .row.pinned {
+        box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 55%, transparent);
+    }
+    .icon-btn.pin-on {
+        color: var(--accent-text);
+        opacity: 1;
+        background: var(--accent-soft);
+    }
+    .row .icon-btn.pin-on { opacity: 1; }
     .icon-btn.star-on {
         color: var(--star);
         opacity: 1;
