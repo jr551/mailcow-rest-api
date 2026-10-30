@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
 import { applyMocks, login } from './fixtures';
+import { openContextMenuOnFirstRow } from './e2e-helpers';
 
 // Context menu → Block sender / Block domain / Block root domain.
 //
@@ -111,7 +112,7 @@ function acceptConfirms(page: Page): { text: () => string | null } {
 
 /** Log in and open the context menu on the first row. */
 async function openCtx(page: Page) {
-    await page.locator('.row').first().click({ button: 'right' });
+    await openContextMenuOnFirstRow(page);
     await expect(page.getByTestId('msg-ctx')).toBeVisible();
 }
 

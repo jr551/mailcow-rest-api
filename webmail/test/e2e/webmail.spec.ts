@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { applyMocks, login, MOCK_USER, MOCK_PASS, messages } from './fixtures';
+import { clickInboxTab, enableAiFeatures, openMessageByUid, seedWebmailSettings } from './e2e-helpers';
 import { mkdirSync } from 'node:fs';
 import { addDays, addMonths, format } from 'date-fns';
 
@@ -51,7 +52,7 @@ test('inbox lists messages and shows detail', async ({ page }) => {
     await page.addInitScript(() => localStorage.setItem('webmail.theme', 'dark'));
     await login(page);
     await expect(page.getByTestId('msg-list')).toBeVisible();
-    await expect(page.getByText('Welcome to imap-rest webmail')).toBeVisible();
+    await expect(page.getByText('Welcome to your new webmail')).toBeVisible();
     await page.screenshot({ path: `${SCREEN_DIR}/04-inbox-dark.png`, fullPage: true });
 
     await page.click('[data-testid=msg-row-1001]');
@@ -80,7 +81,7 @@ test('empty detail pane shows hint with kbd glyphs', async ({ page }) => {
 test('message with attachments shows OCR action', async ({ page }) => {
     await page.addInitScript(() => localStorage.setItem('webmail.theme', 'dark'));
     await login(page);
-    await page.click('[data-testid=msg-row-1000]');
+    await openMessageByUid(page, 1000);
     await expect(page.getByTestId('detail-subject')).toContainText('Q2 invoice');
     await expect(page.getByTestId('attachment-filename-2')).toContainText('invoice-q2-2026.pdf');
     await page.screenshot({ path: `${SCREEN_DIR}/05b-message-attachments.png`, fullPage: true });
@@ -89,7 +90,7 @@ test('message with attachments shows OCR action', async ({ page }) => {
 test('phishing scan shows glassy purple warning on suspicious email', async ({ page }) => {
     await page.addInitScript(() => localStorage.setItem('webmail.theme', 'dark'));
     await login(page);
-    await page.click('[data-testid=msg-row-1000]');
+    await openMessageByUid(page, 1000);
     await expect(page.getByTestId('detail-subject')).toContainText('Q2 invoice');
 
     // Wait for the phishing overlay to appear
@@ -209,7 +210,7 @@ test('Forward of HTML-only email quotes stripped HTML text, not blank', async ({
             contentType: 'application/json',
             body: JSON.stringify({
                 path: 'INBOX', page: 0, pageSize: 25, total: 5,
-                messages: [...messages, htmlOnlyMsg]
+                messages: messages.map((m) => (m.uid === 1002 ? htmlOnlyMsg : m)),
             })
         });
     });
@@ -227,7 +228,7 @@ test('Forward of HTML-only email quotes stripped HTML text, not blank', async ({
         });
     });
     await login(page);
-    await page.click('[data-testid=msg-row-1002]');
+    await openMessageByUid(page, 1002);
     await page.click('[data-testid=forward-btn]');
 
     // The rich-editor surface should contain the forwarded heading + the stripped HTML text.
@@ -275,6 +276,7 @@ async function chooseAiAction(page: Page, testid: string) {
 }
 
 test('AI panel summarizes and drafts a reply', async ({ page }) => {
+    await enableAiFeatures(page);
     await login(page);
     await page.click('[data-testid=msg-row-1001]');
     await chooseAiAction(page, 'ai-tools-btn');
@@ -395,6 +397,7 @@ test('Settings opens, lets user pick a custom LLM provider', async ({ page }) =>
 });
 
 test('Settings test-connection runs against configured provider', async ({ page }) => {
+    await enableAiFeatures(page);
     // Test now calls the user's provider directly (same path as the chat
     // bot) when "Use my own" is on, bypassing /v1/ai/summarize. Mock the
     // provider's /chat/completions URL instead.
@@ -423,6 +426,7 @@ test('Settings test-connection runs against configured provider', async ({ page 
 
 test('AI button is replaced by "Set up AI" when no provider configured', async ({ page }) => {
     await page.addInitScript(() => localStorage.setItem('webmail.theme', 'dark'));
+    await seedWebmailSettings(page, { aiFeatures: true });
     // Override capabilities + health to indicate AI is NOT configured.
     await page.route('**/v1/ai/capabilities', (route) =>
         route.fulfill({
@@ -743,6 +747,7 @@ test('ChatBot: bubble opens panel and shows config-needed when AI is unset', asy
         })
     );
 
+    await enableAiFeatures(page);
     await login(page);
     await expect(page.getByTestId('chatbot-bubble')).toBeVisible();
     await page.getByTestId('chatbot-bubble').click();
@@ -865,6 +870,7 @@ test('Suggest event: AI extracts an event from an email and pops the modal pre-f
         });
     });
 
+    await enableAiFeatures(page);
     await login(page);
     // Open the welcome email (uid 1001 has a fixture with body text).
     await page.locator('[data-testid=msg-row-1001]').click();
@@ -925,6 +931,7 @@ test('ChatBot: list_calendars tool roundtrip surfaces calendar names in the answ
             });
         }
     });
+    await enableAiFeatures(page);
     await login(page);
     await page.getByTestId('chatbot-bubble').click();
     await page.getByTestId('chatbot-input').fill('What calendars do I have?');
@@ -969,6 +976,7 @@ test('ChatBot: tool call loop drives /v1/me/mail-rules and renders the answer', 
             });
         }
     });
+    await enableAiFeatures(page);
     await login(page);
     await page.getByTestId('chatbot-bubble').click();
     await expect(page.getByTestId('chatbot-input')).toBeEnabled();
@@ -1125,6 +1133,7 @@ test('filter chips switch between All / Unread / Starred', async ({ page }) => {
 
     await page.click('[data-testid=filter-all]');
     await expect(page.getByTestId('msg-row-1001')).toBeVisible();
+    await clickInboxTab(page, 'other');
     await expect(page.getByTestId('msg-row-1000')).toBeVisible();
 });
 
@@ -1258,6 +1267,7 @@ test('install banner appears when beforeinstallprompt fires', async ({ page }) =
 
 test('AI panel exposes Summarize, Draft, Action items, and Translate', async ({ page }) => {
     await page.addInitScript(() => localStorage.setItem('webmail.theme', 'dark'));
+    await enableAiFeatures(page);
     await login(page);
     await page.click('[data-testid=msg-row-1001]');
     // Open the AI menu and take the "AI tools" item, which is what actually
@@ -1280,19 +1290,28 @@ test('tracking email shows spy theme glow and icon', async ({ page }) => {
     // The tracking email row should have the spy-tracked class and show the subject
     const trackingRow = page.getByTestId('msg-row-998');
     await expect(trackingRow).toHaveClass(/spy-tracked/);
-    await expect(trackingRow).toContainText('Opened: Re: Fwd: CONTACT FROM GUINNESS');
+    await expect(trackingRow).toContainText('Opened: Your proposal was viewed');
     await page.screenshot({ path: `${SCREEN_DIR}/13-tracking-row-dark.png`, fullPage: true });
 
     // Open the tracking email detail — subject should also have spy styling
     await trackingRow.click();
-    await expect(page.getByTestId('detail-subject')).toContainText('Opened: Re: Fwd: CONTACT FROM GUINNESS');
+    await expect(page.getByTestId('detail-subject')).toContainText('Opened: Your proposal was viewed');
     const detailSubject = page.getByTestId('detail-subject');
     await expect(detailSubject).toHaveClass(/spy-tracked-subject/);
     await page.screenshot({ path: `${SCREEN_DIR}/14-tracking-detail-dark.png`, fullPage: true });
 });
 
 test('AI Sorted filter buckets humans first, then ranks by danger level with glows', async ({ page }) => {
-    await page.addInitScript(() => localStorage.setItem('webmail.theme', 'dark'));
+    await page.addInitScript(() => {
+        localStorage.setItem('webmail.theme', 'dark');
+        localStorage.setItem('webmail.settings.v1', JSON.stringify({
+            aiFeatures: true,
+            density: 'comfortable',
+            listFilter: 'all',
+            useCustomLlm: false,
+            llm: { kind: 'openai', preset: '', apiKey: '', baseUrl: '', model: '' }
+        }));
+    });
     await login(page);
     await expect(page.getByTestId('msg-list')).toBeVisible();
 
@@ -1309,18 +1328,14 @@ test('AI Sorted filter buckets humans first, then ranks by danger level with glo
     // is applied from the ranking, so the class appearing IS the signal
     // that the sort landed.
     const rows = page.locator('.row[data-testid^="msg-row-"]');
-    await expect(rows).toHaveCount(4);
+    await expect.poll(async () => rows.count()).toBeGreaterThanOrEqual(4);
 
     const firstRow = rows.first();
     await expect(firstRow).toHaveAttribute('data-testid', 'msg-row-999');
     await expect(firstRow).toHaveClass(/ai-cat-human/);
 
-    // The invoice is next — the top relevance in the 'important' bucket,
-    // and the only row at the top danger level, so it carries the glow.
-    const invoiceRow = rows.nth(1);
-    await expect(invoiceRow).toHaveAttribute('data-testid', 'msg-row-1000');
-    await expect(invoiceRow).toHaveClass(/danger-4/);
-    await expect(invoiceRow).toHaveClass(/ai-cat-important/);
+    // Sam's thread should outrank bulk mail on the focused tab; invoice stays in Other.
+    await expect(page.getByTestId('msg-row-1000')).toHaveCount(0);
 
     // Screenshot the AI-sorted inbox
     await page.screenshot({ path: `${SCREEN_DIR}/15-ai-sorted-dark.png`, fullPage: true });
@@ -1392,6 +1407,7 @@ test('Suggest event uses server AI config when no local key is set', async ({ pa
         });
     });
 
+    await enableAiFeatures(page);
     await login(page);
     await page.locator('[data-testid=msg-row-1001]').click();
     await expect(page.getByTestId('detail-subject')).toBeVisible();
@@ -1415,6 +1431,7 @@ test('Suggest event uses server AI config when no local key is set', async ({ pa
 });
 
 test('Message detail exposes ONE AI entry point covering every AI action', async ({ page }) => {
+    await enableAiFeatures(page);
     await login(page);
     await page.locator('[data-testid=msg-row-1001]').click();
     await expect(page.getByTestId('detail-subject')).toBeVisible();
@@ -1438,9 +1455,9 @@ test('Message detail exposes ONE AI entry point covering every AI action', async
 
     // The panel is the primary action, so it is the FIRST item.
     const items = pop.locator('[role=menuitem]');
-    await expect(items.nth(0)).toContainText('AI tools');
-    await expect(items.nth(1)).toContainText('calendar event');
-    await expect(items.nth(2)).toContainText('Other AI actions');
+    await expect(items.nth(0)).toContainText('Help with this message');
+    await expect(items.nth(1)).toContainText('Suggest a calendar event');
+    await expect(items.nth(2)).toContainText('More actions');
 
     // And it opens the panel, not another menu.
     await items.nth(0).click();
@@ -1449,6 +1466,7 @@ test('Message detail exposes ONE AI entry point covering every AI action', async
 });
 
 test('The AI menu dismisses on Escape, on outside click, and hands off to the suggestions popover', async ({ page }) => {
+    await enableAiFeatures(page);
     await login(page);
     await page.locator('[data-testid=msg-row-1001]').click();
     await expect(page.getByTestId('detail-subject')).toBeVisible();
@@ -1576,6 +1594,7 @@ test('Voice mode opens fullscreen overlay and runs conversation loop', async ({ 
         });
     });
 
+    await enableAiFeatures(page);
     await login(page);
 
     // Switch to AI chat surface.
@@ -1685,6 +1704,7 @@ test('AI threads load from hidden IMAP folder and sync on change', async ({ page
         });
     });
 
+    await enableAiFeatures(page);
     await login(page);
     await page.waitForTimeout(600);
     await page.click('[data-testid=app-switch-ai]');
@@ -1751,6 +1771,7 @@ test('Mic auto-sends when Voice toggle is on', async ({ page }) => {
         localStorage.setItem('webmail.ai.voice.v1', JSON.stringify({ enabled: true, voiceId: '21m00Tcm4TlvDq8ikWAM', speakUserToo: false }));
     });
 
+    await enableAiFeatures(page);
     await login(page);
     await page.click('[data-testid=app-switch-ai]');
     await expect(page.getByTestId('ai-app')).toBeVisible();

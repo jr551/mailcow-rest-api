@@ -2,7 +2,7 @@
 
 Long-term goal: make `/webmail` a **faithful clone of Outlook.com webmail**, with **optional AI** that is **off by default**, enabled only when the user turns it on and configures a provider (referenced by setting name only). The app must work fully without AI (summarise thread, draft/rewrite reply, smart triage, natural-language search are additive, not required).
 
-Work happens on branch **`outlook-clone`**. Changes land via PRs into `outlook-clone` only—not `master`—until the clone is ready to merge.
+Work lands via PRs into `master` (Outlook parity slices #83–#86 merged in v0.27.0).
 
 Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
@@ -20,8 +20,8 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 | **Conversation view** | List grouping via `threads.ts`; reading-pane stack via `conversation-view.ts` + `ConversationStack.svelte` | Medium: attachments per message in stack; richer HTML parity |
 | **Compose** | `Compose.svelte` + `FloatingPanel.svelte`, TipTap | Medium: no scheduled send, undo send, sensitivity labels |
 | **Search** | Header search + tag syntax; folder vs all scope | Medium: no unified People/Files search; no saved searches |
-| **Settings shell** | `Settings.svelte` 3-column Outlook-like modal, 19 sections | Low–medium: content differs; AI defaults still need hard-off-by-default pass |
-| **AI features** | Many surfaces; `aiFeatures` currently defaults on in stored settings | **High policy** — flip default off + hide all affordances when off (separate slice) |
+| **Settings shell** | `Settings.svelte` 3-column Outlook-like modal, 19 sections | Low–medium: content differs |
+| **AI features** | Master switch **`aiFeatures`**; defaults **off** for new profiles; every AI entry point hidden when off | Low — opt-in provider config remains in Settings |
 | **People / VIP** | VIP list in Settings; local address book | Medium vs OWA People app |
 | **Deep links** | Session storage only, no `/mail/...` URLs | Medium |
 
@@ -50,7 +50,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ### P3 — AI (opt-in only)
 
-11. Default **`aiFeatures: false`** for new profiles; master switch hides every AI entry point.
+11. Default **`aiFeatures: false`** for new profiles; master switch hides every AI entry point — **done (v0.27.0)**.
 12. User-named LLM provider in settings only (no server-side default key in UI copy).
 13. Thread summarise, draft/rewrite, smart triage, NL search — each gated on AI + provider.
 
@@ -68,7 +68,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 - **`MessageList.svelte`**: Outlook-style **Focused | Other** tabs when viewing INBOX (hidden during search or other folders).
 - **`settings.inboxTab`**: persisted preference (`focused` | `other`).
 - Tests: unit (`focused-inbox.test.mjs`) + Playwright (`outlook-focused-inbox.spec.ts`) against API mocks.
-- Screenshots: `webmail/docs/assets/outlook-slice1/26-inbox-focused-tab.png`, `27-inbox-other-tab.png`.
+- Screenshots: `webmail/docs/assets/outlook-slice1/26-inbox-focused-tab.png`, `27-inbox-other-tab.png` (regenerate with `npm run docs:screenshots` in `webmail/`).
 
 ---
 

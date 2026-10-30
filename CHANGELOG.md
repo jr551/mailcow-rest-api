@@ -3,6 +3,21 @@
 All notable changes to this project are documented here. Version numbers follow
 [Semantic Versioning](https://semver.org/) and match `package.json`.
 
+## v0.27.0 — Outlook.com-style webmail
+
+### Webmail (Outlook.com parity, #83–#86)
+
+- Focused / Other inbox tabs on INBOX (rule-based, no AI needed); the choice is remembered. Adds the parity roadmap `webmail/docs/OUTLOOK-PARITY.md`.
+- Conversation stacking in the reading pane when threads are grouped.
+- Reading pane on the right (default), at the bottom, or hidden; set it in Settings, the list header, or with Alt+Shift+R / B / H.
+- Optional AI features are now off by default; turn them on in Settings.
+- README and webmail docs refreshed; README screenshots regenerated from Playwright mocks.
+- New unit and Playwright tests.
+
+### Dependencies (since v0.26.7)
+
+- esbuild 0.28.2 for webmail (#82); svelte 5.57.3 (#78); @fastify/static, @modelcontextprotocol/sdk and others (#79); puppeteer-core 25.16.0 (#81); docker/login-action 4.7.0 (#77)
+
 ## v0.26.7 — security hardening, webmail trust, CI fallback
 
 ### Security & correctness (from #76)

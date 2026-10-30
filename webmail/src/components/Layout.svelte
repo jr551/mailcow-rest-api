@@ -2143,6 +2143,7 @@
                 }}
             />
         </div>
+        <div class="mail-workspace" class:ai-panel-open={ui.aiPanelOpen && settings.aiFeatures}>
         <!-- Focusable `role="separator"` is the WAI-ARIA window-splitter
              pattern: tabindex + keyboard resize (splitterKeys below) are the
              prescribed way to make a pane divider operable. Svelte's role
@@ -2280,6 +2281,7 @@
         {#if ui.aiPanelOpen && settings.aiFeatures}
             <AiPanel onClose={() => (ui.aiPanelOpen = false)} />
         {/if}
+        </div>
         {/if}
     </div>
 
@@ -3073,6 +3075,22 @@
         width: 100%;
     }
     .pane-resizer.sidebar-resizer { flex: 0 0 6px; }
+    .mail-workspace {
+        flex: 1;
+        display: flex;
+        min-width: 0;
+        min-height: 0;
+        position: relative;
+    }
+    .mail-workspace > .content {
+        flex: 1;
+        min-width: 0;
+    }
+    .mail-workspace.ai-panel-open > .content {
+        /* Dock the reading stack beside the AI panel instead of letting the
+           panel float over it at sub-1100px widths. */
+        min-width: 0;
+    }
     @media (max-width: 720px) {
         .sidebar-wrap { width: 64px !important; }
         .pane-resizer.sidebar-resizer { display: none; }

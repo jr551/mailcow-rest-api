@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
 import { applyMocks, login, messages } from './fixtures';
+import { enableAiFeatures } from './e2e-helpers';
 
 // Link safety: clicking a link inside a message must open a confirmation
 // with the destination and a verdict, and must let the user through.
@@ -21,6 +22,7 @@ interface Verdict { verdict: string; malicious?: number; suspicious?: number; ha
 test.beforeEach(async ({ page }) => {
     await applyMocks(page);
     await page.addInitScript(() => localStorage.setItem('webmail.theme', 'light'));
+    await enableAiFeatures(page);
     // Give the one message an HTML body containing two links, and stub the
     // link-check route. Configured=true, or Settings/UI would report the
     // feature as unavailable.

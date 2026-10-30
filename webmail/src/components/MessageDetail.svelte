@@ -2379,6 +2379,7 @@
         align-items: flex-start;
         gap: 12px;
         flex-wrap: wrap;
+        width: 100%;
     }
     .avatar-with-vip {
         position: relative;
@@ -2486,8 +2487,18 @@
         display: flex;
         align-items: center;
         gap: 6px;
-        flex: 0 0 auto;
+        flex: 1 1 100%;
         flex-wrap: wrap;
+        justify-content: flex-end;
+        min-width: 0;
+        max-width: 100%;
+    }
+    @media (min-width: 900px) {
+        .actions {
+            flex: 0 1 auto;
+            margin-left: auto;
+            max-width: none;
+        }
     }
     /* Icon-only actions sit shoulder to shoulder and are told apart mostly
        by glyph, so they need a real target and a focus ring that doesn't
