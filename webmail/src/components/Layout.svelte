@@ -2,6 +2,7 @@
     import { onMount } from 'svelte';
     import { authState, setSession, logoutRemote, startExpiryWatch, switchTo, removeSession, setAddingAccount } from '../lib/auth.svelte';
     import { ui, showToast, clearToast } from '../lib/store.svelte';
+    import { onFolderDeleted, onFolderRenamed } from '../lib/folder-favorites.svelte';
     import { recordView } from '../lib/recent-views.svelte';
     import {
         listMailboxes,
@@ -425,11 +426,13 @@
     async function renameFolder(oldPath: string, newPath: string) {
         await renameMailbox(oldPath, newPath);
         if (ui.selectedPath === oldPath) ui.selectedPath = newPath;
+        onFolderRenamed(oldPath, newPath);
         await refreshMailboxes();
         showToast('success', `Renamed to ${newPath}`);
     }
     async function deleteFolder(path: string) {
         await deleteMailbox(path);
+        onFolderDeleted(path);
         if (ui.selectedPath === path) {
             ui.selectedPath = 'INBOX';
             await refreshMessages({ resetPage: true });
