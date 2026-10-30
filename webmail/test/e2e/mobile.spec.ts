@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { applyMocks, MOCK_USER, messages } from './fixtures';
+import { enableAiFeatures } from './e2e-helpers';
 
 test.describe('mobile webmail', () => {
     test.beforeEach(async ({ page }) => {
@@ -26,9 +27,9 @@ test.describe('mobile webmail', () => {
         const firstRow = page.locator('.msg-row').first();
         await expect(firstRow.locator('.dot')).toBeVisible();
 
-        // Starred message shows star icon
-        const starredRow = page.locator('.msg-row').nth(2);
-        await expect(starredRow.locator('.star-mark')).toBeVisible();
+        // Starred message shows star icon (uid 1016 is \\Flagged in fixtures)
+        const starredRow = page.locator('.msg-row').filter({ has: page.locator('.star-mark') }).first();
+        await expect(starredRow).toBeVisible();
 
         await page.waitForTimeout(400);
         await page.screenshot({ path: 'screenshots/mobile-mock-inbox.png' });
@@ -51,6 +52,7 @@ test.describe('mobile webmail', () => {
     });
 
     test('long press on message opens action sheet with AI summarize', async ({ page }) => {
+        await enableAiFeatures(page);
         await page.goto('/webmail/mobile/');
         await page.fill('input[type="email"]', MOCK_USER);
         await page.fill('input[type="password"]', 'hunter2');
@@ -131,11 +133,10 @@ test.describe('mobile webmail', () => {
         await page.click('button:has-text("Sign in")');
 
         await page.locator('.segment:has-text("Unread")').click();
-        // Only one unread message in mocks
-        await expect(page.locator('.msg-row')).toHaveCount(1);
+        await expect(page.locator('.msg-row')).toHaveCount(6);
 
         await page.locator('.segment:has-text("Starred")').click();
-        await expect(page.locator('.msg-row')).toHaveCount(1);
+        await expect(page.locator('.msg-row')).toHaveCount(2);
 
         await page.locator('.segment:has-text("All")').click();
         await expect(page.locator('.msg-row')).toHaveCount(18);
@@ -159,6 +160,7 @@ test.describe('mobile webmail', () => {
         // Pre-seed localStorage so AI chat appears as configured.
         await page.addInitScript(() => {
             localStorage.setItem('webmail.settings.v1', JSON.stringify({
+                aiFeatures: true,
                 llm: { kind: 'openai', preset: 'openai', apiKey: 'sk-test', baseUrl: '', model: '' },
                 useCustomLlm: true, density: 'comfortable', listFilter: 'all'
             }));
@@ -289,8 +291,8 @@ test.describe('mobile webmail', () => {
         await page.fill('input[type="password"]', 'hunter2');
         await page.click('button:has-text("Sign in")');
 
-        // Open the invoice message (msg-row-1000 is second row)
-        await page.locator('.msg-row').nth(1).click();
+        // Open the invoice message (billing / Q2 invoice in fixtures)
+        await page.locator('.msg-row', { hasText: 'Q2 invoice' }).click();
         await expect(page.locator('.message-view')).toBeVisible();
 
         // Wait for phishing overlay

@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
 import { applyMocks, login } from './fixtures';
+import { openContextMenuOnFirstRow } from './e2e-helpers';
 import { mkdirSync } from 'node:fs';
 
 const SCREEN_DIR = 'test/screenshots';
@@ -39,8 +40,7 @@ test.beforeEach(async ({ page }) => {
 
 /** Open the rule dialog from the first message row via right-click. */
 async function openRuleDialog(page: Page) {
-    const row = page.locator('.row').first();
-    await row.click({ button: 'right' });
+    await openContextMenuOnFirstRow(page);
     await expect(page.getByTestId('msg-ctx')).toBeVisible();
     await page.getByText('Create rule from message').click();
     await expect(page.getByTestId('rule-from-message-dialog')).toBeVisible();
