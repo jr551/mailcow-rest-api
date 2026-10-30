@@ -16,6 +16,13 @@
         outlookFilterLabel,
         listSortLabel
     } from '../lib/list-quick-filters';
+    import {
+        resolveMessageCategory,
+        MESSAGE_CATEGORY_BY_ID,
+        categoryMenuItems,
+        type MessageCategoryId
+    } from '../lib/message-categories';
+    import { messageCategoryOverlay } from '../lib/message-categories.svelte';
     import { authState } from '../lib/auth.svelte';
     import { getCachedScan } from '../lib/phishing-scan';
     import Icon from './Icon.svelte';
@@ -39,6 +46,7 @@
     interface Props {
         onSelect: (uid: number) => void;
         onStar: (uid: number) => void;
+        onSetCategory?: (uid: number, category: MessageCategoryId | null) => void;
         onUnread: (uid: number) => void;
         onTrash: (uid: number) => void;
         onArchive: (uid: number) => void;
@@ -62,12 +70,22 @@
         onBlockSender?: (uid: number, pattern?: string) => void;
     }
     let {
-        onSelect, onStar, onUnread, onTrash, onArchive,
+        onSelect, onStar, onSetCategory, onUnread, onTrash, onArchive,
         onPageChange, onMarkFolderRead, onSummariseAndMarkRead, onLoadMore,
         effectivePageSize = 25, appendingMore = false,
         scanState = null,
         onMove, onBlockSender
     }: Props = $props();
+
+    const categorySubmenuItems: SubmenuItem[] = categoryMenuItems().map((item) => ({
+        key: item.value,
+        label: item.label
+    }));
+
+    function rowCategory(uid: number, flags: string[]): MessageCategoryId | null {
+        void messageCategoryOverlay();
+        return resolveMessageCategory(ui.selectedPath, uid, flags, messageCategoryOverlay());
+    }
 
     // Right-click context menu on a row.
     // `x`/`y` are the ANCHOR (where the pointer was, or the row's rect for
@@ -1662,6 +1680,7 @@
                     ...((headMsg.envelope.to || []).map((a) => a.address)),
                     ...((headMsg.envelope.cc || []).map((a) => a.address))
                 ])}
+                {@const headCategory = rowCategory(headMsg.uid, headMsg.flags)}
                 <li class={isThread ? 'thread-wrap' : ''}>
                     <div
                         class="row"
@@ -1713,7 +1732,17 @@
                         onkeydown={(e) => { rowKey(e, headMsg.uid); openCtxKeyboard(e, headMsg.uid); }}
                         oncontextmenu={(e) => openCtx(e, headMsg.uid)}
                         data-testid={`msg-row-${headMsg.uid}`}
+                        data-category={headCategory ?? ''}
                     >
+                        {#if headCategory}
+                            <span
+                                class="category-stripe"
+                                style={`background: ${MESSAGE_CATEGORY_BY_ID[headCategory].color}`}
+                                title={MESSAGE_CATEGORY_BY_ID[headCategory].label}
+                                aria-hidden="true"
+                                data-testid={`msg-category-${headMsg.uid}`}
+                            ></span>
+                        {/if}
                         <span class="unread-dot" aria-hidden="true"></span>
                         <button
                             type="button"
@@ -2043,6 +2072,18 @@
             <li><button type="button" role="menuitem" onclick={() => { onStar(ctx!.uid); closeCtx(); }}>
                 <Icon name={isFlagged ? 'starFilled' : 'star'} size={12} /> {isFlagged ? 'Unstar' : 'Star'}
             </button></li>
+            {#if onSetCategory}
+                <MenuSubmenu
+                    label="Categorize"
+                    icon="palette"
+                    items={categorySubmenuItems}
+                    onSelect={(key) => {
+                        onSetCategory(ctx!.uid, key === 'clear' ? null : (key as MessageCategoryId));
+                        closeCtx();
+                    }}
+                    testid="ctx-category"
+                />
+            {/if}
             <li><button type="button" role="menuitem" onclick={() => { onUnread(ctx!.uid); closeCtx(); }}>
                 <Icon name="eye" size={12} /> Mark as {isUnread ? 'read' : 'unread'}
             </button></li>
@@ -2862,6 +2903,15 @@
         transition: background-color var(--transition-fast), box-shadow var(--transition-fast);
         cursor: pointer;
         position: relative;
+    }
+    .category-stripe {
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 4px;
+        border-radius: 0 2px 2px 0;
+        pointer-events: none;
     }
     /* Density: compact = ~28px row height. Comfortable = default. */
     :global(.shell[data-density="compact"]) .row { padding: 6px 16px 6px 18px; }

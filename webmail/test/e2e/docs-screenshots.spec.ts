@@ -14,7 +14,8 @@ const ASSET2 = 'docs/assets/outlook-slice2';
 const ASSET3 = 'docs/assets/outlook-slice3';
 const ASSET5 = 'docs/assets/outlook-slice5';
 const ASSET6 = 'docs/assets/outlook-slice6';
-for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6]) mkdirSync(d, { recursive: true });
+const ASSET7 = 'docs/assets/outlook-slice7';
+for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7]) mkdirSync(d, { recursive: true });
 
 const baseSettings = {
     aiFeatures: false,
@@ -217,6 +218,20 @@ test.describe('docs desktop (1440×900 @2x)', () => {
         await page.getByTestId('quick-filter-trigger').click();
         await expect(page.getByTestId('quick-filter-menu')).toBeVisible();
         await shot(page, `${ASSET6}/35-quick-filter-menu-open.png`);
+    });
+
+    test('message category stripe', async ({ page }) => {
+        await page.addInitScript((blob) => {
+            localStorage.setItem('webmail.theme', 'light');
+            localStorage.setItem('webmail.settings.v1', blob);
+        }, seedSettings());
+        await login(page);
+        const row = page.getByTestId('msg-row-1001');
+        await row.click({ button: 'right' });
+        await page.getByTestId('ctx-category-trigger').hover();
+        await page.getByTestId('ctx-category-item-orange').click();
+        await expect(page.getByTestId('msg-category-1001')).toBeVisible();
+        await shot(page, `${ASSET7}/36-message-category-stripe.png`);
     });
 });
 
