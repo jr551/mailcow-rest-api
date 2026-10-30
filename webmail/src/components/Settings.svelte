@@ -113,6 +113,7 @@
     import { takeover, loadTakeover, setTakeoverEnabled, setTakeoverKnobs, addSenderRule, saveSenderRule, removeSenderRule } from '../lib/takeover.svelte';
     import type { TakeoverSettings, TakeoverSender } from '../lib/api';
     import type { IconName } from '../lib/icons';
+    import { MAIL_KEYBOARD_SHORTCUT_ROWS } from '../lib/mail-keyboard-shortcuts';
 
     // Outlook's Settings is a three-column overlay: a category rail on the
     // left, a sub-section list in the middle, one content pane on the right.
@@ -121,7 +122,7 @@
     // every spec that clicks `settings-tab-privacy` still lands correctly.
     type SectionId =
         | 'account' | 'security'
-        | 'notifications' | 'ai' | 'sounds' | 'appearance' | 'calendar' | 'people'
+        | 'notifications' | 'ai' | 'sounds' | 'keyboard-shortcuts' | 'appearance' | 'calendar' | 'people'
         | 'message-list' | 'reading-pane' | 'privacy' | 'compose' | 'smart-suggestions'
         | 'mail-rules' | 'ai-cloud-replies' | 'sweep' | 'junk'
         | 'filters' | 'forwarding' | 'outbound-hooks';
@@ -156,6 +157,7 @@
                 { id: 'notifications', label: 'Notifications', icon: 'bell', keywords: 'push install pwa desktop alert' },
                 { id: 'ai', label: 'AI', icon: 'sparkles', keywords: 'llm openai anthropic model provider prompt voice chat' },
                 { id: 'sounds', label: 'Sounds', icon: 'bell', keywords: 'audio chime event pack mute' },
+                { id: 'keyboard-shortcuts', label: 'Keyboard shortcuts', icon: 'monitor', keywords: 'hotkey chord reply archive delete flag search help' },
                 { id: 'appearance', label: 'Appearance', icon: 'palette', keywords: 'skin accent colour theme density layout sidebar' }
             ]
         },
@@ -3081,6 +3083,28 @@
                         {/if}
                     </div>
 
+                </section>
+
+            {:else if activeSection === 'keyboard-shortcuts'}
+                <section class="tab-section" data-testid="settings-keyboard-shortcuts">
+                    <h3>Keyboard shortcuts</h3>
+                    <p class="muted small">
+                        Global mail shortcuts work when focus is not in a text field. Press
+                        <kbd>?</kbd> in the inbox to open the same list in a dialog.
+                    </p>
+                    <table class="shortcut-table">
+                        <thead>
+                            <tr><th scope="col">Keys</th><th scope="col">Action</th></tr>
+                        </thead>
+                        <tbody>
+                            {#each MAIL_KEYBOARD_SHORTCUT_ROWS as row}
+                                <tr>
+                                    <td><kbd>{row.keys}</kbd></td>
+                                    <td>{row.description}</td>
+                                </tr>
+                            {/each}
+                        </tbody>
+                    </table>
                 </section>
 
             {:else if activeSection === 'appearance'}
@@ -6680,5 +6704,31 @@
     }
     @media (prefers-reduced-motion: reduce) {
         .collapse-body { animation: none; }
+    }
+    .shortcut-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+        margin-top: 12px;
+    }
+    .shortcut-table th,
+    .shortcut-table td {
+        text-align: left;
+        padding: 6px 8px;
+        border-bottom: 1px solid var(--border-subtle, var(--border));
+        vertical-align: top;
+    }
+    .shortcut-table th {
+        font-weight: 600;
+        color: var(--text-muted);
+    }
+    .shortcut-table kbd {
+        font-family: ui-monospace, monospace;
+        font-size: 12px;
+        padding: 2px 6px;
+        border-radius: 4px;
+        background: var(--bg-base);
+        border: 1px solid var(--border);
+        white-space: nowrap;
     }
 </style>
