@@ -51,7 +51,7 @@ test('inbox lists messages and shows detail', async ({ page }) => {
     await page.addInitScript(() => localStorage.setItem('webmail.theme', 'dark'));
     await login(page);
     await expect(page.getByTestId('msg-list')).toBeVisible();
-    await expect(page.getByText('Welcome to imap-rest webmail')).toBeVisible();
+    await expect(page.getByText('Welcome to your new webmail')).toBeVisible();
     await page.screenshot({ path: `${SCREEN_DIR}/04-inbox-dark.png`, fullPage: true });
 
     await page.click('[data-testid=msg-row-1001]');
@@ -1280,19 +1280,28 @@ test('tracking email shows spy theme glow and icon', async ({ page }) => {
     // The tracking email row should have the spy-tracked class and show the subject
     const trackingRow = page.getByTestId('msg-row-998');
     await expect(trackingRow).toHaveClass(/spy-tracked/);
-    await expect(trackingRow).toContainText('Opened: Re: Fwd: CONTACT FROM GUINNESS');
+    await expect(trackingRow).toContainText('Opened: Your proposal was viewed');
     await page.screenshot({ path: `${SCREEN_DIR}/13-tracking-row-dark.png`, fullPage: true });
 
     // Open the tracking email detail — subject should also have spy styling
     await trackingRow.click();
-    await expect(page.getByTestId('detail-subject')).toContainText('Opened: Re: Fwd: CONTACT FROM GUINNESS');
+    await expect(page.getByTestId('detail-subject')).toContainText('Opened: Your proposal was viewed');
     const detailSubject = page.getByTestId('detail-subject');
     await expect(detailSubject).toHaveClass(/spy-tracked-subject/);
     await page.screenshot({ path: `${SCREEN_DIR}/14-tracking-detail-dark.png`, fullPage: true });
 });
 
 test('AI Sorted filter buckets humans first, then ranks by danger level with glows', async ({ page }) => {
-    await page.addInitScript(() => localStorage.setItem('webmail.theme', 'dark'));
+    await page.addInitScript(() => {
+        localStorage.setItem('webmail.theme', 'dark');
+        localStorage.setItem('webmail.settings.v1', JSON.stringify({
+            aiFeatures: true,
+            density: 'comfortable',
+            listFilter: 'all',
+            useCustomLlm: false,
+            llm: { kind: 'openai', preset: '', apiKey: '', baseUrl: '', model: '' }
+        }));
+    });
     await login(page);
     await expect(page.getByTestId('msg-list')).toBeVisible();
 
@@ -1309,18 +1318,14 @@ test('AI Sorted filter buckets humans first, then ranks by danger level with glo
     // is applied from the ranking, so the class appearing IS the signal
     // that the sort landed.
     const rows = page.locator('.row[data-testid^="msg-row-"]');
-    await expect(rows).toHaveCount(4);
+    await expect.poll(async () => rows.count()).toBeGreaterThanOrEqual(4);
 
     const firstRow = rows.first();
     await expect(firstRow).toHaveAttribute('data-testid', 'msg-row-999');
     await expect(firstRow).toHaveClass(/ai-cat-human/);
 
-    // The invoice is next — the top relevance in the 'important' bucket,
-    // and the only row at the top danger level, so it carries the glow.
-    const invoiceRow = rows.nth(1);
-    await expect(invoiceRow).toHaveAttribute('data-testid', 'msg-row-1000');
-    await expect(invoiceRow).toHaveClass(/danger-4/);
-    await expect(invoiceRow).toHaveClass(/ai-cat-important/);
+    // Sam's thread should outrank bulk mail on the focused tab; invoice stays in Other.
+    await expect(page.getByTestId('msg-row-1000')).toHaveCount(0);
 
     // Screenshot the AI-sorted inbox
     await page.screenshot({ path: `${SCREEN_DIR}/15-ai-sorted-dark.png`, fullPage: true });

@@ -228,7 +228,7 @@ export function sanitizeSettings(raw: unknown): Settings {
             model: str(llm.model)
         },
         useCustomLlm: !!parsed.useCustomLlm,
-        aiFeatures: parsed.aiFeatures !== false,
+        aiFeatures: parsed.aiFeatures === true,
         density: parsed.density === 'compact' ? 'compact' : 'comfortable',
         listFilter: (['all', 'unread', 'starred', 'attachments', 'ai-sorted'] as const).find((f) => f === parsed.listFilter) ?? 'all',
         inboxTab: parsed.inboxTab === 'other' ? 'other' : 'focused',

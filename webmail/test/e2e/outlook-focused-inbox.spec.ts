@@ -3,7 +3,9 @@ import { mkdirSync } from 'node:fs';
 import { applyMocks, login } from './fixtures';
 
 const SCREEN_DIR = 'test/screenshots';
+const ASSET_DIR = 'docs/assets/outlook-slice1';
 mkdirSync(SCREEN_DIR, { recursive: true });
+mkdirSync(ASSET_DIR, { recursive: true });
 
 test.beforeEach(async ({ page }) => {
     await applyMocks(page);
@@ -32,6 +34,7 @@ test('INBOX shows Focused and Other tabs; Other hides bulk mail', async ({ page 
     await expect(page.getByTestId('msg-row-1000')).not.toBeVisible();
 
     await page.screenshot({ path: `${SCREEN_DIR}/26-inbox-focused-tab.png`, fullPage: true });
+    await page.screenshot({ path: `${ASSET_DIR}/26-inbox-focused-tab.png`, fullPage: true });
 
     await page.getByTestId('inbox-tab-other').click();
     await expect(page.getByTestId('inbox-tab-other')).toHaveClass(/active/);
@@ -39,6 +42,7 @@ test('INBOX shows Focused and Other tabs; Other hides bulk mail', async ({ page 
     await expect(page.getByTestId('msg-row-1001')).not.toBeVisible();
 
     await page.screenshot({ path: `${SCREEN_DIR}/27-inbox-other-tab.png`, fullPage: true });
+    await page.screenshot({ path: `${ASSET_DIR}/27-inbox-other-tab.png`, fullPage: true });
 });
 
 test('Focused/Other tabs hide outside INBOX', async ({ page }) => {

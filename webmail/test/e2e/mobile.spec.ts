@@ -20,7 +20,7 @@ test.describe('mobile webmail', () => {
         await expect(page.locator('.mheader h1:has-text("INBOX")')).toBeVisible();
 
         // Message rows appear
-        await expect(page.locator('.msg-row')).toHaveCount(4);
+        await expect(page.locator('.msg-row')).toHaveCount(18);
 
         // Unread styling: first message has a blue dot
         const firstRow = page.locator('.msg-row').first();
@@ -42,7 +42,7 @@ test.describe('mobile webmail', () => {
 
         await page.locator('.msg-row').first().click();
         await expect(page.locator('.message-view')).toBeVisible();
-        await expect(page.locator('h2:has-text("Welcome to imap-rest webmail")')).toBeVisible();
+        await expect(page.locator('h2:has-text("Welcome to your new webmail")')).toBeVisible();
         await page.waitForTimeout(400);
         await page.screenshot({ path: 'screenshots/mobile-mock-message.png' });
 
@@ -138,7 +138,7 @@ test.describe('mobile webmail', () => {
         await expect(page.locator('.msg-row')).toHaveCount(1);
 
         await page.locator('.segment:has-text("All")').click();
-        await expect(page.locator('.msg-row')).toHaveCount(4);
+        await expect(page.locator('.msg-row')).toHaveCount(18);
     });
 
     test('search filters messages', async ({ page }) => {

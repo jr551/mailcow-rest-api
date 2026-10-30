@@ -50,7 +50,9 @@ docker run --rm -p 3001:3001 \
 
 ![The bundled webmail in its Outlook skin](webmail/docs/screenshots/outlook-inbox.png)
 
-Ships in the image at `/webmail/` — sign in with a mailcow mailbox address + password. Two skins: **Outlook** (default) and **Gmail**, each with its own light *and* dark palette and a customisable accent colour, plus a custom-CSS box under **Settings → Appearance**. The topbar toggle switches light/dark on either skin, and on **auto** it follows your OS. More detail in [`webmail/README.md`](webmail/README.md).
+Ships in the image at `/webmail/` — sign in with a mailcow mailbox address + password. Two skins: **Outlook** (default) and **Gmail**, each with its own light *and* dark palette and a customisable accent colour, plus a custom-CSS box under **Settings → Appearance**. The topbar toggle switches light/dark on either skin, and on **auto** it follows your OS.
+
+v0.27.0 adds Outlook-on-the-web mail layout: **Focused / Other** INBOX tabs, **conversation stacking** in the reading pane, and a **reading pane** on the right (default), at the bottom, or hidden (**Alt+Shift+R** / **B** / **H**). **AI features are off by default** — enable them under **Settings → AI** when you want the assistant and related tools. More detail in [`webmail/README.md`](webmail/README.md) and [`webmail/docs/OUTLOOK-PARITY.md`](webmail/docs/OUTLOOK-PARITY.md).
 
 <details>
 <summary><b>Self-hosting, CDN builds, and the mailcow sign-in button</b></summary>
