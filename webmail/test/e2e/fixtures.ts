@@ -7,6 +7,10 @@ import type { Page, Route } from '@playwright/test';
 export const MOCK_USER = 'demo@test.local';
 export const MOCK_PASS = 'hunter2';
 
+import { fixtureMessages } from './fixture-messages';
+
+export const messages = fixtureMessages;
+
 export const mailboxes = [
     { path: 'INBOX', name: 'INBOX', delimiter: '/', flags: ['\\HasNoChildren'], specialUse: '\\Inbox', subscribed: true },
     { path: 'Sent', name: 'Sent', delimiter: '/', flags: [], specialUse: '\\Sent', subscribed: true },
@@ -20,89 +24,6 @@ export const mailboxes = [
     { path: 'Projects/Client A', name: 'Client A', delimiter: '/', flags: ['\\HasNoChildren'], specialUse: null, subscribed: true },
     { path: 'Projects/Client B', name: 'Client B', delimiter: '/', flags: ['\\HasNoChildren'], specialUse: null, subscribed: true },
     { path: '.AI Conversations', name: '.AI Conversations', delimiter: '/', flags: ['\\HasNoChildren'], specialUse: null, subscribed: true }
-];
-
-export const messages = [
-    {
-        uid: 1001,
-        seq: 1,
-        flags: [],
-        size: 1234,
-        internalDate: '2026-04-29T10:32:00Z',
-        envelope: {
-            date: '2026-04-29T10:32:00Z',
-            subject: 'Welcome to imap-rest webmail',
-            from: [{ name: 'Concierge', address: 'concierge@example.com' }],
-            to: [{ name: null, address: MOCK_USER }],
-            cc: [],
-            messageId: '<welcome@imap-rest>',
-            inReplyTo: null
-        }
-    },
-    {
-        uid: 1000,
-        seq: 0,
-        flags: ['\\Seen'],
-        size: 4321,
-        internalDate: '2026-04-28T16:09:00Z',
-        envelope: {
-            date: '2026-04-28T16:09:00Z',
-            subject: 'Q2 invoice ready for review',
-            from: [{ name: 'Acme Billing', address: 'billing@acme.example' }],
-            to: [{ name: null, address: MOCK_USER }],
-            cc: [],
-            messageId: '<inv-1@acme>',
-            inReplyTo: null
-        }
-    },
-    {
-        uid: 997,
-        seq: -3,
-        flags: ['\\Seen'],
-        size: 180,
-        internalDate: '2026-04-26T12:00:00Z',
-        envelope: {
-            date: '2026-04-26T12:00:00Z',
-            subject: 'lunch on Friday?',
-            from: [{ name: 'Sam', address: 'sam@friend.example' }],
-            to: [{ name: null, address: MOCK_USER }],
-            cc: [],
-            messageId: '<lunch-1@friend>',
-            inReplyTo: null
-        }
-    },
-    {
-        uid: 999,
-        seq: -1,
-        flags: ['\\Seen', '\\Flagged'],
-        size: 200,
-        internalDate: '2026-04-27T08:00:00Z',
-        envelope: {
-            date: '2026-04-27T08:00:00Z',
-            subject: 'Re: lunch on Friday?',
-            from: [{ name: 'Sam', address: 'sam@friend.example' }],
-            to: [{ name: null, address: MOCK_USER }],
-            cc: [],
-            messageId: '<lunch-2@friend>',
-            inReplyTo: '<lunch-1@friend>'
-        }
-    },
-    {
-        uid: 998,
-        seq: -2,
-        flags: ['\\Seen'],
-        size: 800,
-        internalDate: '2026-04-26T14:22:00Z',
-        envelope: {
-            date: '2026-04-26T14:22:00Z',
-            subject: 'Opened: Re: Fwd: CONTACT FROM GUINNESS (TEXT, E-MAIL OR LETTER) TGPLIVE:0630230517',
-            from: [{ name: 'Tracker', address: 'tracker@example.com' }],
-            to: [{ name: null, address: MOCK_USER }],
-            cc: [],
-            messageId: '<track-1@example>',
-            inReplyTo: null
-        }
-    }
 ];
 
 /** Envelope for a fixture message by uid. Index-based lookups
@@ -191,6 +112,33 @@ export const detailFor1000 = {
         { id: '3', filename: 'receipt-april.png', contentType: 'image/png', size: 22_104, disposition: 'attachment', related: false }
     ]
 };
+
+const DETAIL_BY_UID: Record<number, typeof detailFor1001> = {
+    997: detailFor997,
+    998: detailFor998,
+    999: detailFor999,
+    1000: detailFor1000,
+    1001: detailFor1001
+};
+
+function genericDetailFor(uid: number) {
+    if (DETAIL_BY_UID[uid]) return DETAIL_BY_UID[uid];
+    const row = messages.find((m) => m.uid === uid);
+    if (!row) return null;
+    return {
+        uid: row.uid,
+        seq: row.seq,
+        flags: row.flags,
+        size: row.size,
+        internalDate: row.internalDate,
+        envelope: row.envelope,
+        text: `Hi,\n\nThis is sample body text for “${row.envelope.subject}”.\n\n— ${row.envelope.from?.[0]?.name || 'Sender'}`,
+        html: null,
+        attachments: row.hasAttachments
+            ? [{ id: '1', filename: 'attachment.pdf', contentType: 'application/pdf', size: 48_000, disposition: 'attachment', related: false }]
+            : []
+    };
+}
 
 export async function applyMocks(page: Page) {
     await page.route(/\/health$/, (route) => {
@@ -625,10 +573,11 @@ export async function applyMocks(page: Page) {
         // Match GET /v1/mailboxes with or without ?counts=true.
         if (request.method() !== 'GET') return route.continue();
         const withCounts = request.url().includes('counts=true');
+        const unseen = messages.filter((m) => !m.flags.includes('\\Seen')).length;
         const enriched = withCounts ? mailboxes.map((m, i) => ({
             ...m,
-            totalMessages: i === 0 ? 5 : 0,
-            unseen: i === 0 ? 1 : 0
+            totalMessages: i === 0 ? messages.length : 0,
+            unseen: i === 0 ? unseen : 0
         })) : mailboxes;
         route.fulfill({
             status: 200,
@@ -688,6 +637,24 @@ export async function applyMocks(page: Page) {
             status: 200,
             contentType: 'application/json',
             body: JSON.stringify(detailFor1000)
+        });
+    });
+
+    await page.route(/\/v1\/mailboxes\/INBOX\/messages\/(\d+)$/, (route) => {
+        const uid = Number(route.request().url().match(/messages\/(\d+)$/)?.[1]);
+        const detail = genericDetailFor(uid);
+        if (!detail) {
+            route.fulfill({
+                status: 404,
+                contentType: 'application/problem+json',
+                body: JSON.stringify({ status: 404, title: 'Not Found' })
+            });
+            return;
+        }
+        route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify(detail)
         });
     });
 
