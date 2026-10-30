@@ -11,6 +11,14 @@
     } from '../lib/folder-prefs.svelte';
     import { ApiError } from '../lib/api';
     import { isHiddenWebmailFolder } from '../lib/contacts';
+    import {
+        folderFavorites,
+        syncFolderFavorites,
+        isFolderFavorite,
+        addFolderFavorite,
+        removeFolderFavorite,
+        reorderFolderFavorite
+    } from '../lib/folder-favorites.svelte';
     import Icon from './Icon.svelte';
     import type { Mailbox, Shortcut } from '../lib/api';
     import type { IconName } from '../lib/icons';
@@ -67,6 +75,18 @@
     }
 
     let tree = $derived(sortRoots(buildFolderTree(ui.mailboxes)));
+    $effect(() => {
+        syncFolderFavorites(ui.mailboxes);
+    });
+
+    let favoriteMailboxes = $derived.by(() => {
+        void folderFavorites.paths;
+        return folderFavorites.paths
+            .map((path) => ui.mailboxes.find((m) => m.path === path))
+            .filter((m): m is Mailbox => !!m && !isHiddenWebmailFolder(m.path));
+    });
+
+    let favDragFrom = $state<number | null>(null);
     // Touch folderPrefs.expanded so the flatten re-runs when the user
     // toggles a row.
     let visibleNodes = $derived.by(() => {
@@ -170,6 +190,11 @@
         } catch (err) {
             showToast('error', err instanceof ApiError ? (err.detail || err.title) : (err as Error).message);
         }
+    }
+    function toggleFavorite(path: string) {
+        closeMenu();
+        if (isFolderFavorite(path)) removeFolderFavorite(path);
+        else addFolderFavorite(path);
     }
     function setEmoji(path: string) {
         closeMenu();
@@ -278,6 +303,37 @@
         if (isAiFolder(node.label)) return { kind: 'lucide', name: 'sparkles' };
         return { kind: 'lucide', name: folderIcon(node.mailbox.specialUse, node.label) as IconName };
     }
+
+    function renderIconForMailbox(path: string, mailbox: Mailbox, label: string) {
+        const custom = folderPrefs.icons[path];
+        if (custom) return { kind: 'emoji' as const, ch: custom };
+        if (isAiFolder(label)) return { kind: 'lucide' as const, name: 'sparkles' as IconName };
+        return { kind: 'lucide' as const, name: folderIcon(mailbox.specialUse, label) as IconName };
+    }
+
+    function favoriteDropHandlers(path: string) {
+        return {
+            ondragover: (e: DragEvent) => {
+                const types = e.dataTransfer?.types;
+                if (!types) return;
+                if (types.includes('application/x-webmail-uids') && onDropMessages) {
+                    e.preventDefault();
+                    e.dataTransfer!.dropEffect = 'move';
+                    dropTargetPath = path;
+                }
+            },
+            ondragleave: () => { if (dropTargetPath === path) dropTargetPath = null; },
+            ondrop: (e: DragEvent) => {
+                e.preventDefault();
+                dropTargetPath = null;
+                const raw = e.dataTransfer?.getData('application/x-webmail-uids');
+                if (!raw || !onDropMessages) return;
+                let uids: number[] = [];
+                try { uids = JSON.parse(raw); } catch { /* malformed */ }
+                if (uids.length && path !== ui.selectedPath) onDropMessages(uids, path);
+            }
+        };
+    }
 </script>
 
 <svelte:window
@@ -320,7 +376,70 @@
     {:else if visibleNodes.length === 0}
         <div class="placeholder muted">No mailboxes</div>
     {:else}
-        <nav>
+        <div class="folder-scroll">
+        {#if favoriteMailboxes.length > 0}
+            <nav class="favorites-nav" aria-label="Favorite folders" data-testid="folder-favorites">
+                <h4 class="nav-section">Favorites</h4>
+                <ul>
+                    {#each favoriteMailboxes as mailbox, favIndex (mailbox.path)}
+                        {@const label = mailbox.path.split(mailbox.delimiter || '/').pop() ?? mailbox.path}
+                        {@const icon = renderIconForMailbox(mailbox.path, mailbox, label)}
+                        <li>
+                            <button
+                                type="button"
+                                class="folder favorite"
+                                class:active={ui.selectedPath === mailbox.path}
+                                class:drop-target={dropTargetPath === mailbox.path}
+                                draggable="true"
+                                onclick={() => onSelect(mailbox.path)}
+                                oncontextmenu={(e) => openMenu(e, mailbox.path)}
+                                ondragstart={(e) => {
+                                    favDragFrom = favIndex;
+                                    e.dataTransfer?.setData('application/x-webmail-fav-index', String(favIndex));
+                                    e.dataTransfer!.effectAllowed = 'move';
+                                }}
+                                ondragover={(e) => {
+                                    if (e.dataTransfer?.types.includes('application/x-webmail-fav-index')) {
+                                        e.preventDefault();
+                                        e.dataTransfer!.dropEffect = 'move';
+                                    }
+                                    favoriteDropHandlers(mailbox.path).ondragover(e);
+                                }}
+                                ondragleave={favoriteDropHandlers(mailbox.path).ondragleave}
+                                ondrop={(e) => {
+                                    e.preventDefault();
+                                    if (e.dataTransfer?.types.includes('application/x-webmail-fav-index')) {
+                                        const favRaw = e.dataTransfer.getData('application/x-webmail-fav-index');
+                                        const from = favDragFrom ?? Number.parseInt(favRaw, 10);
+                                        if (Number.isFinite(from) && from !== favIndex) {
+                                            reorderFolderFavorite(from, favIndex);
+                                        }
+                                        favDragFrom = null;
+                                        return;
+                                    }
+                                    favoriteDropHandlers(mailbox.path).ondrop(e);
+                                }}
+                                data-testid={`favorite-${mailbox.path}`}
+                            >
+                                <span class="folder-icon">
+                                    {#if icon.kind === 'emoji'}
+                                        <span class="emoji" aria-hidden="true">{icon.ch}</span>
+                                    {:else}
+                                        <Icon name={icon.name} size={15} />
+                                    {/if}
+                                </span>
+                                <span class="name truncate">{prettyFolder(label)}</span>
+                                {#if typeof mailbox.unseen === 'number' && mailbox.unseen > 0}
+                                    <span class="count" aria-label={`${mailbox.unseen} unread`}>{mailbox.unseen}</span>
+                                {/if}
+                            </button>
+                        </li>
+                    {/each}
+                </ul>
+            </nav>
+        {/if}
+        <nav class="all-folders-nav" aria-label="All folders">
+            <h4 class="nav-section">Folders</h4>
             <ul>
                 {#each visibleNodes as node (node.path)}
                     {@const icon = renderIcon(node)}
@@ -442,6 +561,7 @@
                 {/each}
             </ul>
         </nav>
+        </div>
     {/if}
 
     {#if scList.length > 0}
@@ -599,6 +719,10 @@
         <li><button type="button" role="menuitem" onclick={() => setEmoji(menu!.path)}>
             <Icon name="palette" size={12} /> Custom icon (emoji)
         </button></li>
+        <li><button type="button" role="menuitem" onclick={() => toggleFavorite(menu!.path)} data-testid="folder-favorite-toggle">
+            <Icon name="star" size={12} />
+            {isFolderFavorite(menu!.path) ? 'Remove from Favorites' : 'Add to Favorites'}
+        </button></li>
         {#if isAiSuggestAvailable()}
             {@const target = visibleNodes.find((n) => n.path === menu!.path)}
             {#if target}
@@ -683,6 +807,34 @@
     nav {
         flex: 1;
         overflow-y: auto;
+        min-height: 0;
+    }
+    .favorites-nav {
+        flex: 0 0 auto;
+        overflow: visible;
+        padding-bottom: 4px;
+        margin-bottom: 4px;
+        border-bottom: 1px solid var(--border-subtle);
+    }
+    .all-folders-nav {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+    }
+    .folder.favorite {
+        padding-left: 10px;
+    }
+    .folder-scroll {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        overflow: hidden;
+    }
+    .folder-scroll nav ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
     }
     nav ul {
         list-style: none;

@@ -13,7 +13,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 | Outlook.com area | Today | Gap severity |
 |------------------|-------|--------------|
 | **App chrome / command bar** | Outlook skin default (`skins.svelte.ts`), top search, account menu, app rail (Mail / Calendar / AI / Drive) | Medium: rail is broader than OWA; unify launcher later |
-| **Folder pane** | `Sidebar.svelte` tree, drag-drop move, shortcuts row | Medium: no Favorites pin list separate from tree; no groups |
+| **Folder pane** | `Sidebar.svelte` tree, **Favorites** pin list, drag-drop move, shortcuts row | Medium: no folder groups |
 | **Message list** | `MessageList.svelte`, density, filters (All/Unread/Starred/Attachments), optional AI sort | Medium: no quick categories/colour tags |
 | **Focused / Other** | `focused-inbox.ts` + INBOX tabs | Low–medium: optional AI refinement later |
 | **Reading pane** | `MessageDetail.svelte`, reply/forward, conversation stack when grouped | Low–medium: richer HTML parity; pane position done (slice 3) |
@@ -34,7 +34,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 1. **Focused / Other inbox tabs** on INBOX (deterministic rules; optional AI refinement later) — **slice 1 (done)**.
 2. **Reading-pane conversation view**: stack thread messages in `MessageDetail` when `groupThreads` is on — **slice 2 (done)**.
 3. **Reading pane layout** setting: right (default) / bottom / hidden (OWA “Reading pane”) — **slice 3 (this PR)**.
-4. **Favorites** above folder tree (pinned folders, localStorage).
+4. **Favorites** above folder tree (pinned folders, localStorage) — **slice 4 (this PR)**.
 
 ### P1 — Search & triage
 
@@ -83,7 +83,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 3 (implemented in this PR)
+## Slice 3 (done)
 
 - **`webmail/src/lib/reading-pane-layout.ts`**: layout type, sanitise, keyboard chords (Alt+Shift+R/B/H).
 - **`settings.readingPaneLayout`**: persisted `right` | `bottom` | `hidden` (default right).
@@ -94,9 +94,20 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 4 (implemented in this PR)
+
+- **`webmail/src/lib/folder-favorites.ts`**: sanitize, OWA default favorites (Inbox / Sent / Drafts), reorder, remap on rename.
+- **`webmail/src/lib/folder-favorites.svelte.ts`**: `webmail.folder-favorites.v1` localStorage persistence.
+- **`Sidebar.svelte`**: **Favorites** section above the folder tree; context menu **Add to / Remove from Favorites**; drag to reorder; message drop targets.
+- **`Layout.svelte`**: keep favorites in sync when folders are renamed or deleted.
+- Tests: unit (`folder-favorites.test.mjs`) + Playwright (`outlook-folder-favorites.spec.ts`) against API mocks.
+- Screenshots: `webmail/docs/assets/outlook-slice4/32-folder-favorites-default.png`, `33-folder-favorites-custom.png`.
+
+---
+
 ## Next planned slice
 
-**Favorites** above folder tree (pinned folders, localStorage), matching OWA’s Favorites section.
+**Natural-language search** (opt-in when AI + user provider configured); tag-syntax search remains the default fallback.
 
 ---
 
