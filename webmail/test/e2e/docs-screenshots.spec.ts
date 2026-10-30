@@ -18,7 +18,8 @@ const ASSET7 = 'docs/assets/outlook-slice7';
 const ASSET8 = 'docs/assets/outlook-slice8';
 const ASSET9 = 'docs/assets/outlook-slice9';
 const ASSET10 = 'docs/assets/outlook-slice10';
-for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10]) mkdirSync(d, { recursive: true });
+const ASSET11 = 'docs/assets/outlook-slice11';
+for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11]) mkdirSync(d, { recursive: true });
 
 const baseSettings = {
     aiFeatures: false,
@@ -270,6 +271,18 @@ test.describe('docs desktop (1440×900 @2x)', () => {
         await page.getByTestId('ctx-sweep-trigger').hover();
         await expect(page.getByTestId('ctx-sweep-item-keep-latest')).toBeVisible();
         await shot(page, `${ASSET10}/39-sender-sweep-menu.png`);
+    });
+
+    test('quick steps menu with selection', async ({ page }) => {
+        await page.addInitScript((blob) => {
+            localStorage.setItem('webmail.theme', 'light');
+            localStorage.setItem('webmail.settings.v1', blob);
+        }, seedSettings());
+        await login(page);
+        await page.getByTestId('msg-row-check-1001').click();
+        await page.getByTestId('quick-steps-trigger').click();
+        await expect(page.getByTestId('quick-step-done')).toBeVisible();
+        await shot(page, `${ASSET11}/40-quick-steps-menu.png`);
     });
 });
 

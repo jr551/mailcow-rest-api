@@ -14,7 +14,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 |------------------|-------|--------------|
 | **App chrome / command bar** | Outlook skin default (`skins.svelte.ts`), top search, account menu, app rail (Mail / Calendar / AI / Drive) | Medium: rail is broader than OWA; unify launcher later |
 | **Folder pane** | `Sidebar.svelte` tree, **Favorites** pin list, drag-drop move, shortcuts row | Medium: no folder groups |
-| **Message list** | `MessageList.svelte`, density, **Outlook Filter / Sort** menus (All/Unread/Flagged/To me/Has files/Mentions), **colour categories**, **pin / snooze** row actions, **Sweep** submenu | Low–medium: quick steps |
+| **Message list** | `MessageList.svelte`, density, **Outlook Filter / Sort** menus, **colour categories**, **pin / snooze**, **Sweep**, **Quick steps** on selection | Low–medium: richer row chrome |
 | **Focused / Other** | `focused-inbox.ts` + INBOX tabs | Low–medium: optional AI refinement later |
 | **Reading pane** | `MessageDetail.svelte`, reply/forward, conversation stack when grouped | Low–medium: richer HTML parity; pane position done (slice 3) |
 | **Conversation view** | List grouping via `threads.ts`; reading-pane stack via `conversation-view.ts` + `ConversationStack.svelte` | Medium: attachments per message in stack; richer HTML parity |
@@ -45,9 +45,9 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ### P2 — Compose & handling
 
-8. Scheduled send, undo send window, explicit Save draft UX.
-9. **Sweep** one-click on message row (align with Settings → Sweep) — **slice 10 (this PR)**.
-10. Quick Steps (templated multi-action).
+9. **Sweep** one-click on message row (align with Settings → Sweep) — **slice 10 (done in #97)**.
+10. **Quick Steps** templated multi-action shortcuts on selected mail — **slice 11 (this PR)**.
+11. Scheduled send, undo send window, explicit Save draft UX.
 
 ### P3 — AI (opt-in only)
 
@@ -157,13 +157,23 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 10 (this PR)
+## Slice 10 (done)
 
 - **`webmail/src/lib/message-sender-sweep.ts`**: OWA **Sweep** actions (delete all / keep latest / archive all) scoped to the current folder via `from:` search.
 - **`message-sender-sweep-fetch.ts`**: loads matches with `listMessages` + `from:` token before selection.
 - **`MessageList.svelte`**: **Sweep** context submenu on rows with a From address; bulk move through existing `bulkMove` helper.
 - Tests: unit (`message-sender-sweep.test.mjs`) + Playwright (`outlook-sender-sweep.spec.ts`) against API mocks (search + move routes in `fixtures.ts`).
 - Screenshot: `webmail/docs/assets/outlook-slice10/39-sender-sweep-menu.png`.
+
+---
+
+## Slice 11 (this PR)
+
+- **`webmail/src/lib/message-quick-steps.ts`**: built-in OWA-style steps (**Done**, **Mark read & flag**, **Move to Junk**, **Move to Deleted Items**) as ordered multi-actions.
+- **`message-quick-steps.svelte.ts`**: `webmail.message-quick-steps.v1` enabled-step persistence.
+- **`MessageList.svelte`**: **Quick steps** dropdown in the list toolbar when one or more rows are selected; runs `modifyFlags` + `bulkMove` in sequence.
+- Tests: unit (`message-quick-steps.test.mjs`) + Playwright (`outlook-quick-steps.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice11/40-quick-steps-menu.png`.
 
 ---
 

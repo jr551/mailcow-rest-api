@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { tick, untrack } from 'svelte';
+    import { tick, untrack, onMount } from 'svelte';
     import { ui, toggleSelected, clearSelection } from '../lib/store.svelte';
     import { formatDate, senderShort, isTrackingEmail, isNotificationMessage, isSmsMessage } from '../lib/format';
     import { capabilities } from '../lib/settings.svelte';
@@ -44,6 +44,12 @@
         type SenderSweepAction
     } from '../lib/message-sender-sweep';
     import { resolveSenderSweepTargets } from '../lib/message-sender-sweep-fetch';
+    import {
+        quickStepById,
+        resolveQuickStepMovePath,
+        quickStepMoveLabel
+    } from '../lib/message-quick-steps';
+    import { hydrateQuickStepsFromStorage, quickStepsCatalog } from '../lib/message-quick-steps.svelte';
     import { authState } from '../lib/auth.svelte';
     import { getCachedScan } from '../lib/phishing-scan';
     import Icon from './Icon.svelte';
@@ -1294,6 +1300,10 @@
 
     let filterMenuOpen = $state(false);
     let sortMenuOpen = $state(false);
+    let quickStepsMenuOpen = $state(false);
+    let quickStepBusy = $state(false);
+
+    onMount(() => hydrateQuickStepsFromStorage());
 
     function pickListFilter(f: ListFilter) {
         setListFilter(f);
@@ -1309,6 +1319,77 @@
         const t = e.target as HTMLElement | null;
         if (!t?.closest('[data-testid=quick-filter-menu-wrap]')) filterMenuOpen = false;
         if (!t?.closest('[data-testid=quick-sort-menu-wrap]')) sortMenuOpen = false;
+        if (!t?.closest('[data-testid=quick-steps-menu-wrap]')) quickStepsMenuOpen = false;
+    }
+
+    async function runQuickStep(stepId: string) {
+        const step = quickStepById(stepId);
+        if (!step || quickStepBusy || ui.selected.size === 0) return;
+        quickStepsMenuOpen = false;
+        quickStepBusy = true;
+        const sel = Array.from(ui.selected);
+        const path = ui.selectedPath;
+        const movedUids = new Set<number>();
+        try {
+            for (const action of step.actions) {
+                if (action.type === 'mark-read' || action.type === 'mark-unread') {
+                    for (const uid of sel) {
+                        if (movedUids.has(uid)) continue;
+                        try {
+                            const r = await modifyFlags(
+                                path,
+                                uid,
+                                action.type === 'mark-read' ? { add: ['\\Seen'] } : { remove: ['\\Seen'] }
+                            );
+                            const li = ui.messages.find((m) => m.uid === uid);
+                            if (li) li.flags = r.flags;
+                        } catch { /* skip */ }
+                    }
+                } else if (action.type === 'flag' || action.type === 'unflag') {
+                    for (const uid of sel) {
+                        if (movedUids.has(uid)) continue;
+                        try {
+                            const r = await modifyFlags(
+                                path,
+                                uid,
+                                action.type === 'flag' ? { add: ['\\Flagged'] } : { remove: ['\\Flagged'] }
+                            );
+                            const li = ui.messages.find((m) => m.uid === uid);
+                            if (li) li.flags = r.flags;
+                        } catch { /* skip */ }
+                    }
+                } else if (action.type === 'move') {
+                    const dest = resolveQuickStepMovePath(action.target, ui.mailboxes);
+                    if (!dest) {
+                        showToast('error', `No ${quickStepMoveLabel(action.target)} folder found.`);
+                        return;
+                    }
+                    const active = sel.filter((uid) => !movedUids.has(uid));
+                    if (active.length === 0) continue;
+                    const items = active.map((uid) => ({ path, uid }));
+                    const run = startBulkProgress(step.label, items.length);
+                    try {
+                        const r = await bulkMove(items, dest, (done, _total, failed) =>
+                            reportBulkProgress(run, done, failed)
+                        );
+                        endBulkProgress(run);
+                        for (const item of r.movedItems) movedUids.add(item.uid);
+                        ui.messages = ui.messages.filter((m) => !movedUids.has(m.uid));
+                    } catch {
+                        endBulkProgress(run, 0);
+                        showToast('error', 'Quick step failed while moving mail.');
+                        return;
+                    }
+                }
+            }
+            ui.selected = new Set(sel.filter((uid) => !movedUids.has(uid)));
+            showToast(
+                'success',
+                `${step.label} applied to ${sel.length} message${sel.length === 1 ? '' : 's'}.`
+            );
+        } finally {
+            quickStepBusy = false;
+        }
     }
 
     // Slow-load detector. Quick loads (cached / cache-warm IMAP folders)
@@ -1523,6 +1604,42 @@
                     </ul>
                 {/if}
             </div>
+            {#if ui.selected.size > 0}
+                <div class="quick-menu-wrap" data-testid="quick-steps-menu-wrap">
+                    <button
+                        type="button"
+                        class="chip quick-menu-trigger"
+                        class:active={quickStepsMenuOpen}
+                        aria-haspopup="menu"
+                        aria-expanded={quickStepsMenuOpen}
+                        disabled={quickStepBusy}
+                        onclick={() => {
+                            filterMenuOpen = false;
+                            sortMenuOpen = false;
+                            quickStepsMenuOpen = !quickStepsMenuOpen;
+                        }}
+                        data-testid="quick-steps-trigger"
+                    >
+                        <Icon name="wand" size={14} />
+                        <span>Quick steps</span>
+                        <Icon name="chevronDown" size={12} />
+                    </button>
+                    {#if quickStepsMenuOpen}
+                        <ul class="quick-menu-panel" role="menu" data-testid="quick-steps-menu">
+                            {#each quickStepsCatalog() as step (step.id)}
+                                <li role="none">
+                                    <button
+                                        type="button"
+                                        role="menuitem"
+                                        onclick={() => runQuickStep(step.id)}
+                                        data-testid={`quick-step-${step.id}`}
+                                    >{step.label}</button>
+                                </li>
+                            {/each}
+                        </ul>
+                    {/if}
+                </div>
+            {/if}
         </div>
 
         {#if settings.aiFeatures && settings.listFilter === 'ai-sorted' && aiRankings.length > 0 && ui.messagesTotal > 0}

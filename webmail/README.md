@@ -95,6 +95,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Sender sweep menu](docs/assets/outlook-slice10/39-sender-sweep-menu.png)
 
+- **Quick steps** — select one or more messages (row checkbox) to show **Quick steps** beside Filter/Sort: **Done** (read + archive), **Mark read & flag**, **Move to Junk**, **Move to Deleted Items**. Each step runs its actions in order via IMAP flags and bulk move.
+
+![Quick steps menu](docs/assets/outlook-slice11/40-quick-steps-menu.png)
+
 ## Keyboard shortcuts (mail)
 
 Global shortcuts are listed under **Settings → General → Keyboard shortcuts** (press **?** in the inbox for the same list). Reading-pane placement:
