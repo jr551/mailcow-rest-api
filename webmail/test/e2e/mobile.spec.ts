@@ -21,7 +21,7 @@ test.describe('mobile webmail', () => {
         await expect(page.locator('.mheader h1:has-text("INBOX")')).toBeVisible();
 
         // Message rows appear
-        await expect(page.locator('.msg-row')).toHaveCount(18);
+        await expect(page.locator('.msg-row')).toHaveCount(20);
 
         // Unread styling: first message has a blue dot
         const firstRow = page.locator('.msg-row').first();
@@ -133,13 +133,13 @@ test.describe('mobile webmail', () => {
         await page.click('button:has-text("Sign in")');
 
         await page.locator('.segment:has-text("Unread")').click();
-        await expect(page.locator('.msg-row')).toHaveCount(6);
+        await expect(page.locator('.msg-row')).toHaveCount(7);
 
         await page.locator('.segment:has-text("Starred")').click();
         await expect(page.locator('.msg-row')).toHaveCount(2);
 
         await page.locator('.segment:has-text("All")').click();
-        await expect(page.locator('.msg-row')).toHaveCount(18);
+        await expect(page.locator('.msg-row')).toHaveCount(20);
     });
 
     test('search filters messages', async ({ page }) => {

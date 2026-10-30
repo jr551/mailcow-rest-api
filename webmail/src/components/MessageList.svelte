@@ -5,9 +5,18 @@
     import { capabilities } from '../lib/settings.svelte';
     import Avatar from './Avatar.svelte';
     import VipBadge from './VipBadge.svelte';
-    import { settings, setListFilter, setInboxTab, setReadingPaneLayout, isVipAddress, type ListFilter } from '../lib/settings.svelte';
+    import { settings, setListFilter, setListSort, setInboxTab, setReadingPaneLayout, isVipAddress, type ListFilter, type ListSort } from '../lib/settings.svelte';
     import { READING_PANE_LAYOUTS } from '../lib/reading-pane-layout';
     import { filterMessagesByInboxTab } from '../lib/focused-inbox';
+    import {
+        OUTLOOK_FILTER_MENU,
+        OUTLOOK_SORT_MENU,
+        filterMessagesByOutlookFilter,
+        sortMessageList,
+        outlookFilterLabel,
+        listSortLabel
+    } from '../lib/list-quick-filters';
+    import { authState } from '../lib/auth.svelte';
     import { getCachedScan } from '../lib/phishing-scan';
     import Icon from './Icon.svelte';
     import { buildThreads, type Thread } from '../lib/threads';
@@ -289,6 +298,11 @@
         ctxPos = null;
         if (wasOpen && focusInMenu && ctxRow?.isConnected) ctxRow.focus();
         ctxRow = null;
+    }
+
+    function onWindowClick(e: MouseEvent) {
+        onQuickFilterDocClick(e);
+        closeCtx();
     }
 
     /** This menu's own items, minus the submenu's — those have their own
@@ -631,17 +645,18 @@
     // Attachments filter works without a per-row round-trip.
     const filtered = $derived.by(() => {
         const f = settings.listFilter;
-        let list: MessageListItem[];
-        if (f === 'all' || f === 'ai-sorted') list = ui.messages;
-        else if (f === 'unread') list = ui.messages.filter((m) => !m.flags.includes('\\Seen'));
-        else if (f === 'starred') list = ui.messages.filter((m) => m.flags.includes('\\Flagged'));
-        else if (f === 'attachments') list = ui.messages.filter((m) => !!m.hasAttachments);
-        else list = ui.messages;
+        const userEmail = authState.activeUser ?? '';
+        let list = filterMessagesByOutlookFilter(ui.messages, f, { userEmail });
 
         if (showInboxTabs) {
             list = filterMessagesByInboxTab(list, settings.inboxTab, { isVip: isVipAddress });
         }
         return list;
+    });
+
+    const sortedFiltered = $derived.by(() => {
+        if (settings.listFilter === 'ai-sorted') return filtered;
+        return sortMessageList(filtered, settings.listSort);
     });
 
     // A message the active filter hides must not stay selected: BulkBar acts
@@ -660,8 +675,8 @@
     // which makes the rendering loop identical to the un-grouped case.
     const baseThreads = $derived(
         settings.groupThreads
-            ? buildThreads(filtered)
-            : filtered.map((m) => ({
+            ? buildThreads(sortedFiltered)
+            : sortedFiltered.map((m) => ({
                 id: `m:${m.uid}`,
                 messages: [m],
                 latest: m,
@@ -957,15 +972,9 @@
         return more > 0 ? `${names.join(', ')} +${more}` : names.join(', ');
     }
 
-    // AI sort lives as a magic-style button next to "All", not as a chip
-    // in the main filter strip — keeps it obviously special and makes
-    // room for a future settings popover (per-user prefs).
-    const FILTERS: { value: ListFilter; label: string }[] = [
-        { value: 'all', label: 'All' },
-        { value: 'unread', label: 'Unread' },
-        { value: 'starred', label: 'Starred' },
-        { value: 'attachments', label: 'Attachments' }
-    ];
+    // AI sort lives as a magic-style button next to the Filter menu — keeps
+    // it obviously special. Filter chips became an Outlook-style Filter menu
+    // (slice 6).
 
     function rankingFor(uid: number): InboxSortRanking | null {
         return aiRankings.find((r) => r.uid === uid) ?? null;
@@ -1150,6 +1159,25 @@
         && (ui.selectedPath || '').toUpperCase() === 'INBOX'
     );
 
+    let filterMenuOpen = $state(false);
+    let sortMenuOpen = $state(false);
+
+    function pickListFilter(f: ListFilter) {
+        setListFilter(f);
+        filterMenuOpen = false;
+    }
+
+    function pickListSort(s: ListSort) {
+        setListSort(s);
+        sortMenuOpen = false;
+    }
+
+    function onQuickFilterDocClick(e: MouseEvent) {
+        const t = e.target as HTMLElement | null;
+        if (!t?.closest('[data-testid=quick-filter-menu-wrap]')) filterMenuOpen = false;
+        if (!t?.closest('[data-testid=quick-sort-menu-wrap]')) sortMenuOpen = false;
+    }
+
     // Slow-load detector. Quick loads (cached / cache-warm IMAP folders)
     // shouldn't flash an overlay — only show it after ~280ms of waiting,
     // long enough that the user has registered the folder switch and
@@ -1298,15 +1326,71 @@
                 <span>{allSelected ? `${ui.selected.size} selected` : 'Select all'}</span>
             </button>
         {/if}
-        {#each FILTERS as f (f.value)}
-            <button
-                type="button"
-                class="chip"
-                class:active={settings.listFilter === f.value}
-                onclick={() => setListFilter(f.value)}
-                data-testid={`filter-${f.value}`}
-            >{f.label}</button>
-        {/each}
+        <div class="quick-filter-bar" data-testid="quick-filter-bar">
+            <div class="quick-menu-wrap" data-testid="quick-filter-menu-wrap">
+                <button
+                    type="button"
+                    class="chip quick-menu-trigger"
+                    class:active={settings.listFilter !== 'all' && settings.listFilter !== 'ai-sorted'}
+                    aria-haspopup="menu"
+                    aria-expanded={filterMenuOpen}
+                    onclick={() => { sortMenuOpen = false; filterMenuOpen = !filterMenuOpen; }}
+                    data-testid="quick-filter-trigger"
+                >
+                    <Icon name="filter" size={14} />
+                    <span>Filter: {outlookFilterLabel(settings.listFilter)}</span>
+                    <Icon name="chevronDown" size={12} />
+                </button>
+                {#if filterMenuOpen}
+                    <ul class="quick-menu-panel" role="menu" data-testid="quick-filter-menu">
+                        {#each OUTLOOK_FILTER_MENU as f (f.value)}
+                            <li role="none">
+                                <button
+                                    type="button"
+                                    role="menuitemradio"
+                                    class:active={settings.listFilter === f.value}
+                                    aria-checked={settings.listFilter === f.value}
+                                    onclick={() => pickListFilter(f.value)}
+                                    data-testid={`filter-${f.value}`}
+                                >{f.label}</button>
+                            </li>
+                        {/each}
+                    </ul>
+                {/if}
+            </div>
+            <div class="quick-menu-wrap" data-testid="quick-sort-menu-wrap">
+                <button
+                    type="button"
+                    class="chip quick-menu-trigger"
+                    class:active={settings.listSort !== 'date-desc'}
+                    aria-haspopup="menu"
+                    aria-expanded={sortMenuOpen}
+                    disabled={settings.listFilter === 'ai-sorted'}
+                    onclick={() => { filterMenuOpen = false; sortMenuOpen = !sortMenuOpen; }}
+                    data-testid="quick-sort-trigger"
+                >
+                    <Icon name="arrowUpDown" size={14} />
+                    <span>Sort: {listSortLabel(settings.listSort)}</span>
+                    <Icon name="chevronDown" size={12} />
+                </button>
+                {#if sortMenuOpen}
+                    <ul class="quick-menu-panel" role="menu" data-testid="quick-sort-menu">
+                        {#each OUTLOOK_SORT_MENU as s (s.value)}
+                            <li role="none">
+                                <button
+                                    type="button"
+                                    role="menuitemradio"
+                                    class:active={settings.listSort === s.value}
+                                    aria-checked={settings.listSort === s.value}
+                                    onclick={() => pickListSort(s.value)}
+                                    data-testid={`sort-${s.value}`}
+                                >{s.label}</button>
+                            </li>
+                        {/each}
+                    </ul>
+                {/if}
+            </div>
+        </div>
 
         {#if settings.aiFeatures && settings.listFilter === 'ai-sorted' && aiRankings.length > 0 && ui.messagesTotal > 0}
             <span class="cat-quick-spacer" aria-hidden="true"></span>
@@ -1509,8 +1593,16 @@
             <p>
                 {#if settings.listFilter === 'attachments'}
                     No messages with attachments here.
+                {:else if settings.listFilter === 'to-me'}
+                    No messages addressed to you here.
+                {:else if settings.listFilter === 'mentions'}
+                    No messages mentioning you here.
+                {:else if settings.listFilter === 'starred'}
+                    No flagged messages here.
+                {:else if settings.listFilter === 'unread'}
+                    No unread messages here.
                 {:else}
-                    No {settings.listFilter} messages here.
+                    No messages match this filter.
                 {/if}
             </p>
             <button type="button" class="btn btn-ghost" onclick={() => setListFilter('all')}>Show all</button>
@@ -1889,7 +1981,7 @@
      <svelte:window> per component, so this shares the element that already
      handled click/right-click dismissal. -->
 <svelte:window
-    onclick={closeCtx}
+    onclick={onWindowClick}
     oncontextmenu={(e) => {
         if (ctx && !(e.target as HTMLElement)?.closest?.('.row')) closeCtx();
     }}
@@ -2268,6 +2360,62 @@
         scrollbar-width: none;
     }
     .filter-chips::-webkit-scrollbar { display: none; }
+
+    .quick-filter-bar {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-shrink: 0;
+    }
+    .quick-menu-wrap {
+        position: relative;
+    }
+    .quick-menu-trigger {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        max-width: 220px;
+        white-space: nowrap;
+    }
+    .quick-menu-trigger span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .quick-menu-panel {
+        position: absolute;
+        top: calc(100% + 4px);
+        left: 0;
+        z-index: 40;
+        min-width: 196px;
+        margin: 0;
+        padding: 4px;
+        list-style: none;
+        border-radius: 8px;
+        border: 1px solid var(--border-subtle);
+        background: var(--bg-elevated);
+        box-shadow: var(--shadow-lg, 0 8px 24px rgba(0, 0, 0, 0.18));
+    }
+    .quick-menu-panel button {
+        width: 100%;
+        text-align: left;
+        border: none;
+        background: transparent;
+        border-radius: 6px;
+        padding: 7px 10px;
+        font: inherit;
+        font-size: 12.5px;
+        color: var(--text-primary);
+        cursor: pointer;
+    }
+    .quick-menu-panel button:hover,
+    .quick-menu-panel button:focus-visible {
+        background: var(--bg-hover);
+        outline: none;
+    }
+    .quick-menu-panel button.active {
+        color: var(--accent-text);
+        background: color-mix(in srgb, var(--accent) 16%, transparent);
+    }
 
     /* Background-crawl progress strip — sits under the chip row while the
      * crawler is paging through the rest of the mailbox to satisfy a

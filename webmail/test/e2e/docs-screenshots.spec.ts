@@ -13,7 +13,8 @@ const ASSET1 = 'docs/assets/outlook-slice1';
 const ASSET2 = 'docs/assets/outlook-slice2';
 const ASSET3 = 'docs/assets/outlook-slice3';
 const ASSET5 = 'docs/assets/outlook-slice5';
-for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5]) mkdirSync(d, { recursive: true });
+const ASSET6 = 'docs/assets/outlook-slice6';
+for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6]) mkdirSync(d, { recursive: true });
 
 const baseSettings = {
     aiFeatures: false,
@@ -205,6 +206,17 @@ test.describe('docs desktop (1440×900 @2x)', () => {
         await page.getByTestId('search-input').fill('invoices from acme billing');
         await expect(page.getByTestId('search-nl-hint')).toContainText('from:billing@acme.example', { timeout: 8000 });
         await shot(page, `${ASSET5}/34-nl-search-hint.png`);
+    });
+
+    test('quick filter bar menu', async ({ page }) => {
+        await page.addInitScript((blob) => {
+            localStorage.setItem('webmail.theme', 'dark');
+            localStorage.setItem('webmail.settings.v1', blob);
+        }, seedSettings());
+        await login(page);
+        await page.getByTestId('quick-filter-trigger').click();
+        await expect(page.getByTestId('quick-filter-menu')).toBeVisible();
+        await shot(page, `${ASSET6}/35-quick-filter-menu-open.png`);
     });
 });
 

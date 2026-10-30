@@ -27,11 +27,22 @@ export interface LlmConfig {
 }
 
 export type Density = 'comfortable' | 'compact';
-export type ListFilter = 'all' | 'unread' | 'starred' | 'attachments' | 'ai-sorted';
+export type { OutlookListFilter as ListFilter, ListSort } from './list-quick-filters';
+import type { OutlookListFilter as ListFilter, ListSort } from './list-quick-filters';
 export type { InboxTab } from './focused-inbox';
 import type { InboxTab } from './focused-inbox';
 export type { ReadingPaneLayout } from './reading-pane-layout';
 import { sanitizeReadingPaneLayout, type ReadingPaneLayout } from './reading-pane-layout';
+
+function sanitizeListFilter(raw: unknown): ListFilter {
+    const allowed: ListFilter[] = ['all', 'unread', 'starred', 'attachments', 'to-me', 'mentions', 'ai-sorted'];
+    return allowed.find((f) => f === raw) ?? 'all';
+}
+
+function sanitizeListSort(raw: unknown): ListSort {
+    const allowed: ListSort[] = ['date-desc', 'date-asc', 'from-asc', 'from-desc', 'subject-asc', 'subject-desc', 'size-desc', 'flagged'];
+    return allowed.find((s) => s === raw) ?? 'date-desc';
+}
 
 export interface Settings {
     llm: LlmConfig;
@@ -53,6 +64,8 @@ export interface Settings {
     aiFeatures: boolean;
     density: Density;
     listFilter: ListFilter;
+    /** Outlook Filter menu sort order (client-side on loaded page). */
+    listSort: ListSort;
     /** INBOX-only tab: Focused vs Other (Outlook parity). Default Focused. */
     inboxTab: InboxTab;
     /** Reading pane placement — right (default), bottom, or hidden (flyout when opened). */
@@ -233,7 +246,8 @@ export function sanitizeSettings(raw: unknown): Settings {
         useCustomLlm: !!parsed.useCustomLlm,
         aiFeatures: parsed.aiFeatures === true,
         density: parsed.density === 'compact' ? 'compact' : 'comfortable',
-        listFilter: (['all', 'unread', 'starred', 'attachments', 'ai-sorted'] as const).find((f) => f === parsed.listFilter) ?? 'all',
+        listFilter: sanitizeListFilter(parsed.listFilter),
+        listSort: sanitizeListSort(parsed.listSort),
         inboxTab: parsed.inboxTab === 'other' ? 'other' : 'focused',
         readingPaneLayout: sanitizeReadingPaneLayout(parsed.readingPaneLayout),
         aiSystemPrompt: str(parsed.aiSystemPrompt),
@@ -457,6 +471,11 @@ export function setDensity(d: Density) {
 
 export function setListFilter(f: ListFilter) {
     state.listFilter = f;
+    persist(state);
+}
+
+export function setListSort(sort: ListSort) {
+    state.listSort = sanitizeListSort(sort);
     persist(state);
 }
 
