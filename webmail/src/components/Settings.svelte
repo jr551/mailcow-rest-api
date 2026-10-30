@@ -4180,6 +4180,15 @@
                 </div>
                 <div class="form-row">
                     <div class="row-text">
+                        <strong>Message links</strong>
+                        <span class="muted">
+                            Use <strong>Copy link</strong> in the reading pane to share a URL like
+                            <code>#mail?folder=INBOX&amp;uid=…</code>. Opening that link (or bookmarking it) returns to the same folder and message.
+                        </span>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="row-text">
                         <strong>List density</strong>
                         <span class="muted">Comfortable shows avatars + subjects on two lines. Compact packs ~2× more rows in the same height.</span>
                     </div>

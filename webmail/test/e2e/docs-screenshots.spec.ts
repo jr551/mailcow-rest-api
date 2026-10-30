@@ -23,8 +23,9 @@ const ASSET12 = 'docs/assets/outlook-slice12';
 const ASSET13 = 'docs/assets/outlook-slice13';
 const ASSET14 = 'docs/assets/outlook-slice14';
 const ASSET15 = 'docs/assets/outlook-slice15';
+const ASSET16 = 'docs/assets/outlook-slice16';
 const ASSET17 = 'docs/assets/outlook-slice17';
-for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET17]) mkdirSync(d, { recursive: true });
+for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17]) mkdirSync(d, { recursive: true });
 
 const baseSettings = {
     aiFeatures: false,
@@ -402,6 +403,19 @@ test.describe('docs desktop (1440×900 @2x)', () => {
         await page.keyboard.type('Draft body for screenshot.');
         await expect(page.getByTestId('compose-save-draft')).toBeVisible();
         await shot(page, `${ASSET14}/43-save-draft-compose.png`);
+    });
+
+    test('slice16 mail deep link reading pane', async ({ page }) => {
+        await page.addInitScript((blob) => {
+            localStorage.setItem('webmail.theme', 'light');
+            localStorage.setItem('webmail.settings.v1', blob);
+        }, seedSettings());
+        await login(page);
+        await page.goto('/webmail/#mail?folder=INBOX&uid=1001');
+        await page.waitForSelector('[data-testid=shell]');
+        await expect(page.getByTestId('detail-subject')).toBeVisible();
+        await expect(page.getByTestId('copy-message-link-btn')).toBeVisible();
+        await shot(page, `${ASSET16}/45-mail-deep-link.png`);
     });
 
     test('slice17 skip link focused', async ({ page }) => {
