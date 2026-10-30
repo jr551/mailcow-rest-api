@@ -31,6 +31,7 @@
     import type { Attachment, MessageDetail } from '../lib/api';
     import MenuSubmenu, { type SubmenuItem } from './MenuSubmenu.svelte';
     import ConversationStack from './ConversationStack.svelte';
+    import { copyMailDeepLinkToClipboard } from '../lib/mail-deep-link';
 
     interface Props {
         onReply: (replyTo: MessageDetail) => void;
@@ -470,6 +471,14 @@
         } finally {
             headersLoading = false;
         }
+    }
+
+    async function copyMessageLink() {
+        const uid = ui.selectedUid;
+        const folder = ui.selectedPath;
+        if (uid == null || !folder) return;
+        const ok = await copyMailDeepLinkToClipboard(folder, uid);
+        showToast(ok ? 'success' : 'error', ok ? 'Link copied to clipboard' : 'Could not copy link');
     }
 
     // Compact date for the message header — same heuristics as the list:
@@ -1633,6 +1642,16 @@
                         data-testid="view-headers-btn"
                     >
                         <Icon name="fileText" size={14} />
+                    </button>
+                    <button
+                        type="button"
+                        class="btn btn-ghost"
+                        onclick={copyMessageLink}
+                        title="Copy link to this message"
+                        aria-label="Copy link to this message"
+                        data-testid="copy-message-link-btn"
+                    >
+                        <Icon name="link" size={14} />
                     </button>
                     <div class="more">
                         <button

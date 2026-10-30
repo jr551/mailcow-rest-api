@@ -23,7 +23,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 | **Settings shell** | `Settings.svelte` 3-column Outlook-like modal, 19 sections | Low–medium: content differs |
 | **AI features** | Master switch **`aiFeatures`**; defaults **off** for new profiles; every AI entry point hidden when off | Low — opt-in provider config remains in Settings |
 | **People / VIP** | VIP list in Settings; local address book | Medium vs OWA People app |
-| **Deep links** | Session storage only, no `/mail/...` URLs | Medium |
+| **Deep links** | `#mail?folder=…&uid=…` hash URLs + **Copy link** in reading pane | Low–medium: no server-side permalink API yet |
 
 ---
 
@@ -210,7 +210,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 15 (this PR)
+## Slice 15 (done in #102)
 
 - **`webmail/src/lib/compose-popout.ts`**: sessionStorage hand-off, pop-out URL builder, `window.open` helper.
 - **`ComposePopoutShell.svelte`** + **`App.svelte`**: `?composePopout=1&sid=…` route renders compose-only shell.
@@ -221,9 +221,20 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 16 (this PR)
+
+- **`webmail/src/lib/mail-deep-link.ts`**: parse/build `#mail?folder=…&uid=…` hash links; clipboard helper.
+- **`Layout.svelte`**: syncs hash on message selection; applies hash on load and `hashchange`.
+- **`MessageDetail.svelte`**: **Copy link** button in the reading-pane toolbar.
+- **`Settings.svelte`**: General section documents shareable message URLs.
+- Tests: unit (`mail-deep-link.test.mjs`) + Playwright (`outlook-mail-deep-link.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice16/45-mail-deep-link.png`.
+
+---
+
 ## Next planned slice
 
-**Deep links / shareable message URLs**, **dark mode / mobile** polish, or **accessibility** landmarks.
+**Accessibility** landmarks (pane regions, tab order vs OWA), **dark mode / mobile** polish, or opt-in **AI thread summarise**.
 
 ---
 
