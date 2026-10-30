@@ -1121,16 +1121,19 @@ test('filter chips switch between All / Unread / Starred', async ({ page }) => {
     await page.addInitScript(() => localStorage.setItem('webmail.theme', 'dark'));
     await login(page);
     await expect(page.getByTestId('filter-chips')).toBeVisible();
+    await page.getByTestId('quick-filter-trigger').click();
     await page.click('[data-testid=filter-unread]');
     // Only the unread row should remain (the Concierge "Welcome" message).
     await expect(page.getByTestId('msg-row-1001')).toBeVisible();
     await expect(page.getByTestId('msg-row-1000')).not.toBeVisible();
     await page.screenshot({ path: `${SCREEN_DIR}/17-filter-unread.png`, fullPage: true });
 
+    await page.getByTestId('quick-filter-trigger').click();
     await page.click('[data-testid=filter-starred]');
     // Only Sam's "Re: lunch" message has \Flagged in the fixture.
     await expect(page.getByTestId('msg-row-999')).toBeVisible();
 
+    await page.getByTestId('quick-filter-trigger').click();
     await page.click('[data-testid=filter-all]');
     await expect(page.getByTestId('msg-row-1001')).toBeVisible();
     await clickInboxTab(page, 'other');
@@ -1341,6 +1344,7 @@ test('AI Sorted filter buckets humans first, then ranks by danger level with glo
     await page.screenshot({ path: `${SCREEN_DIR}/15-ai-sorted-dark.png`, fullPage: true });
 
     // Switch back to All to verify normal order returns
+    await page.getByTestId('quick-filter-trigger').click();
     await page.getByTestId('filter-all').click();
     const allFirstRow = page.locator('.row[data-testid^="msg-row-"]').first();
     await expect(allFirstRow).toHaveAttribute('data-testid', 'msg-row-1001');

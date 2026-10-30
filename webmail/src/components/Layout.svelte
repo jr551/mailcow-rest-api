@@ -53,6 +53,7 @@
     import { getShortcuts, blockSender as apiBlockSender, bulkDeleteMessages, type Shortcut } from '../lib/api';
     import { shortcutsItems, embeddedShortcut, popupShortcut, safeShortcutUrl } from '../lib/shortcuts-store';
     import { probeCapabilities, settings, setHideSidebar, setReadingPaneLayout } from '../lib/settings.svelte';
+    import { imapFilterToken } from '../lib/list-quick-filters';
     import { translateNaturalLanguageSearch } from '../lib/natural-language-search.client';
     import { looksLikeStructuredMailSearch } from '../lib/natural-language-search';
     import { readingPaneLayoutFromKeyboard } from '../lib/reading-pane-layout';
@@ -517,12 +518,7 @@
     // the one on screen. IMAP can answer all three directly, so the filter
     // rides along with the search and pagination behaves normally.
     function filterToken(): string {
-        switch (settings.listFilter) {
-            case 'unread': return 'is:unread';
-            case 'starred': return 'is:starred';
-            case 'attachments': return 'has:attachment';
-            default: return '';
-        }
+        return imapFilterToken(settings.listFilter, currentUser());
     }
     function effectiveSearch(): string | undefined {
         const parts = [ui.search || '', filterToken()].map((p) => p.trim()).filter(Boolean);
@@ -717,8 +713,9 @@
         void filter; void sizeMode; void search; void path; void scope;
         // The all-folders search runs its own loop and owns the message list.
         if (scope === 'all') { cancelScan(); return; }
-        // unread / starred / attachments are server-side filters now, so
-        // they page like anything else and must not trigger a full crawl.
+        // unread / starred / attachments / to-me / mentions are server-side
+        // filters now, so they page like anything else and must not trigger a
+        // full crawl.
         const needsFullScan = sizeMode === 'unlimited';
         if (!needsFullScan) {
             cancelScan();

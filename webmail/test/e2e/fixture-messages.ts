@@ -220,5 +220,28 @@ export const fixtureMessages: FixtureListMessage[] = [
             to: [{ name: null, address: MOCK_USER }],
             cc: [], messageId: '<promo-fwd@retailer>', inReplyTo: null
         }
+    },
+    {
+        uid: 1020, seq: 19, flags: ['\\Seen'], size: 310,
+        internalDate: '2026-04-28T12:00:00Z',
+        envelope: {
+            date: '2026-04-28T12:00:00Z',
+            subject: 'FYI — loop you in on the thread',
+            from: [{ name: 'Pat Kim', address: 'pat.kim@northwind.example' }],
+            to: [{ name: null, address: 'alex.chen@northwind.example' }],
+            cc: [{ name: null, address: MOCK_USER }],
+            messageId: '<cc-loop@northwind>', inReplyTo: null
+        }
+    },
+    {
+        uid: 1021, seq: 20, flags: [], size: 280,
+        internalDate: '2026-04-28T11:45:00Z',
+        envelope: {
+            date: '2026-04-28T11:45:00Z',
+            subject: '@demo please sign off on the mockups',
+            from: [{ name: 'Jordan Lee', address: 'jordan.lee@studio.example' }],
+            to: [{ name: null, address: MOCK_USER }],
+            cc: [], messageId: '<mention-demo@studio>', inReplyTo: null
+        }
     }
 ];

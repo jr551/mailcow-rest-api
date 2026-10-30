@@ -14,7 +14,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 |------------------|-------|--------------|
 | **App chrome / command bar** | Outlook skin default (`skins.svelte.ts`), top search, account menu, app rail (Mail / Calendar / AI / Drive) | Medium: rail is broader than OWA; unify launcher later |
 | **Folder pane** | `Sidebar.svelte` tree, **Favorites** pin list, drag-drop move, shortcuts row | Medium: no folder groups |
-| **Message list** | `MessageList.svelte`, density, filters (All/Unread/Starred/Attachments), optional AI sort | Medium: no quick categories/colour tags |
+| **Message list** | `MessageList.svelte`, density, **Outlook Filter / Sort** menus (All/Unread/Flagged/To me/Has files/Mentions), optional AI sort | Medium: no quick categories/colour tags |
 | **Focused / Other** | `focused-inbox.ts` + INBOX tabs | Low–medium: optional AI refinement later |
 | **Reading pane** | `MessageDetail.svelte`, reply/forward, conversation stack when grouped | Low–medium: richer HTML parity; pane position done (slice 3) |
 | **Conversation view** | List grouping via `threads.ts`; reading-pane stack via `conversation-view.ts` + `ConversationStack.svelte` | Medium: attachments per message in stack; richer HTML parity |
@@ -38,8 +38,8 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ### P1 — Search & triage
 
-5. **Natural-language search** (only when AI + user provider configured); fallback keeps tag syntax — **slice 5 (this PR)**.
-6. **Quick filter bar** parity (Has files, Mentions me, etc.) where IMAP/search supports it.
+5. **Natural-language search** (only when AI + user provider configured); fallback keeps tag syntax — **slice 5 (done)**.
+6. **Quick filter bar** parity (Filter: All / Unread / Flagged / To me / Has files / Mentions; Sort menu) — **slice 6 (this PR)**.
 7. **Categories / flags** (user-assigned colours) synced via IMAP keywords or local overlay.
 
 ### P2 — Compose & handling
@@ -105,7 +105,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 5 (this PR)
+## Slice 5 (done)
 
 - **`webmail/src/lib/natural-language-search.ts`**: tag-syntax detection, response parsing, sanitization.
 - **`webmail/src/lib/natural-language-search.client.ts`**: opt-in translation via configured provider (`cachedChatCompletion`, scope `nl-search`).
@@ -116,9 +116,19 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 6 (this PR)
+
+- **`webmail/src/lib/list-quick-filters.ts`**: Outlook Filter menu values, To me / Mentions heuristics, Sort comparators, IMAP filter tokens.
+- **`MessageList.svelte`**: **Filter** and **Sort** dropdowns (replaces chip row); `settings.listSort` persisted.
+- **`Layout.svelte`**: server-side search tokens for To me (`to:`) and Mentions (`body:@localpart`).
+- Tests: unit (`list-quick-filters.test.mjs`) + Playwright (`outlook-quick-filter-bar.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice6/35-quick-filter-menu-open.png`.
+
+---
+
 ## Next planned slice
 
-**Quick filter bar** parity (Has files, Mentions me, etc.) where IMAP/search supports it.
+**Categories / flags** (user-assigned colours) synced via IMAP keywords or local overlay.
 
 ---
 

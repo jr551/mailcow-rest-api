@@ -71,6 +71,7 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 - **Reading pane position** — **right** (default), **bottom**, or **hidden** (list full width; opening a message uses a flyout). Change it in **Settings → Mail → Reading pane**, the layout control in the message list header, or with **Alt+Shift+R** (right), **Alt+Shift+B** (bottom), or **Alt+Shift+H** (hidden).
 - **Folder Favorites** — pin common folders above the tree (Inbox / Sent / Drafts by default); reorder and edit via the sidebar context menu.
 - **Natural-language search (opt-in)** — with **AI features** on and a configured provider, enable **Settings → AI → Natural-language search** to translate plain-language header queries into tag syntax (`from:`, `has:attachment`, …). Tag syntax is always available without AI.
+- **Quick filter bar** — Outlook-style **Filter** menu (All, Unread, Flagged, To me, Has files, Mentions me) and **Sort** menu on the message list; IMAP tag tokens for supported filters when paging server-side.
 - **AI features off by default** — new profiles load with **Settings → AI → AI features** off. Turn it on when you want the assistant, AI sort, link safety, compose helpers, and related surfaces. The mail UI is fully usable with AI disabled.
 
 ![Focused inbox tab](docs/assets/outlook-slice1/26-inbox-focused-tab.png)
@@ -78,6 +79,8 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 ![Reading pane at bottom](docs/assets/outlook-slice3/30-reading-pane-bottom.png)
 
 ![Natural-language search hint](docs/assets/outlook-slice5/34-nl-search-hint.png)
+
+![Quick filter menu](docs/assets/outlook-slice6/35-quick-filter-menu-open.png)
 
 ## Keyboard shortcuts (mail)
 
