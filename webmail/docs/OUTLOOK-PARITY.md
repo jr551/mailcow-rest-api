@@ -18,7 +18,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 | **Focused / Other** | `focused-inbox.ts` + INBOX tabs | Low–medium: optional AI refinement later |
 | **Reading pane** | `MessageDetail.svelte`, reply/forward, conversation stack when grouped | Low–medium: richer HTML parity; pane position done (slice 3) |
 | **Conversation view** | List grouping via `threads.ts`; reading-pane stack via `conversation-view.ts` + `ConversationStack.svelte` | Medium: attachments per message in stack; richer HTML parity |
-| **Compose** | `Compose.svelte` + `FloatingPanel.svelte`, TipTap | Medium: no scheduled send, sensitivity labels; **undo send** window (slice 12) |
+| **Compose** | `Compose.svelte` + `FloatingPanel.svelte`, TipTap | Medium: sensitivity labels; **undo send** (slice 12), **scheduled send** (slice 13) |
 | **Search** | Header search + tag syntax; optional **natural-language** translation when AI + provider configured | Medium: no unified People/Files search; no saved searches |
 | **Settings shell** | `Settings.svelte` 3-column Outlook-like modal, 19 sections | Low–medium: content differs |
 | **AI features** | Master switch **`aiFeatures`**; defaults **off** for new profiles; every AI entry point hidden when off | Low — opt-in provider config remains in Settings |
@@ -48,7 +48,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 9. **Sweep** one-click on message row (align with Settings → Sweep) — **slice 10 (done in #97)**.
 10. **Quick Steps** templated multi-action shortcuts on selected mail — **slice 11 (#98)**.
 11. **Undo send** delay with toast — **slice 12 (this PR)**.
-12. Scheduled send, explicit Save draft UX.
+12. Scheduled send, explicit Save draft UX — **scheduled send (slice 13, this PR)**; undo send done in slice 12 (#99).
 
 ### P3 — AI (opt-in only)
 
@@ -178,7 +178,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 12 (this PR)
+## Slice 12 (done in #99)
 
 - **`webmail/src/lib/undo-send.ts`**: undo-send delay sanitization (0–30s, default 5).
 - **`undo-send.svelte.ts`**: queues `sendStub` until the window expires; **Undo** restores compose from a snapshot.
@@ -189,9 +189,19 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 13 (this PR)
+
+- **`webmail/src/lib/scheduled-send.ts`**: OWA-style schedule presets, send-at sanitization (1 minute – 30 days).
+- **`scheduled-send.svelte.ts`**: `webmail.scheduled-sends.v1` local queue; **`Layout.svelte`** flushes due sends via `sendStub`.
+- **`Compose.svelte`**: **Send** split menu → **Schedule send** dialog (presets + datetime picker).
+- Tests: unit (`scheduled-send.test.mjs`) + Playwright (`outlook-scheduled-send.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice13/42-schedule-send-dialog.png`.
+
+---
+
 ## Next planned slice
 
-**Compose pop-out** window parity, **scheduled send**, or **dark mode / mobile** polish.
+**Compose pop-out** window parity, **explicit Save draft UX**, or **dark mode / mobile** polish.
 
 ---
 

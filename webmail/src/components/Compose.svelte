@@ -18,6 +18,15 @@
     import { preSendCheck } from '../lib/pre-send-check';
     import { undoSendEnabled } from '../lib/undo-send';
     import { scheduleUndoSend } from '../lib/undo-send.svelte';
+    import {
+        SCHEDULED_SEND_PRESETS,
+        computePresetSendAt,
+        formatScheduledSendWhen,
+        minScheduledSendAt,
+        sanitizeSendAtMs,
+        type ScheduledSendPresetId
+    } from '../lib/scheduled-send';
+    import { queueScheduledSend } from '../lib/scheduled-send.svelte';
     import RichEditor from './editor/RichEditor.svelte';
     import FloatingPanel from './FloatingPanel.svelte';
     import Icon from './Icon.svelte';
@@ -680,6 +689,16 @@
         };
     });
 
+    onMount(() => {
+        const onDocClick = (e: MouseEvent) => {
+            if (!scheduleMenuOpen) return;
+            const t = e.target as HTMLElement;
+            if (!t.closest('[data-testid=compose-send-split]')) scheduleMenuOpen = false;
+        };
+        document.addEventListener('click', onDocClick);
+        return () => document.removeEventListener('click', onDocClick);
+    });
+
     const title = replyMode === 'forward' ? 'Forward'
         : replyMode === 'replyAll' ? 'Reply all'
         : replyMode === 'reply' ? 'Reply'
@@ -796,23 +815,27 @@
         preCheckRationale = '';
     }
 
-    async function doSend(immediate = false) {
-        if (!to.trim() || !smtpAvailable()) return;
-        sending = true;
+    let scheduleMenuOpen = $state(false);
+    let scheduleDialogOpen = $state(false);
+    let scheduleAtMs = $state(minScheduledSendAt());
+
+    function recordComposeRecipients() {
+        const toList = to.split(',').map((s) => s.trim()).filter(Boolean);
+        const ccList = cc.split(',').map((s) => s.trim()).filter(Boolean);
+        const bccList = bcc.split(',').map((s) => s.trim()).filter(Boolean);
+        for (const addr of [...toList, ...ccList, ...bccList]) {
+            const m = addr.match(/^\s*("?[^"<]*"?)\s*<\s*([^>]+)\s*>\s*$/);
+            if (m) recordContact(m[2], m[1].replace(/^"|"$/g, '').trim() || null);
+            else recordContact(addr);
+        }
+        return { toList, ccList, bccList };
+    }
+
+    function buildSendPayload() {
+        const { toList, ccList, bccList } = recordComposeRecipients();
         const sentSubject = subject.trim() || '(no subject)';
-        try {
-            const toList = to.split(',').map((s) => s.trim()).filter(Boolean);
-            const ccList = cc.split(',').map((s) => s.trim()).filter(Boolean);
-            const bccList = bcc.split(',').map((s) => s.trim()).filter(Boolean);
-            // Harvest every recipient we just typed into the local
-            // address book so the next compose autocomplete picks them
-            // up without us having to wait for an inbound reply.
-            for (const addr of [...toList, ...ccList, ...bccList]) {
-                const m = addr.match(/^\s*("?[^"<]*"?)\s*<\s*([^>]+)\s*>\s*$/);
-                if (m) recordContact(m[2], m[1].replace(/^"|"$/g, '').trim() || null);
-                else recordContact(addr);
-            }
-            const payload = {
+        return {
+            payload: {
                 to: toList,
                 cc: ccList.length ? ccList : undefined,
                 bcc: bccList.length ? bccList : undefined,
@@ -830,14 +853,44 @@
                         content: a.content
                     }))
                     : undefined
-            };
+            },
+            sentSubject,
+            toLabel: toList.join(', ')
+        };
+    }
+
+    function openScheduleDialog() {
+        scheduleMenuOpen = false;
+        scheduleAtMs = minScheduledSendAt();
+        scheduleDialogOpen = true;
+    }
+
+    function applySchedulePreset(id: ScheduledSendPresetId) {
+        scheduleAtMs = computePresetSendAt(id);
+    }
+
+    function confirmScheduleSend() {
+        if (!to.trim() || !smtpAvailable()) return;
+        const sendAtMs = sanitizeSendAtMs(scheduleAtMs);
+        const { payload, sentSubject, toLabel } = buildSendPayload();
+        queueScheduledSend({ sendAtMs, payload, subject: sentSubject, toLabel });
+        scheduleDialogOpen = false;
+        onClose();
+    }
+
+    async function doSend(immediate = false) {
+        if (!to.trim() || !smtpAvailable()) return;
+        sending = true;
+        const { payload, sentSubject, toLabel } = buildSendPayload();
+        const toList = payload.to;
+        try {
             const undoSec = settings.undoSendSeconds;
             if (!immediate && undoSendEnabled(undoSec)) {
                 scheduleUndoSend({
                     seconds: undoSec,
                     payload,
                     sentSubject,
-                    toLabel: toList.join(', '),
+                    toLabel,
                     composeContext: ui.composeContext
                         ? { ...ui.composeContext }
                         : { replyTo: null, mode: replyMode },
@@ -861,7 +914,7 @@
             // Layout.svelte which polls /v1/messages/send/:id/status with
             // backoff and updates the badge as the DSN lands.
             if (r?.messageId) {
-                trackSent({ messageId: r.messageId, subject: sentSubject, to: toList.join(', ') });
+                trackSent({ messageId: r.messageId, subject: sentSubject, to: toLabel });
                 showToast('info', 'Sending… we\'ll let you know when it\'s delivered.');
             } else {
                 showToast('success', 'Message sent');
@@ -885,7 +938,7 @@
     minHeight={420}
     onClose={onClose}
     testId="compose-modal"
-    overlayVisible={sending}
+    overlayVisible={sending || scheduleDialogOpen}
 >
     <!-- autocomplete="off" + the password-manager-ignore data attrs keep
          Bitwarden / 1Password / LastPass from injecting login credentials
@@ -1525,31 +1578,106 @@
                     data-testid="compose-discard"
                     onclick={onClose}
                 >Discard</button>
-                <button
-                    type="submit"
-                    class="btn btn-primary"
-                    onclick={(e) => {
-                        skipReview = e.shiftKey;
-                        const formEl = (e.currentTarget as HTMLButtonElement).closest('[role=dialog]')?.querySelector('form');
-                        if (formEl) (formEl as HTMLFormElement).requestSubmit();
-                    }}
-                    disabled={sending || reviewLoading || !to.trim() || !smtpAvailable()}
-                    title={smtpAvailable() ? (aiAvailable() ? 'Review and send (Shift+Click to skip review)' : 'Send') : 'SMTP not configured on the server'}
-                    data-testid="compose-send"
-                >
-                    {#if sending || reviewLoading}<span class="spinner"></span>{/if}
-                    <Icon name="send" size={14} />
-                    {sending ? 'Sending…'
-                        : reviewLoading ? 'Reviewing…'
-                        : !smtpAvailable() ? 'Save draft'
-                        : aiAvailable() ? 'Review and send'
-                        : 'Send'}
-                </button>
+                <div class="send-split" data-testid="compose-send-split">
+                    <button
+                        type="submit"
+                        class="btn btn-primary send-main"
+                        onclick={(e) => {
+                            skipReview = e.shiftKey;
+                            const formEl = (e.currentTarget as HTMLButtonElement).closest('[role=dialog]')?.querySelector('form');
+                            if (formEl) (formEl as HTMLFormElement).requestSubmit();
+                        }}
+                        disabled={sending || reviewLoading || !to.trim() || !smtpAvailable()}
+                        title={smtpAvailable() ? (aiAvailable() ? 'Review and send (Shift+Click to skip review)' : 'Send') : 'SMTP not configured on the server'}
+                        data-testid="compose-send"
+                    >
+                        {#if sending || reviewLoading}<span class="spinner"></span>{/if}
+                        <Icon name="send" size={14} />
+                        {sending ? 'Sending…'
+                            : reviewLoading ? 'Reviewing…'
+                            : !smtpAvailable() ? 'Save draft'
+                            : aiAvailable() ? 'Review and send'
+                            : 'Send'}
+                    </button>
+                    <button
+                        type="button"
+                        class="btn btn-primary send-caret"
+                        disabled={sending || reviewLoading || !to.trim() || !smtpAvailable()}
+                        aria-expanded={scheduleMenuOpen}
+                        aria-haspopup="menu"
+                        title="Send options"
+                        data-testid="compose-send-menu-btn"
+                        onclick={(e) => {
+                            e.stopPropagation();
+                            scheduleMenuOpen = !scheduleMenuOpen;
+                        }}
+                    >
+                        <Icon name="chevronDown" size={14} />
+                    </button>
+                    {#if scheduleMenuOpen}
+                        <ul class="send-menu" role="menu" data-testid="compose-send-menu">
+                            <li role="none">
+                                <button
+                                    type="button"
+                                    role="menuitem"
+                                    data-testid="compose-schedule-send"
+                                    onclick={() => openScheduleDialog()}
+                                >Schedule send</button>
+                            </li>
+                        </ul>
+                    {/if}
+                </div>
             </div>
         </div>
     {/snippet}
 
     {#snippet overlay()}
+        {#if scheduleDialogOpen}
+            <div class="schedule-backdrop" data-testid="schedule-send-dialog">
+                <div class="schedule-panel" role="dialog" aria-labelledby="schedule-send-title">
+                    <h3 id="schedule-send-title">Schedule send</h3>
+                    <p class="muted small">Message stays on this device until the send time (Outlook-style).</p>
+                    <div class="schedule-presets">
+                        {#each SCHEDULED_SEND_PRESETS as preset (preset.id)}
+                            <button
+                                type="button"
+                                class="btn btn-secondary preset-btn"
+                                data-testid={`schedule-preset-${preset.id}`}
+                                onclick={() => applySchedulePreset(preset.id)}
+                            >{preset.label}</button>
+                        {/each}
+                    </div>
+                    <label class="schedule-datetime">
+                        <span>Date and time</span>
+                        <input
+                            type="datetime-local"
+                            data-testid="schedule-send-datetime"
+                            value={new Date(scheduleAtMs - new Date(scheduleAtMs).getTimezoneOffset() * 60000)
+                                .toISOString()
+                                .slice(0, 16)}
+                            oninput={(e) => {
+                                const v = (e.currentTarget as HTMLInputElement).value;
+                                if (!v) return;
+                                const parsed = new Date(v).getTime();
+                                if (Number.isFinite(parsed)) scheduleAtMs = sanitizeSendAtMs(parsed);
+                            }}
+                        />
+                    </label>
+                    <p class="schedule-when" data-testid="schedule-send-preview">
+                        Sends {formatScheduledSendWhen(scheduleAtMs)}
+                    </p>
+                    <div class="schedule-actions">
+                        <button type="button" class="btn btn-secondary" onclick={() => { scheduleDialogOpen = false; }}>Cancel</button>
+                        <button
+                            type="button"
+                            class="btn btn-primary"
+                            data-testid="schedule-send-confirm"
+                            onclick={() => confirmScheduleSend()}
+                        >Schedule</button>
+                    </div>
+                </div>
+            </div>
+        {/if}
         <div class="send-overlay" data-testid="compose-sending-overlay">
             <span class="spinner" style="width: 28px; height: 28px; border-width: 3px;"></span>
             <span class="send-label">Sending…</span>
@@ -2171,6 +2299,90 @@
         min-width: 0;
     }
     .action-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+    .send-split {
+        position: relative;
+        display: inline-flex;
+        align-items: stretch;
+    }
+    .send-main {
+        border-top-right-radius: 0;
+        border-bottom-right-radius: 0;
+    }
+    .send-caret {
+        border-top-left-radius: 0;
+        border-bottom-left-radius: 0;
+        padding-inline: 10px;
+        border-left: 1px solid color-mix(in srgb, var(--btn-primary-fg) 25%, transparent);
+    }
+    .send-menu {
+        position: absolute;
+        right: 0;
+        bottom: calc(100% + 6px);
+        min-width: 180px;
+        margin: 0;
+        padding: 6px;
+        list-style: none;
+        background: var(--bg-elevated);
+        border: 1px solid var(--border-subtle);
+        border-radius: 8px;
+        box-shadow: var(--shadow-lg);
+        z-index: 20;
+    }
+    .send-menu button {
+        width: 100%;
+        text-align: left;
+        border: none;
+        background: transparent;
+        padding: 8px 10px;
+        border-radius: 6px;
+        color: var(--text-primary);
+        cursor: pointer;
+        font: inherit;
+    }
+    .send-menu button:hover { background: var(--bg-hover); }
+    .schedule-backdrop {
+        position: absolute;
+        inset: 0;
+        background: color-mix(in srgb, var(--bg-base) 55%, transparent);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 30;
+        padding: 24px;
+    }
+    .schedule-panel {
+        width: min(420px, 100%);
+        background: var(--bg-elevated);
+        border: 1px solid var(--border-subtle);
+        border-radius: 12px;
+        padding: 20px;
+        box-shadow: var(--shadow-lg);
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
+    .schedule-panel h3 { margin: 0; font-size: 1.05rem; }
+    .schedule-presets {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+    .preset-btn { font-size: 0.85rem; }
+    .schedule-datetime {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        font-size: 0.9rem;
+    }
+    .schedule-datetime input {
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px solid var(--border-subtle);
+        background: var(--bg-base);
+        color: var(--text-primary);
+    }
+    .schedule-when { margin: 0; font-size: 0.9rem; color: var(--accent-text); }
+    .schedule-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
     .bar-btn {
         display: inline-flex;
         align-items: center;
