@@ -17,7 +17,8 @@ const ASSET6 = 'docs/assets/outlook-slice6';
 const ASSET7 = 'docs/assets/outlook-slice7';
 const ASSET8 = 'docs/assets/outlook-slice8';
 const ASSET9 = 'docs/assets/outlook-slice9';
-for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9]) mkdirSync(d, { recursive: true });
+const ASSET10 = 'docs/assets/outlook-slice10';
+for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10]) mkdirSync(d, { recursive: true });
 
 const baseSettings = {
     aiFeatures: false,
@@ -257,6 +258,18 @@ test.describe('docs desktop (1440×900 @2x)', () => {
         await expect(page.getByTestId('msg-row-1018')).toHaveAttribute('data-pinned', 'true');
         await page.getByTestId('msg-row-1018').hover();
         await shot(page, `${ASSET9}/38-pinned-message-row.png`);
+    });
+
+    test('sender sweep context submenu', async ({ page }) => {
+        await page.addInitScript((blob) => {
+            localStorage.setItem('webmail.theme', 'light');
+            localStorage.setItem('webmail.settings.v1', blob);
+        }, seedSettings());
+        await login(page);
+        await page.getByTestId('msg-row-1017').click({ button: 'right' });
+        await page.getByTestId('ctx-sweep-trigger').hover();
+        await expect(page.getByTestId('ctx-sweep-item-keep-latest')).toBeVisible();
+        await shot(page, `${ASSET10}/39-sender-sweep-menu.png`);
     });
 });
 

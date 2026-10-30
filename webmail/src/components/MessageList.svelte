@@ -36,6 +36,14 @@
         snoozeMessage,
         tickPinSnoozeOverlay
     } from '../lib/message-pin-snooze.svelte';
+    import {
+        senderAddressFromMessage,
+        senderDisplayLabel,
+        senderSweepConfirmText,
+        senderSweepMenuItems,
+        type SenderSweepAction
+    } from '../lib/message-sender-sweep';
+    import { resolveSenderSweepTargets } from '../lib/message-sender-sweep-fetch';
     import { authState } from '../lib/auth.svelte';
     import { getCachedScan } from '../lib/phishing-scan';
     import Icon from './Icon.svelte';
@@ -663,6 +671,73 @@
         playClick();
     }
     const snoozeCtxItems = snoozeSubmenuItems();
+
+    let senderSweepBusy = $state(false);
+
+    async function runSenderSweep(uid: number, action: SenderSweepAction) {
+        if (senderSweepBusy) return;
+        const m = rowOf(uid);
+        if (!m) return;
+        const sender = senderAddressFromMessage(m);
+        if (!sender) {
+            showToast('error', 'No sender address on this message.');
+            return;
+        }
+        const label = senderDisplayLabel(m);
+        senderSweepBusy = true;
+        let targets: MessageListItem[] = [];
+        try {
+            targets = await resolveSenderSweepTargets(ui.selectedPath, sender, action);
+        } catch (err) {
+            showToast('error', `Sweep failed: ${err instanceof Error ? err.message : 'unknown error'}`);
+            senderSweepBusy = false;
+            return;
+        }
+        if (targets.length === 0) {
+            showToast('info', action === 'keep-latest'
+                ? `Only one message from ${label} is in this folder.`
+                : `No messages from ${label} to sweep.`);
+            senderSweepBusy = false;
+            return;
+        }
+        if (!window.confirm(senderSweepConfirmText(action, targets.length, label))) {
+            senderSweepBusy = false;
+            return;
+        }
+        let dest: string | null = null;
+        try {
+            const mboxes = await listMailboxes({ counts: false });
+            dest = action === 'archive-all'
+                ? findArchiveFolder(mboxes)
+                : findTrashFolder(mboxes);
+        } catch { /* handled below */ }
+        if (!dest) {
+            showToast('error', action === 'archive-all'
+                ? 'No Archive folder found.'
+                : 'No Trash folder found.');
+            senderSweepBusy = false;
+            return;
+        }
+        const items = targets.map((t) => ({ path: ui.selectedPath, uid: t.uid }));
+        const progressLabel = action === 'archive-all' ? `Archiving from ${label}` : `Sweeping from ${label}`;
+        const run = startBulkProgress(progressLabel, items.length);
+        try {
+            const r = await bulkMove(items, dest, (done, _total, failed) => reportBulkProgress(run, done, failed));
+            endBulkProgress(run);
+            const verb = action === 'archive-all' ? 'Archived' : 'Moved to Trash';
+            showToast(r.failed ? 'error' : 'success',
+                `${verb} ${r.moved} message${r.moved === 1 ? '' : 's'}${r.failed ? ` (${r.failed} failed)` : ''}.`);
+            const movedUids = new Set(r.movedItems.map((i) => i.uid));
+            ui.messages = ui.messages.filter((msg) => !movedUids.has(msg.uid));
+            const nextSel = new Set<number>();
+            for (const id of ui.selected) if (!movedUids.has(id)) nextSel.add(id);
+            ui.selected = nextSel;
+        } catch {
+            endBulkProgress(run, 0);
+        } finally {
+            senderSweepBusy = false;
+        }
+    }
 
     let pinSnoozeNow = $state(Date.now());
     $effect(() => {
@@ -2138,6 +2213,18 @@
                 }}
                 testid="ctx-snooze"
             />
+            {#if m.envelope.from?.[0]?.address}
+                <MenuSubmenu
+                    label="Sweep"
+                    icon="filter"
+                    items={senderSweepMenuItems(senderDisplayLabel(m))}
+                    onSelect={(key) => {
+                        runSenderSweep(ctx!.uid, key as SenderSweepAction);
+                        closeCtx();
+                    }}
+                    testid="ctx-sweep"
+                />
+            {/if}
             {#if onSetCategory}
                 <MenuSubmenu
                     label="Categorize"

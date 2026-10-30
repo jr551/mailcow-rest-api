@@ -91,6 +91,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Pinned message row](docs/assets/outlook-slice9/38-pinned-message-row.png)
 
+- **Sweep** — right-click **Sweep** on a message to bulk-handle every message from that sender in the folder: delete all, keep only the latest, or move all to Archive (uses server `from:` search, not just the visible page).
+
+![Sender sweep menu](docs/assets/outlook-slice10/39-sender-sweep-menu.png)
+
 ## Keyboard shortcuts (mail)
 
 Global shortcuts are listed under **Settings → General → Keyboard shortcuts** (press **?** in the inbox for the same list). Reading-pane placement:
