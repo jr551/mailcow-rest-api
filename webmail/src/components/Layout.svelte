@@ -15,6 +15,7 @@
         remapCategoryOverlay
     } from '../lib/message-categories.svelte';
     import { hydrateMessagePinSnooze, remapPinSnoozeOverlay } from '../lib/message-pin-snooze.svelte';
+    import { hydrateScheduledSends, processDueScheduledSends } from '../lib/scheduled-send.svelte';
     import { recordView } from '../lib/recent-views.svelte';
     import {
         listMailboxes,
@@ -1826,6 +1827,8 @@
         loadAddressBook().catch(() => { /* offline / server predates the feature */ });
         hydrateMessageCategories();
         hydrateMessagePinSnooze();
+        hydrateScheduledSends();
+        void processDueScheduledSends();
         // Skip the probe while the tab is hidden or the browser knows it's
         // offline. It used to run unconditionally forever, so a backgrounded
         // or disconnected tab generated a failed /v1/ai/config every 30s —
@@ -1879,6 +1882,10 @@
             await refreshVisibleList();
             checkNewMailAndChime();
         }, 60_000);
+        const scheduledSendTimer = setInterval(() => {
+            if (document.hidden) return;
+            void processDueScheduledSends();
+        }, 30_000);
 
         // Service Worker push events relayed to the page (via postMessage).
         // We refresh BOTH the mailbox list (for the unread-count bump in
@@ -1905,6 +1912,7 @@
             document.removeEventListener('keydown', handler);
             document.removeEventListener('click', onDocClick);
             clearInterval(pollInterval);
+            clearInterval(scheduledSendTimer);
             clearInterval(pingTimer);
             clearInterval(capTimer);
             if (onSwMsg) navigator.serviceWorker.removeEventListener('message', onSwMsg);

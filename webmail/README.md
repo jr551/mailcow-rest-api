@@ -103,6 +103,8 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Undo send toast](docs/assets/outlook-slice12/41-undo-send-toast.png)
 
+![Schedule send dialog](docs/assets/outlook-slice13/42-schedule-send-dialog.png)
+
 ## Keyboard shortcuts (mail)
 
 Global shortcuts are listed under **Settings → General → Keyboard shortcuts** (press **?** in the inbox for the same list). Reading-pane placement:

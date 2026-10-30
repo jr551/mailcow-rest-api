@@ -20,7 +20,8 @@ const ASSET9 = 'docs/assets/outlook-slice9';
 const ASSET10 = 'docs/assets/outlook-slice10';
 const ASSET11 = 'docs/assets/outlook-slice11';
 const ASSET12 = 'docs/assets/outlook-slice12';
-for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12]) mkdirSync(d, { recursive: true });
+const ASSET13 = 'docs/assets/outlook-slice13';
+for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13]) mkdirSync(d, { recursive: true });
 
 const baseSettings = {
     aiFeatures: false,
@@ -331,6 +332,48 @@ test.describe('docs desktop (1440×900 @2x)', () => {
         await page.getByTestId('compose-send').click();
         await expect(page.getByTestId('send-undo-btn')).toBeVisible();
         await shot(page, `${ASSET12}/41-undo-send-toast.png`);
+    });
+
+    test('schedule send dialog', async ({ page }) => {
+        await page.route(/\/health$/, (route) => {
+            route.fulfill({
+                status: 200,
+                contentType: 'application/json',
+                body: JSON.stringify({
+                    ok: true,
+                    cache: 0,
+                    pool: 0,
+                    capabilities: { ai: true, ocr: true, smtp: true, drive: true }
+                })
+            });
+        });
+        await page.route('**/imap-rest/health', (route) => {
+            route.fulfill({
+                status: 200,
+                contentType: 'application/json',
+                body: JSON.stringify({
+                    ok: true,
+                    cache: 0,
+                    pool: 0,
+                    capabilities: { ai: true, ocr: true, smtp: true, drive: true }
+                })
+            });
+        });
+        await page.addInitScript((blob) => {
+            localStorage.setItem('webmail.theme', 'light');
+            localStorage.setItem('webmail.settings.v1', blob);
+        }, seedSettings({ undoSendSeconds: 0, aiFeatures: false, preSendCheck: false }));
+        await login(page);
+        await page.reload();
+        await page.waitForSelector('[data-testid=shell]');
+        await page.click('[data-testid=compose-btn]');
+        await page.fill('[data-testid=compose-to]', 'friend@example.com');
+        await page.fill('[data-testid=compose-subject]', 'Slice 13 schedule send');
+        await page.getByTestId('compose-send-menu-btn').click();
+        await page.getByTestId('compose-schedule-send').click();
+        await expect(page.getByTestId('schedule-send-dialog')).toBeVisible();
+        await page.getByTestId('schedule-preset-tomorrow-morning').click();
+        await shot(page, `${ASSET13}/42-schedule-send-dialog.png`);
     });
 });
 
