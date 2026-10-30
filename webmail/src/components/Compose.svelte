@@ -27,6 +27,8 @@
         type ScheduledSendPresetId
     } from '../lib/scheduled-send';
     import { queueScheduledSend } from '../lib/scheduled-send.svelte';
+    import { composeDraftHasContent } from '../lib/compose-draft';
+    import { saveComposeDraftToImap } from '../lib/compose-draft.svelte';
     import RichEditor from './editor/RichEditor.svelte';
     import FloatingPanel from './FloatingPanel.svelte';
     import Icon from './Icon.svelte';
@@ -330,6 +332,10 @@
     }
     let showCcBcc = $state(buildCc().length > 0);
     let sending = $state(false);
+    let draftSaving = $state(false);
+    const canSaveDraft = $derived(
+        composeDraftHasContent({ to, subject, html: body, text: htmlToPlainText(body) })
+    );
     // Read-receipt tracker. When on, the server injects a 1×1 pixel into the
     // outbound HTML and emails me when the recipient opens the message. The
     // initial state mirrors settings.trackOpensDefault so users who always
@@ -736,7 +742,11 @@
 
     async function trySend(e: SubmitEvent) {
         e.preventDefault();
-        if (!to.trim() || !smtpAvailable()) return;
+        if (!smtpAvailable()) {
+            await saveDraft({ close: true });
+            return;
+        }
+        if (!to.trim()) return;
 
         const shiftBypass = skipReview;
         skipReview = false;
@@ -878,6 +888,35 @@
         onClose();
     }
 
+    async function saveDraft(opts: { close?: boolean } = {}) {
+        if (draftSaving || sending) return;
+        draftSaving = true;
+        const { payload } = buildSendPayload();
+        try {
+            const res = await saveComposeDraftToImap(ui.mailboxes, {
+                from: payload.from || authState.activeUser || '',
+                fromName: payload.fromName,
+                to: payload.to,
+                cc: payload.cc,
+                bcc: payload.bcc,
+                subject: payload.subject,
+                html: payload.html || '<p></p>',
+                text: payload.text || '',
+                inReplyTo: payload.inReplyTo,
+                attachments: payload.attachments
+            });
+            if (res) {
+                showToast('success', 'Draft saved to Drafts');
+                if (opts.close) onClose();
+            }
+        } catch (err) {
+            const detail = err instanceof ApiError ? (err.detail || err.title) : (err as Error).message;
+            showToast('error', detail || 'Couldn\'t save draft');
+        } finally {
+            draftSaving = false;
+        }
+    }
+
     async function doSend(immediate = false) {
         if (!to.trim() || !smtpAvailable()) return;
         sending = true;
@@ -946,6 +985,12 @@
          autocomplete (recipients, From aliases) still works. -->
     <form
         onsubmit={trySend}
+        onkeydown={(e) => {
+            if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 's' || e.key === 'S')) {
+                e.preventDefault();
+                void saveDraft();
+            }
+        }}
         novalidate
         class="form"
         autocomplete="off"
@@ -1567,7 +1612,7 @@
 
                 {#if !smtpAvailable()}
                     <span class="hint" data-testid="compose-status">
-                        Sending isn't enabled — your text will be saved as a draft.
+                        Sending isn't enabled — use Save draft or the primary button to stash in Drafts.
                     </span>
                 {/if}
             </div>
@@ -1578,6 +1623,17 @@
                     data-testid="compose-discard"
                     onclick={onClose}
                 >Discard</button>
+                <button
+                    type="button"
+                    class="btn btn-secondary"
+                    data-testid="compose-save-draft"
+                    title="Save to Drafts (Ctrl+S)"
+                    disabled={draftSaving || sending || !canSaveDraft}
+                    onclick={() => void saveDraft()}
+                >
+                    {#if draftSaving}<span class="spinner small"></span>{/if}
+                    {draftSaving ? 'Saving…' : 'Save draft'}
+                </button>
                 <div class="send-split" data-testid="compose-send-split">
                     <button
                         type="submit"
@@ -1587,12 +1643,14 @@
                             const formEl = (e.currentTarget as HTMLButtonElement).closest('[role=dialog]')?.querySelector('form');
                             if (formEl) (formEl as HTMLFormElement).requestSubmit();
                         }}
-                        disabled={sending || reviewLoading || !to.trim() || !smtpAvailable()}
-                        title={smtpAvailable() ? (aiAvailable() ? 'Review and send (Shift+Click to skip review)' : 'Send') : 'SMTP not configured on the server'}
+                        disabled={sending || reviewLoading || (smtpAvailable() ? !to.trim() : !canSaveDraft)}
+                        title={smtpAvailable()
+                            ? (aiAvailable() ? 'Review and send (Shift+Click to skip review)' : 'Send')
+                            : 'Save draft to Drafts folder'}
                         data-testid="compose-send"
                     >
                         {#if sending || reviewLoading}<span class="spinner"></span>{/if}
-                        <Icon name="send" size={14} />
+                        <Icon name={smtpAvailable() ? 'send' : 'filePen'} size={14} />
                         {sending ? 'Sending…'
                             : reviewLoading ? 'Reviewing…'
                             : !smtpAvailable() ? 'Save draft'

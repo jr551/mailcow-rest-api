@@ -2507,6 +2507,20 @@
                     </div>
 
                     <div class="card">
+                        <h4><Icon name="filePen" size={13} /> Save draft</h4>
+                        <div class="form-row bare">
+                            <div class="row-text">
+                                <strong>Drafts folder</strong>
+                                <span class="muted">
+                                    Compose includes an explicit <strong>Save draft</strong> button and
+                                    <kbd>Ctrl+S</kbd> (Outlook-style). Drafts are appended to your
+                                    IMAP Drafts mailbox with the <code>\\Draft</code> flag — no SMTP required.
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card">
                         <h4><Icon name="at" size={13} /> Default From address</h4>
                         <div class="form-row bare">
                             <div class="row-text">

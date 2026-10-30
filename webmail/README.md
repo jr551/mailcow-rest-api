@@ -105,6 +105,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Schedule send dialog](docs/assets/outlook-slice13/42-schedule-send-dialog.png)
 
+- **Save draft** — explicit **Save draft** button in compose (and **Ctrl+S**). Appends RFC822 to your IMAP **Drafts** folder with the `\\Draft` flag; works even when SMTP send is disabled on the server.
+
+![Save draft in compose](docs/assets/outlook-slice14/43-save-draft-compose.png)
+
 ## Keyboard shortcuts (mail)
 
 Global shortcuts are listed under **Settings → General → Keyboard shortcuts** (press **?** in the inbox for the same list). Reading-pane placement:
