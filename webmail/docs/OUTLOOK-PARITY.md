@@ -68,7 +68,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 - **`MessageList.svelte`**: Outlook-style **Focused | Other** tabs when viewing INBOX (hidden during search or other folders).
 - **`settings.inboxTab`**: persisted preference (`focused` | `other`).
 - Tests: unit (`focused-inbox.test.mjs`) + Playwright (`outlook-focused-inbox.spec.ts`) against API mocks.
-- Screenshots: `webmail/docs/assets/outlook-slice1/26-inbox-focused-tab.png`, `27-inbox-other-tab.png`.
+- Screenshots: `webmail/docs/assets/outlook-slice1/26-inbox-focused-tab.png`, `27-inbox-other-tab.png` (regenerate with `npm run docs:screenshots` in `webmail/`).
 
 ---
 
