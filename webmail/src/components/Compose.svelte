@@ -29,14 +29,23 @@
     import { queueScheduledSend } from '../lib/scheduled-send.svelte';
     import { composeDraftHasContent } from '../lib/compose-draft';
     import { saveComposeDraftToImap } from '../lib/compose-draft.svelte';
+    import {
+        buildPopoutComposeContext,
+        newComposePopoutSessionId,
+        openComposePopoutWindow,
+        storeComposePopoutSession
+    } from '../lib/compose-popout';
+    import type { ComposeRestoreSnapshot } from '../lib/undo-send';
     import RichEditor from './editor/RichEditor.svelte';
     import FloatingPanel from './FloatingPanel.svelte';
     import Icon from './Icon.svelte';
 
     interface Props {
         onClose: () => void;
+        /** Rendered from a dedicated pop-out browser window (slice 15). */
+        popout?: boolean;
     }
-    let { onClose }: Props = $props();
+    let { onClose, popout = false }: Props = $props();
 
     const replyTo = ui.composeContext?.replyTo || null;
     const replyMode = ui.composeContext?.mode || (replyTo ? 'reply' : 'new');
@@ -917,6 +926,34 @@
         }
     }
 
+    function snapshotRestore(): ComposeRestoreSnapshot {
+        return {
+            to,
+            cc,
+            bcc,
+            subject,
+            body,
+            from,
+            trackOpens,
+            attachments: attachments.map((a) => ({ ...a }))
+        };
+    }
+
+    function popOutCompose() {
+        const id = newComposePopoutSessionId();
+        const composeContext = buildPopoutComposeContext(
+            ui.composeContext || { replyTo: null, mode: replyMode },
+            snapshotRestore()
+        );
+        storeComposePopoutSession(id, { composeContext });
+        const win = openComposePopoutWindow(id);
+        if (!win) {
+            showToast('error', 'Allow pop-ups to open compose in a new window');
+            return;
+        }
+        onClose();
+    }
+
     async function doSend(immediate = false) {
         if (!to.trim() || !smtpAvailable()) return;
         sending = true;
@@ -970,12 +1007,13 @@
 
 <FloatingPanel
     title={title + (subject ? ` — ${subject}` : '')}
-    storageKey={`compose.${replyMode}`}
+    storageKey={popout ? `compose.popout.${replyMode}` : `compose.${replyMode}`}
     defaultWidth={980}
     defaultHeight={720}
     minWidth={420}
     minHeight={420}
     onClose={onClose}
+    onPopOut={popout ? null : popOutCompose}
     testId="compose-modal"
     overlayVisible={sending || scheduleDialogOpen}
 >
