@@ -15,7 +15,8 @@ const ASSET3 = 'docs/assets/outlook-slice3';
 const ASSET5 = 'docs/assets/outlook-slice5';
 const ASSET6 = 'docs/assets/outlook-slice6';
 const ASSET7 = 'docs/assets/outlook-slice7';
-for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7]) mkdirSync(d, { recursive: true });
+const ASSET8 = 'docs/assets/outlook-slice8';
+for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8]) mkdirSync(d, { recursive: true });
 
 const baseSettings = {
     aiFeatures: false,

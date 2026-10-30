@@ -63,6 +63,7 @@ test('global arrow/Escape handler stays out of other apps, dialogs and handled e
     const fn = layout.slice(layout.indexOf('function onKey('));
     assert.match(fn, /e\.defaultPrevented \|\| ui\.app !== 'mail'/);
     assert.match(fn, /closest\?\.\(OVERLAY_SELECTOR\)/);
+    assert.match(fn, /resolveMailShortcut/);
     assert.ok(!/if \(ui\.composeOpen\) ui\.composeOpen = false/.test(fn), 'Layout must not discard compose on Escape');
 });
 

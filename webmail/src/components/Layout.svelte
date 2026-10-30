@@ -68,6 +68,8 @@
     import { translateNaturalLanguageSearch } from '../lib/natural-language-search.client';
     import { looksLikeStructuredMailSearch } from '../lib/natural-language-search';
     import { readingPaneLayoutFromKeyboard } from '../lib/reading-pane-layout';
+    import { resolveMailShortcut, type MailShortcutAction } from '../lib/mail-keyboard-shortcuts';
+    import MailShortcutHelp from './MailShortcutHelp.svelte';
     import { findThreadForUid } from '../lib/conversation-view';
     import { SKINS, skinState } from '../lib/skins.svelte';
     import { initImapSync, newThread as newAiThread, appendMessage as appendAiMessage, requestAutoSend as requestAutoSendAi } from '../lib/ai-threads.svelte';
@@ -105,6 +107,7 @@
         return 25;
     }
 
+    let mailShortcutHelpOpen = $state(false);
     let searchInput = $state('');
     let searchSuggestOpen = $state(false);
     let searchInputEl: HTMLInputElement | null = $state(null);
@@ -1141,6 +1144,44 @@
         }
     }
 
+    async function markMessageRead(uid: number) {
+        const li = ui.messages.find((m) => m.uid === uid);
+        if (!li || li.flags.includes('\\Seen')) return;
+        try {
+            const r = await modifyFlags(ui.selectedPath, uid, { add: ['\\Seen'] });
+            li.flags = r.flags;
+            if (ui.detail && ui.detail.uid === uid) ui.detail.flags = r.flags;
+        } catch (err) {
+            showToast('error', describe(err, 'Failed to mark read'));
+        }
+    }
+
+    async function markMessageUnread(uid: number) {
+        const li = ui.messages.find((m) => m.uid === uid);
+        if (!li || !li.flags.includes('\\Seen')) return;
+        try {
+            const r = await modifyFlags(ui.selectedPath, uid, { remove: ['\\Seen'] });
+            li.flags = r.flags;
+            if (ui.detail && ui.detail.uid === uid) ui.detail.flags = r.flags;
+        } catch (err) {
+            showToast('error', describe(err, 'Failed to mark unread'));
+        }
+    }
+
+    async function detailForSelected(): Promise<MessageDetailType | null> {
+        const uid = ui.selectedUid;
+        if (uid == null) return null;
+        if (ui.detail?.uid === uid) return ui.detail;
+        try {
+            const fresh = await getMessage(ui.selectedPath, uid);
+            ui.detail = fresh;
+            return fresh;
+        } catch (err) {
+            showToast('error', describe(err, 'Could not load message'));
+            return null;
+        }
+    }
+
     // Drops a row that has left the current folder (moved or deleted) from
     // the list, the selection and the cached page.
     function removeFromList(uid: number, from: string) {
@@ -1553,6 +1594,71 @@
     // inside one of them is theirs, never the message list's.
     const OVERLAY_SELECTOR = '[role=dialog],[role=menu],[role=listbox],[role=radiogroup],[role=slider],dialog';
 
+    function moveListSelection(direction: 'next' | 'prev') {
+        const idx = ui.messages.findIndex((m) => m.uid === ui.selectedUid);
+        const next = direction === 'next'
+            ? ui.messages[Math.min(ui.messages.length - 1, idx < 0 ? 0 : idx + 1)]
+            : ui.messages[Math.max(0, idx < 0 ? 0 : idx - 1)];
+        if (next) {
+            playClick();
+            void selectMessage(next.uid);
+        }
+    }
+
+    async function handleMailShortcut(action: MailShortcutAction) {
+        const uid = ui.selectedUid;
+        switch (action) {
+            case 'navigate-next':
+                moveListSelection('next');
+                break;
+            case 'navigate-prev':
+                moveListSelection('prev');
+                break;
+            case 'compose-new':
+                openCompose();
+                break;
+            case 'reply': {
+                const d = await detailForSelected();
+                if (d) openCompose(d, 'reply');
+                break;
+            }
+            case 'reply-all': {
+                const d = await detailForSelected();
+                if (d) openCompose(d, 'replyAll');
+                break;
+            }
+            case 'forward': {
+                const d = await detailForSelected();
+                if (d) openCompose(d, 'forward');
+                break;
+            }
+            case 'archive':
+                if (uid != null) void archiveMessage(uid);
+                break;
+            case 'delete':
+                if (uid != null) void trashMessage(uid);
+                break;
+            case 'mark-read':
+                if (uid != null) void markMessageRead(uid);
+                break;
+            case 'mark-unread':
+                if (uid != null) void markMessageUnread(uid);
+                break;
+            case 'toggle-flag':
+                if (uid != null) void toggleStar(uid);
+                break;
+            case 'focus-search':
+                searchInputEl?.focus();
+                break;
+            case 'show-help':
+                mailShortcutHelpOpen = true;
+                break;
+            case 'undo':
+                void performUndo();
+                break;
+        }
+    }
+
     function onKey(e: KeyboardEvent) {
         // Something nearer the target already handled it (a menu, a
         // suggestion list, a dialog), and the other apps have their own keys.
@@ -1579,20 +1685,15 @@
             e.preventDefault();
             return;
         }
-        // Only Escape and arrow navigation stay live — the single-key
-        // shortcut layer (j/k/r/a/c/s/u/#/?/etc.) was removed.
-        const idx = ui.messages.findIndex((m) => m.uid === ui.selectedUid);
-        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-            if (ui.settingsOpen || ui.setupOpen) return;
-            const next = e.key === 'ArrowDown'
-                ? ui.messages[Math.min(ui.messages.length - 1, idx < 0 ? 0 : idx + 1)]
-                : ui.messages[Math.max(0, idx < 0 ? 0 : idx - 1)];
-            if (next) { playClick(); selectMessage(next.uid); }
-            e.preventDefault();
-        } else if (e.key === 'Escape') {
+        if (e.key === 'Escape') {
             // The compose window closes itself (FloatingPanel) and a
             // minimised one is deliberately parked, so it is left alone here.
             if (ui.composeOpen) return;
+            if (mailShortcutHelpOpen) {
+                mailShortcutHelpOpen = false;
+                e.preventDefault();
+                return;
+            }
             if (readingFlyoutOpen) {
                 closeReadingFlyout();
                 e.preventDefault();
@@ -1605,6 +1706,14 @@
                 ui.selectedUid = null;
                 ui.detail = null;
             }
+            return;
+        }
+        if (ui.settingsOpen || ui.setupOpen || ui.composeOpen) return;
+
+        const action = resolveMailShortcut(e);
+        if (action) {
+            e.preventDefault();
+            void handleMailShortcut(action);
         }
     }
 
@@ -2488,6 +2597,8 @@
             onClose={() => popupShortcut.set(null)}
         />
     {/if}
+
+    <MailShortcutHelp open={mailShortcutHelpOpen} onClose={() => (mailShortcutHelpOpen = false)} />
 
     {#if ui.toast}
         <div class={`toast toast-${ui.toast.kind}`} role="status" aria-live="polite" data-testid="toast">

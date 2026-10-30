@@ -14,7 +14,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 |------------------|-------|--------------|
 | **App chrome / command bar** | Outlook skin default (`skins.svelte.ts`), top search, account menu, app rail (Mail / Calendar / AI / Drive) | Medium: rail is broader than OWA; unify launcher later |
 | **Folder pane** | `Sidebar.svelte` tree, **Favorites** pin list, drag-drop move, shortcuts row | Medium: no folder groups |
-| **Message list** | `MessageList.svelte`, density, **Outlook Filter / Sort** menus (All/Unread/Flagged/To me/Has files/Mentions), optional AI sort | Medium: no quick categories/colour tags |
+| **Message list** | `MessageList.svelte`, density, **Outlook Filter / Sort** menus (All/Unread/Flagged/To me/Has files/Mentions), **colour categories**, optional AI sort | Medium: pin/snooze row actions |
 | **Focused / Other** | `focused-inbox.ts` + INBOX tabs | Low–medium: optional AI refinement later |
 | **Reading pane** | `MessageDetail.svelte`, reply/forward, conversation stack when grouped | Low–medium: richer HTML parity; pane position done (slice 3) |
 | **Conversation view** | List grouping via `threads.ts`; reading-pane stack via `conversation-view.ts` + `ConversationStack.svelte` | Medium: attachments per message in stack; richer HTML parity |
@@ -40,7 +40,8 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 5. **Natural-language search** (only when AI + user provider configured); fallback keeps tag syntax — **slice 5 (done)**.
 6. **Quick filter bar** parity (Filter: All / Unread / Flagged / To me / Has files / Mentions; Sort menu) — **slice 6 (done in #93)**.
-7. **Categories / flags** (user-assigned colours) synced via IMAP keywords or local overlay — **slice 7 (this PR)**.
+7. **Categories / flags** (user-assigned colours) synced via IMAP keywords or local overlay — **slice 7 (done in #94)**.
+8. **Global mail keyboard shortcuts** (OWA chords + **?** help) — **slice 8 (this PR)**.
 
 ### P2 — Compose & handling
 
@@ -126,7 +127,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 7 (this PR)
+## Slice 7 (done)
 
 - **`webmail/src/lib/message-categories.ts`**: OWA colour categories, `$Category*` IMAP keywords, flag merge helpers.
 - **`webmail/src/lib/message-categories.svelte.ts`**: `webmail.message-categories.v1` local overlay when the server drops custom keywords.
@@ -136,9 +137,19 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 8 (this PR)
+
+- **`webmail/src/lib/mail-keyboard-shortcuts.ts`**: OWA-style global mail chords (navigation, compose, reply, archive, delete, read/unread, flag, search, help, undo).
+- **`MailShortcutHelp.svelte`**: **?** shortcut reference dialog; **Settings → General → Keyboard shortcuts** lists the same table.
+- **`Layout.svelte`**: wires shortcuts when focus is not in an input (reading-pane Alt+Shift chords unchanged).
+- Tests: unit (`mail-keyboard-shortcuts.test.mjs`, `web-shell.test.mjs`) + Playwright (`outlook-mail-keyboard-shortcuts.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice8/37-keyboard-shortcuts-help.png`.
+
+---
+
 ## Next planned slice
 
-**Keyboard shortcuts** parity (global mail chords beyond reading-pane layout) and compose pop-out polish.
+**Pin / snooze / follow-up flag** row actions and sweep polish, or **compose pop-out** window parity.
 
 ---
 

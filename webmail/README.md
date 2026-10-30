@@ -85,12 +85,26 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Message category stripe](docs/assets/outlook-slice7/36-message-category-stripe.png)
 
+![Keyboard shortcuts help](docs/assets/outlook-slice8/37-keyboard-shortcuts-help.png)
+
 ## Keyboard shortcuts (mail)
 
-Global shortcuts are listed under **Settings → General → Keyboard shortcuts**. Reading-pane placement (also in that list):
+Global shortcuts are listed under **Settings → General → Keyboard shortcuts** (press **?** in the inbox for the same list). Reading-pane placement:
 
 | Chord | Action |
 |-------|--------|
+| **↑ / ↓** or **J / K** | Previous / next message |
+| **N** | New message |
+| **R** | Reply |
+| **Shift+R** | Reply all |
+| **Shift+F** | Forward |
+| **E** | Archive |
+| **Delete** | Move to Trash |
+| **Q** / **U** | Mark read / unread |
+| **Insert** | Flag or unflag |
+| **/** | Focus search |
+| **?** | Show shortcuts |
+| **Ctrl+Z** | Undo last move or delete |
 | **Alt+Shift+R** | Reading pane on the **right** |
 | **Alt+Shift+B** | Reading pane at the **bottom** |
 | **Alt+Shift+H** | **Hide** reading pane (flyout when a message is open) |
