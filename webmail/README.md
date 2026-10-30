@@ -99,6 +99,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Quick steps menu](docs/assets/outlook-slice11/40-quick-steps-menu.png)
 
+- **Undo send** — Settings → Compose → **Delay before sending** (default 5 seconds, 0 to disable). After **Send**, the toast offers **Undo** until the delay ends; **Shift+Send** sends immediately without the window.
+
+![Undo send toast](docs/assets/outlook-slice12/41-undo-send-toast.png)
+
 ## Keyboard shortcuts (mail)
 
 Global shortcuts are listed under **Settings → General → Keyboard shortcuts** (press **?** in the inbox for the same list). Reading-pane placement:

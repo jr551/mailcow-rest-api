@@ -25,6 +25,11 @@ execFileSync(
     ['--loader:.ts=ts', '--format=esm', `--outfile=${path.join(tmp, 'reading-pane-layout.mjs')}`, path.join(webmailRoot, 'src/lib/reading-pane-layout.ts')],
     { stdio: 'pipe' }
 );
+execFileSync(
+    path.join(webmailRoot, 'node_modules/.bin/esbuild'),
+    ['--loader:.ts=ts', '--format=esm', `--outfile=${path.join(tmp, 'undo-send.mjs')}`, path.join(webmailRoot, 'src/lib/undo-send.ts')],
+    { stdio: 'pipe' }
+);
 
 writeFileSync(path.join(tmp, 'stubs.mjs'),
     'export const getAiConfig = async () => null;\n'
@@ -36,9 +41,14 @@ writeFileSync(path.join(tmp, 'stubs.mjs'),
 
 const stubsUrl = pathToFileURL(path.join(tmp, 'stubs.mjs')).href;
 const readingPaneUrl = pathToFileURL(path.join(tmp, 'reading-pane-layout.mjs')).href;
+const undoSendUrl = pathToFileURL(path.join(tmp, 'undo-send.mjs')).href;
 const rewritten = readFileSync(path.join(tmp, 'settings.mjs'), 'utf8').replace(
     /from\s+"\.\/[^"]*"/g,
-    (m) => (m.includes('reading-pane-layout') ? `from "${readingPaneUrl}"` : `from "${stubsUrl}"`)
+    (m) => {
+        if (m.includes('reading-pane-layout')) return `from "${readingPaneUrl}"`;
+        if (m.includes('undo-send')) return `from "${undoSendUrl}"`;
+        return `from "${stubsUrl}"`;
+    }
 );
 writeFileSync(path.join(tmp, 'settings.mjs'), rewritten);
 

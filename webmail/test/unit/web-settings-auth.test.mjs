@@ -37,7 +37,8 @@ const MODULES = {
     './setup-diagnostics.svelte': 'diag.mjs',
     './api': 'api-stub.mjs',
     './spam-feedback.svelte': 'spam-stub.mjs',
-    './reading-pane-layout': 'reading-pane-layout.mjs'
+    './reading-pane-layout': 'reading-pane-layout.mjs',
+    './undo-send': 'undo-send.mjs'
 };
 
 for (const [src, out] of [
@@ -46,7 +47,8 @@ for (const [src, out] of [
     ['settings.svelte.ts', 'settings.mjs'],
     ['settings-sync.ts', 'sync.mjs'],
     ['setup-diagnostics.svelte.ts', 'diag.mjs'],
-    ['reading-pane-layout.ts', 'reading-pane-layout.mjs']
+    ['reading-pane-layout.ts', 'reading-pane-layout.mjs'],
+    ['undo-send.ts', 'undo-send.mjs']
 ]) {
     execFileSync(
         path.join(webmailRoot, 'node_modules/.bin/esbuild'),

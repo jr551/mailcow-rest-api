@@ -58,7 +58,7 @@
         setDefaultFromAddress, setDisplayName, deriveNameFromAddress, setPageSize,
         setTesseractOcrInstalled, setPhishingScanOcrInline,
         setSpamSuggest, setSpamSuggestConfidenceFloor, setSpamSweepBatchSize, setAiSortSweepSpam,
-        setVipAddresses, setPreSendCheck, setComposeHistorySummary, setAiSuggestReply,
+        setVipAddresses, setPreSendCheck, setComposeHistorySummary, setUndoSendSeconds, setAiSuggestReply,
         aiAvailable, resolveCustomBaseUrl, resolveCustomModel, extractChatText,
         setCalendarTicker, setCalendarTickerTitles, setWeatherChipOutlook, setLinkSafetyCheck, setNaturalLanguageSearch, setReadingPaneLayout
     } from '../lib/settings.svelte';
@@ -2476,6 +2476,32 @@
                                     data-testid="settings-track-default"
                                 />
                                 <span>{settings.trackOpensDefault ? 'On' : 'Off'}</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <h4><Icon name="clock" size={13} /> Undo send</h4>
+                        <div class="form-row bare">
+                            <div class="row-text">
+                                <strong>Delay before sending</strong>
+                                <span class="muted">
+                                    Outlook-style window to undo after you hit Send. The message is not
+                                    sent until the delay ends. Shift+Send sends immediately. Set to 0 to disable.
+                                </span>
+                            </div>
+                            <label class="field compact">
+                                <span class="muted small">Seconds</span>
+                                <input
+                                    type="number"
+                                    min="0"
+                                    max="30"
+                                    step="1"
+                                    value={settings.undoSendSeconds}
+                                    onchange={(e) => setUndoSendSeconds(Number((e.currentTarget as HTMLInputElement).value))}
+                                    aria-label="Undo send delay in seconds"
+                                    data-testid="settings-undo-send-seconds"
+                                />
                             </label>
                         </div>
                     </div>
