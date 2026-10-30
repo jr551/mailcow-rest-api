@@ -31,7 +31,20 @@ export interface UiState {
         mode?: 'new' | 'reply' | 'replyAll' | 'forward';
         /** Plain-text draft to place above the quoted reply body (one-shot). */
         draftPlain?: string;
+        /** Restores an in-progress message after undo send (one-shot). */
+        restore?: {
+            to: string;
+            cc: string;
+            bcc: string;
+            subject: string;
+            body: string;
+            from: string;
+            trackOpens: boolean;
+            attachments: Array<{ filename: string; contentType: string; size: number; content: string }>;
+        };
     } | null;
+    /** Active undo-send window — toast shows Undo while this is set. */
+    sendUndo: { id: string; ts: number } | null;
     settingsOpen: boolean;
     setupOpen: boolean;
     aiPanelOpen: boolean;
@@ -120,6 +133,7 @@ const initial: UiState = {
     conversationLoading: false,
     composeOpen: false,
     composeContext: null,
+    sendUndo: null,
     settingsOpen: false,
     setupOpen: false,
     aiPanelOpen: false,

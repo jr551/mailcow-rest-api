@@ -5,6 +5,7 @@
 
 import { getAiConfig, getTtsConfig, apiUrl, type AiConfig, type TtsConfig } from './api';
 import { getSession, bearerHeader, dropPermanentSession } from './auth.svelte';
+import { sanitizeUndoSendSeconds } from './undo-send';
 
 const STORAGE_KEY = 'webmail.settings.v1';
 
@@ -153,6 +154,9 @@ export interface Settings {
      *  model returns at most one suggestion (or nothing); the user
      *  can dismiss with one click. Shift+Send bypasses entirely. */
     preSendCheck: boolean;
+    /** Seconds to wait before calling /v1/messages/send, with an Undo
+     *  toast in that window (OWA-style). 0 disables undo send. */
+    undoSendSeconds: number;
     /** Show the AI summary of past correspondence when composing to
      *  a known address. Off-switchable for users who find it noisy. */
     composeHistorySummary: boolean;
@@ -291,6 +295,7 @@ export function sanitizeSettings(raw: unknown): Settings {
             ? Math.min(200, Math.max(10, Math.round(parsed.spamSweepBatchSize))) : 50,
         aiSortSweepSpam: parsed.aiSortSweepSpam !== false,
         preSendCheck: parsed.preSendCheck !== false,
+        undoSendSeconds: sanitizeUndoSendSeconds(parsed.undoSendSeconds),
         composeHistorySummary: parsed.composeHistorySummary !== false,
         vipAddresses: str(parsed.vipAddresses),
         weatherChip: !!parsed.weatherChip,
@@ -628,6 +633,11 @@ export function setAiSortSweepSpam(on: boolean) {
 
 export function setPreSendCheck(on: boolean) {
     state.preSendCheck = on;
+    persist(state);
+}
+
+export function setUndoSendSeconds(seconds: number) {
+    state.undoSendSeconds = sanitizeUndoSendSeconds(seconds);
     persist(state);
 }
 

@@ -16,6 +16,8 @@
     import { ReplySuggest, DraftSparkle, threadForAi, htmlToPlainText } from '../lib/reply-suggest.svelte';
     import { summariseRecipientHistory, type HistorySummary } from '../lib/recipient-history';
     import { preSendCheck } from '../lib/pre-send-check';
+    import { undoSendEnabled } from '../lib/undo-send';
+    import { scheduleUndoSend } from '../lib/undo-send.svelte';
     import RichEditor from './editor/RichEditor.svelte';
     import FloatingPanel from './FloatingPanel.svelte';
     import Icon from './Icon.svelte';
@@ -27,6 +29,7 @@
 
     const replyTo = ui.composeContext?.replyTo || null;
     const replyMode = ui.composeContext?.mode || (replyTo ? 'reply' : 'new');
+    const restoreSnap = ui.composeContext?.restore;
 
     function buildSubject(): string {
         if (!replyTo) return '';
@@ -93,9 +96,9 @@
     // htmlToPlainText now lives in lib/reply-suggest.svelte, shared with
     // the mobile compose view.
 
-    let to = $state(buildTo());
-    let cc = $state(buildCc());
-    let bcc = $state('');
+    let to = $state(restoreSnap?.to ?? buildTo());
+    let cc = $state(restoreSnap?.cc ?? buildCc());
+    let bcc = $state(restoreSnap?.bcc ?? '');
 
     // ─── Recipient pills ─────────────────────────────────────────────────
     // To/Cc/Bcc read like Outlook's token fields: a recipient turns into a
@@ -266,8 +269,8 @@
         }
     }
 
-    let subject = $state(buildSubject());
-    let body = $state(buildBodyHtml());
+    let subject = $state(restoreSnap?.subject ?? buildSubject());
+    let body = $state(restoreSnap?.body ?? buildBodyHtml());
     // Handle into the Tiptap instance. Compose's `body` binding is
     // write-only as far as the editor is concerned (RichEditor only pushes
     // HTML out via onUpdate), so anything that needs to put text INTO the
@@ -282,7 +285,7 @@
     let subjectSuggestError = $state<string | null>(null);
 
     interface PendingAttachment { filename: string; contentType: string; size: number; content: string }
-    let attachments = $state<PendingAttachment[]>([]);
+    let attachments = $state<PendingAttachment[]>(restoreSnap?.attachments ? [...restoreSnap.attachments] : []);
 
     function fmtSize(bytes: number): string {
         if (bytes < 1024) return `${bytes} B`;
@@ -322,7 +325,7 @@
     // outbound HTML and emails me when the recipient opens the message. The
     // initial state mirrors settings.trackOpensDefault so users who always
     // want tracking only have to flip it once in Settings.
-    let trackOpens = $state(settings.trackOpensDefault);
+    let trackOpens = $state(restoreSnap?.trackOpens ?? settings.trackOpensDefault);
     // Tracking lives behind a collapsed "Advanced" row — it's a niche
     // feature and shouldn't sit in the main toolbar.
     let advancedOpen = $state(false);
@@ -592,7 +595,7 @@
         return { addr: fallback, matched: false };
     }
 
-    let from = $state(pickReplyFrom().addr || authState.activeUser || '');
+    let from = $state(restoreSnap?.from || pickReplyFrom().addr || authState.activeUser || '');
     let fromMatched = $state(false);
     let toGlow = $state(false);
 
@@ -610,6 +613,20 @@
     let fromName = $derived(pickFromName(from) ?? '');
 
     onMount(async () => {
+        if (restoreSnap) {
+            for (const row of [
+                ['to', restoreSnap.to],
+                ['cc', restoreSnap.cc],
+                ['bcc', restoreSnap.bcc]
+            ] as const) {
+                const addrs = row[1].split(/[,;]/).map((s) => s.trim()).filter(Boolean);
+                if (addrs.length) setRecipChips(row[0], addrs);
+            }
+            if (ui.composeContext?.restore) {
+                const { restore: _drop, ...rest } = ui.composeContext;
+                ui.composeContext = rest;
+            }
+        }
         // Pull a pending attachment handed in from PdfViewer (or any
         // other surface that wants to start a reply with a file).
         if (ui.pendingAttachment) {
@@ -632,6 +649,7 @@
             }
             wildcardDomains = res.wildcardDomains || [];
         } catch { /* mailcow DB optional — silent fallback */ }
+        if (restoreSnap) return;
         // Re-pick now that we know the user's full address list. If the
         // active user opens a reply addressed to one of their aliases the
         // From swaps to that alias and the To field glows briefly.
@@ -707,7 +725,7 @@
         // Shift-Send (or no AI configured) → straight to send. An empty
         // subject goes out as "(no subject)" because the server requires one.
         if (shiftBypass || !aiAvailable() || preCheckBypass) {
-            await doSend();
+            await doSend(shiftBypass);
             return;
         }
 
@@ -778,7 +796,7 @@
         preCheckRationale = '';
     }
 
-    async function doSend() {
+    async function doSend(immediate = false) {
         if (!to.trim() || !smtpAvailable()) return;
         sending = true;
         const sentSubject = subject.trim() || '(no subject)';
@@ -794,7 +812,7 @@
                 if (m) recordContact(m[2], m[1].replace(/^"|"$/g, '').trim() || null);
                 else recordContact(addr);
             }
-            const r = await sendStub({
+            const payload = {
                 to: toList,
                 cc: ccList.length ? ccList : undefined,
                 bcc: bccList.length ? bccList : undefined,
@@ -812,7 +830,32 @@
                         content: a.content
                     }))
                     : undefined
-            });
+            };
+            const undoSec = settings.undoSendSeconds;
+            if (!immediate && undoSendEnabled(undoSec)) {
+                scheduleUndoSend({
+                    seconds: undoSec,
+                    payload,
+                    sentSubject,
+                    toLabel: toList.join(', '),
+                    composeContext: ui.composeContext
+                        ? { ...ui.composeContext }
+                        : { replyTo: null, mode: replyMode },
+                    restore: {
+                        to,
+                        cc,
+                        bcc,
+                        subject,
+                        body,
+                        from,
+                        trackOpens,
+                        attachments: attachments.map((a) => ({ ...a }))
+                    },
+                    onScheduled: () => onClose()
+                });
+                return;
+            }
+            const r = await sendStub(payload);
             playSent();
             // Start tracking delivery — we'll hand off to the toast/tray in
             // Layout.svelte which polls /v1/messages/send/:id/status with

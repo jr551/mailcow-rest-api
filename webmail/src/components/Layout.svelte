@@ -66,6 +66,7 @@
     import { shortcutsItems, embeddedShortcut, popupShortcut, safeShortcutUrl } from '../lib/shortcuts-store';
     import { probeCapabilities, settings, setHideSidebar, setReadingPaneLayout } from '../lib/settings.svelte';
     import { imapFilterToken } from '../lib/list-quick-filters';
+    import { cancelPendingSend } from '../lib/undo-send.svelte';
     import { translateNaturalLanguageSearch } from '../lib/natural-language-search.client';
     import { looksLikeStructuredMailSearch } from '../lib/natural-language-search';
     import { readingPaneLayoutFromKeyboard } from '../lib/reading-pane-layout';
@@ -1440,6 +1441,10 @@
         }
     }
 
+    function performSendUndo() {
+        cancelPendingSend();
+    }
+
     // Bulk actions
 
     async function bulkMark(seen: boolean) {
@@ -1908,10 +1913,13 @@
         };
     });
 
-    // Auto-clear toast after 4s
+    // Auto-clear toast after 4s (longer while undo-send is active)
     $effect(() => {
         if (!ui.toast) return;
-        const t = setTimeout(clearToast, 4000);
+        const delay = ui.sendUndo
+            ? Math.max(4000, (settings.undoSendSeconds + 2) * 1000)
+            : 4000;
+        const t = setTimeout(clearToast, delay);
         return () => clearTimeout(t);
     });
 
@@ -2608,6 +2616,9 @@
             <span>{ui.toast.message}</span>
             {#if ui.undo && ui.toast.kind === 'success' && ui.toast.ts >= ui.undo.ts && ui.toast.ts - ui.undo.ts < 1000}
                 <button type="button" class="undo-btn" onclick={performUndo} data-testid="undo-btn">Undo</button>
+            {/if}
+            {#if ui.sendUndo && ui.toast && ui.toast.ts >= ui.sendUndo.ts && ui.toast.ts - ui.sendUndo.ts < 500}
+                <button type="button" class="undo-btn" onclick={performSendUndo} data-testid="send-undo-btn">Undo</button>
             {/if}
         </div>
     {/if}

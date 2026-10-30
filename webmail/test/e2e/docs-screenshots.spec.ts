@@ -19,7 +19,8 @@ const ASSET8 = 'docs/assets/outlook-slice8';
 const ASSET9 = 'docs/assets/outlook-slice9';
 const ASSET10 = 'docs/assets/outlook-slice10';
 const ASSET11 = 'docs/assets/outlook-slice11';
-for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11]) mkdirSync(d, { recursive: true });
+const ASSET12 = 'docs/assets/outlook-slice12';
+for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12]) mkdirSync(d, { recursive: true });
 
 const baseSettings = {
     aiFeatures: false,
@@ -283,6 +284,53 @@ test.describe('docs desktop (1440×900 @2x)', () => {
         await page.getByTestId('quick-steps-trigger').click();
         await expect(page.getByTestId('quick-step-done')).toBeVisible();
         await shot(page, `${ASSET11}/40-quick-steps-menu.png`);
+    });
+
+    test('undo send toast', async ({ page }) => {
+        await page.route(/\/health$/, (route) => {
+            route.fulfill({
+                status: 200,
+                contentType: 'application/json',
+                body: JSON.stringify({
+                    ok: true,
+                    cache: 0,
+                    pool: 0,
+                    capabilities: { ai: true, ocr: true, smtp: true, drive: true }
+                })
+            });
+        });
+        await page.route('**/imap-rest/health', (route) => {
+            route.fulfill({
+                status: 200,
+                contentType: 'application/json',
+                body: JSON.stringify({
+                    ok: true,
+                    cache: 0,
+                    pool: 0,
+                    capabilities: { ai: true, ocr: true, smtp: true, drive: true }
+                })
+            });
+        });
+        await page.route('**/v1/messages/send', (route) => {
+            route.fulfill({
+                status: 200,
+                contentType: 'application/json',
+                body: JSON.stringify({ messageId: '<docs-shot@local>' })
+            });
+        });
+        await page.addInitScript((blob) => {
+            localStorage.setItem('webmail.theme', 'light');
+            localStorage.setItem('webmail.settings.v1', blob);
+        }, seedSettings({ undoSendSeconds: 10, aiFeatures: false, preSendCheck: false }));
+        await login(page);
+        await page.reload();
+        await page.waitForSelector('[data-testid=shell]');
+        await page.click('[data-testid=compose-btn]');
+        await page.fill('[data-testid=compose-to]', 'friend@example.com');
+        await page.fill('[data-testid=compose-subject]', 'Slice 12 undo send');
+        await page.getByTestId('compose-send').click();
+        await expect(page.getByTestId('send-undo-btn')).toBeVisible();
+        await shot(page, `${ASSET12}/41-undo-send-toast.png`);
     });
 });
 
