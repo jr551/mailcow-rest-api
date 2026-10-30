@@ -16,7 +16,7 @@ import {
     FileArchive, FileCode, FileSpreadsheet, FileType, FileVideoCamera,
     FileAudio, FileImage, FileJson, FileTerminal, Presentation, Database, Table, BookText, Binary,
     CloudOff, WifiOff, CircleAlert, Bug, RotateCcw, FolderUp, Pencil, Link, Phone,
-    Volume2, VolumeX, Ghost, ArrowUpDown, PanelLeftClose, PanelLeftOpen,
+    Volume2, VolumeX, Ghost, ArrowUpDown, PanelLeftClose, PanelLeftOpen, Pin,
     type Icon as LucideIcon
 } from '@lucide/svelte';
 
@@ -118,7 +118,8 @@ export const ICONS = {
     ghost: Ghost,
     arrowUpDown: ArrowUpDown,
     panelLeftClose: PanelLeftClose,
-    panelLeftOpen: PanelLeftOpen
+    panelLeftOpen: PanelLeftOpen,
+    pin: Pin
 } satisfies Record<string, typeof LucideIcon>;
 
 export type IconName = keyof typeof ICONS;

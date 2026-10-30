@@ -16,7 +16,8 @@ const ASSET5 = 'docs/assets/outlook-slice5';
 const ASSET6 = 'docs/assets/outlook-slice6';
 const ASSET7 = 'docs/assets/outlook-slice7';
 const ASSET8 = 'docs/assets/outlook-slice8';
-for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8]) mkdirSync(d, { recursive: true });
+const ASSET9 = 'docs/assets/outlook-slice9';
+for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9]) mkdirSync(d, { recursive: true });
 
 const baseSettings = {
     aiFeatures: false,
@@ -233,6 +234,29 @@ test.describe('docs desktop (1440×900 @2x)', () => {
         await page.getByTestId('ctx-category-item-orange').click();
         await expect(page.getByTestId('msg-category-1001')).toBeVisible();
         await shot(page, `${ASSET7}/36-message-category-stripe.png`);
+    });
+
+    test('keyboard shortcuts help', async ({ page }) => {
+        await page.addInitScript((blob) => {
+            localStorage.setItem('webmail.theme', 'light');
+            localStorage.setItem('webmail.settings.v1', blob);
+        }, seedSettings());
+        await login(page);
+        await page.keyboard.press('Shift+?');
+        await expect(page.getByTestId('mail-shortcut-help')).toBeVisible();
+        await shot(page, `${ASSET8}/37-keyboard-shortcuts-help.png`);
+    });
+
+    test('pinned message row', async ({ page }) => {
+        await page.addInitScript((blob) => {
+            localStorage.setItem('webmail.theme', 'light');
+            localStorage.setItem('webmail.settings.v1', blob);
+        }, seedSettings());
+        await login(page);
+        await page.getByTestId('msg-pin-1018').click({ force: true });
+        await expect(page.getByTestId('msg-row-1018')).toHaveAttribute('data-pinned', 'true');
+        await page.getByTestId('msg-row-1018').hover();
+        await shot(page, `${ASSET9}/38-pinned-message-row.png`);
     });
 });
 

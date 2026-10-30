@@ -14,6 +14,7 @@
         setMessageCategoryOverlay,
         remapCategoryOverlay
     } from '../lib/message-categories.svelte';
+    import { hydrateMessagePinSnooze, remapPinSnoozeOverlay } from '../lib/message-pin-snooze.svelte';
     import { recordView } from '../lib/recent-views.svelte';
     import {
         listMailboxes,
@@ -449,6 +450,7 @@
         if (ui.selectedPath === oldPath) ui.selectedPath = newPath;
         onFolderRenamed(oldPath, newPath);
         remapCategoryOverlay(oldPath, newPath);
+        remapPinSnoozeOverlay(oldPath, newPath);
         await refreshMailboxes();
         showToast('success', `Renamed to ${newPath}`);
     }
@@ -1818,6 +1820,7 @@
         // the book to browser-local (which Settings then says out loud).
         loadAddressBook().catch(() => { /* offline / server predates the feature */ });
         hydrateMessageCategories();
+        hydrateMessagePinSnooze();
         // Skip the probe while the tab is hidden or the browser knows it's
         // offline. It used to run unconditionally forever, so a backgrounded
         // or disconnected tab generated a failed /v1/ai/config every 30s —

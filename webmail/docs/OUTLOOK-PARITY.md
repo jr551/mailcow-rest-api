@@ -14,7 +14,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 |------------------|-------|--------------|
 | **App chrome / command bar** | Outlook skin default (`skins.svelte.ts`), top search, account menu, app rail (Mail / Calendar / AI / Drive) | Medium: rail is broader than OWA; unify launcher later |
 | **Folder pane** | `Sidebar.svelte` tree, **Favorites** pin list, drag-drop move, shortcuts row | Medium: no folder groups |
-| **Message list** | `MessageList.svelte`, density, **Outlook Filter / Sort** menus (All/Unread/Flagged/To me/Has files/Mentions), **colour categories**, optional AI sort | Medium: pin/snooze row actions |
+| **Message list** | `MessageList.svelte`, density, **Outlook Filter / Sort** menus (All/Unread/Flagged/To me/Has files/Mentions), **colour categories**, **pin / snooze** row actions, optional AI sort | Medium: sweep one-click |
 | **Focused / Other** | `focused-inbox.ts` + INBOX tabs | Low–medium: optional AI refinement later |
 | **Reading pane** | `MessageDetail.svelte`, reply/forward, conversation stack when grouped | Low–medium: richer HTML parity; pane position done (slice 3) |
 | **Conversation view** | List grouping via `threads.ts`; reading-pane stack via `conversation-view.ts` + `ConversationStack.svelte` | Medium: attachments per message in stack; richer HTML parity |
@@ -137,7 +137,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 8 (this PR)
+## Slice 8 (done)
 
 - **`webmail/src/lib/mail-keyboard-shortcuts.ts`**: OWA-style global mail chords (navigation, compose, reply, archive, delete, read/unread, flag, search, help, undo).
 - **`MailShortcutHelp.svelte`**: **?** shortcut reference dialog; **Settings → General → Keyboard shortcuts** lists the same table.
@@ -147,9 +147,19 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 9 (this PR)
+
+- **`webmail/src/lib/message-pin-snooze.ts`**: pin-to-top ordering, snooze presets, local overlay (`webmail.message-pin-snooze.v1`).
+- **`message-pin-snooze.svelte.ts`**: hydrate, toggle pin, snooze until wake time.
+- **`MessageList.svelte`**: row **Pin** control, **Snooze** context submenu, follow-up flag wording; snoozed rows hidden until due.
+- Tests: unit (`message-pin-snooze.test.mjs`) + Playwright (`outlook-pin-snooze.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice9/38-pinned-message-row.png`.
+
+---
+
 ## Next planned slice
 
-**Pin / snooze / follow-up flag** row actions and sweep polish, or **compose pop-out** window parity.
+**Sweep** one-click on message rows, **compose pop-out** window parity, or **dark mode / mobile** polish.
 
 ---
 
