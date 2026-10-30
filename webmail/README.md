@@ -118,6 +118,12 @@ npm run build          # writes webmail/dist/, excluded from the Docker context
 
 Run these from this `webmail/` directory. `VITE_DEV_API_TARGET` points the Vite dev proxy at a local API; in production the API serves the built files directly and no proxy is involved.
 
+To refresh committed README screenshots (mock API only, fixed 1440×900 / 390×844 viewports):
+
+```sh
+npm run docs:screenshots
+```
+
 `npm run check` is `svelte-check --tsgo`: it type-checks with the native Go
 compiler instead of `tsc`. That needs two TypeScript installs side by side —
 `typescript` stays on the 6.x line because svelte-check peers `^5 || ^6`, and

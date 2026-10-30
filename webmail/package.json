@@ -10,7 +10,7 @@
         "check": "svelte-check --tsgo --tsconfig ./tsconfig.json",
         "test:unit": "node --test test/unit/*.test.mjs",
         "test:e2e": "playwright test",
-        "docs:screenshots": "playwright test test/e2e/docs-screenshots.spec.ts test/e2e/outlook-focused-inbox.spec.ts test/e2e/outlook-conversation-view.spec.ts test/e2e/outlook-reading-pane-layout.spec.ts",
+        "docs:screenshots": "playwright test test/e2e/docs-screenshots.spec.ts test/e2e/ai-panel-layout.spec.ts",
         "check:config": "node scripts/check-config.mjs",
         "setup": "bash scripts/setup.sh"
     },

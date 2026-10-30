@@ -98,7 +98,7 @@ test('opening the rule dialog does not create a rule', async ({ page }) => {
     await expect(page.getByTestId('rule-condition-value')).toHaveValue('concierge@example.com');
     await expect(page.getByTestId('rule-condition-type')).toHaveValue('from-contains');
     await expect(page.getByTestId('rule-from-message-source')).toContainText('concierge@example.com');
-    await expect(page.getByTestId('rule-from-message-source')).toContainText('Welcome to imap-rest webmail');
+    await expect(page.getByTestId('rule-from-message-source')).toContainText('Welcome to your new webmail');
 
     // The future-only caveat is on screen before the user commits to anything.
     await expect(page.getByTestId('rule-future-only-note')).toBeVisible();
@@ -149,7 +149,7 @@ test('quick-fill chips switch the condition to the other real headers', async ({
 
     await page.getByTestId('rule-prefill-subject').click();
     await expect(page.getByTestId('rule-condition-type')).toHaveValue('subject-contains');
-    await expect(page.getByTestId('rule-condition-value')).toHaveValue('Welcome to imap-rest webmail');
+    await expect(page.getByTestId('rule-condition-value')).toHaveValue('Welcome to your new webmail');
 
     await page.getByTestId('rule-prefill-from').click();
     await expect(page.getByTestId('rule-condition-type')).toHaveValue('from-contains');

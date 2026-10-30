@@ -253,15 +253,21 @@
         display: flex;
         flex-direction: column;
         overflow: hidden;
+        z-index: 5;
     }
-    @media (max-width: 1100px) {
+    .panel.fade-in {
+        animation: none;
+        opacity: 1;
+    }
+    @media (max-width: 720px) {
         .panel {
             position: fixed;
             top: 0;
             right: 0;
             bottom: 0;
             width: min(380px, calc(100% - 24px));
-            z-index: 30;
+            z-index: 35;
+            background: var(--bg-surface);
         }
     }
     .intent-label {
