@@ -22,8 +22,9 @@ const ASSET11 = 'docs/assets/outlook-slice11';
 const ASSET12 = 'docs/assets/outlook-slice12';
 const ASSET13 = 'docs/assets/outlook-slice13';
 const ASSET14 = 'docs/assets/outlook-slice14';
+const ASSET15 = 'docs/assets/outlook-slice15';
 const ASSET16 = 'docs/assets/outlook-slice16';
-for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET16]) mkdirSync(d, { recursive: true });
+for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16]) mkdirSync(d, { recursive: true });
 
 const baseSettings = {
     aiFeatures: false,
@@ -414,6 +415,23 @@ test.describe('docs desktop (1440×900 @2x)', () => {
         await expect(page.getByTestId('detail-subject')).toBeVisible();
         await expect(page.getByTestId('copy-message-link-btn')).toBeVisible();
         await shot(page, `${ASSET16}/45-mail-deep-link.png`);
+    });
+});
+
+test.describe('docs outlook slice 15 (compose pop-out)', () => {
+    test('compose pop-out window', async ({ page, context }) => {
+        await page.goto('/webmail/');
+        await login(page);
+        await page.waitForSelector('[data-testid=shell]');
+        await page.click('[data-testid=compose-btn]');
+        await page.fill('[data-testid=compose-to]', 'popout-shot@example.com');
+        await page.fill('[data-testid=compose-subject]', 'Slice 15 compose pop-out');
+        const popupPromise = context.waitForEvent('page');
+        await page.getByTestId('compose-modal-pop-out').click();
+        const popup = await popupPromise;
+        await popup.waitForLoadState('networkidle');
+        await expect(popup.getByTestId('compose-popout-shell')).toBeVisible();
+        await shot(popup, `${ASSET15}/44-compose-pop-out.png`);
     });
 });
 

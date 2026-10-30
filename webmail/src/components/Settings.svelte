@@ -2521,6 +2521,20 @@
                     </div>
 
                     <div class="card">
+                        <h4><Icon name="download" size={13} /> Pop out compose</h4>
+                        <div class="form-row bare">
+                            <div class="row-text">
+                                <strong>New window</strong>
+                                <span class="muted">
+                                    Use the <strong>Open in new window</strong> control in the compose title bar
+                                    (Outlook-style) to continue writing in a separate browser window while you
+                                    read mail in the main tab. Your in-progress fields move with the pop-out.
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card">
                         <h4><Icon name="at" size={13} /> Default From address</h4>
                         <div class="form-row bare">
                             <div class="row-text">

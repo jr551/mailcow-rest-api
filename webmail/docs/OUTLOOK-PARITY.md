@@ -210,7 +210,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 15 (open PR #102)
+## Slice 15 (done in #102)
 
 - **`webmail/src/lib/compose-popout.ts`**: sessionStorage hand-off, pop-out URL builder, `window.open` helper.
 - **`ComposePopoutShell.svelte`** + **`App.svelte`**: `?composePopout=1&sid=…` route renders compose-only shell.
@@ -234,7 +234,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ## Next planned slice
 
-**Dark mode / mobile** polish, **accessibility** landmarks, or opt-in **AI thread summarise**.
+**Accessibility** landmarks (pane regions, tab order vs OWA), **dark mode / mobile** polish, or opt-in **AI thread summarise**.
 
 ---
 

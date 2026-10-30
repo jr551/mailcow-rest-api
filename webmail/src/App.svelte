@@ -5,6 +5,10 @@
     import { startServerHealthPolling } from './lib/server-health.svelte';
     import Login from './components/Login.svelte';
     import Layout from './components/Layout.svelte';
+    import { isComposePopoutLocation } from './lib/compose-popout';
+    import ComposePopoutShell from './components/ComposePopoutShell.svelte';
+
+    const composePopout = isComposePopoutLocation();
     import MaintenanceOverlay from './components/MaintenanceOverlay.svelte';
     import SetupDiagnostics from './components/SetupDiagnostics.svelte';
 
@@ -22,7 +26,11 @@
 </script>
 
 {#if authState.activeUser}
-    <Layout />
+    {#if composePopout}
+        <ComposePopoutShell />
+    {:else}
+        <Layout />
+    {/if}
 {/if}
 {#if handoff.pending}
     <div class="handoff-wait" role="status">Signing you in…</div>
