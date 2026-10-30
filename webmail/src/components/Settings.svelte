@@ -123,7 +123,7 @@
     // every spec that clicks `settings-tab-privacy` still lands correctly.
     type SectionId =
         | 'account' | 'security'
-        | 'notifications' | 'ai' | 'sounds' | 'keyboard-shortcuts' | 'appearance' | 'calendar' | 'people'
+        | 'notifications' | 'ai' | 'sounds' | 'keyboard-shortcuts' | 'accessibility' | 'appearance' | 'calendar' | 'people'
         | 'message-list' | 'reading-pane' | 'privacy' | 'compose' | 'smart-suggestions'
         | 'mail-rules' | 'ai-cloud-replies' | 'sweep' | 'junk'
         | 'filters' | 'forwarding' | 'outbound-hooks';
