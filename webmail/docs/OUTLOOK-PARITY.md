@@ -221,7 +221,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 16 (this PR)
+## Slice 16 (done in #103)
 
 - **`webmail/src/lib/mail-deep-link.ts`**: parse/build `#mail?folder=…&uid=…` hash links; clipboard helper.
 - **`Layout.svelte`**: syncs hash on message selection; applies hash on load and `hashchange`.
@@ -232,9 +232,21 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 18 (this PR)
+
+- **`webmail/src/lib/message-follow-up.ts`**: OWA-style follow-up due presets (Today / Tomorrow / This week / No date).
+- **`message-follow-up.svelte.ts`**: `webmail.message-follow-up.v1` local due-date overlay; `\Flagged` on the server.
+- **`MessageList.svelte`**: **Flag** context submenu; row hint (e.g. “Follow up today”).
+- **`Layout.svelte`**: applies presets via `modifyFlags` + overlay; star toggle clears due dates.
+- **`Settings.svelte`**: General section documents follow-up flags.
+- Tests: unit (`message-follow-up.test.mjs`) + Playwright (`outlook-follow-up-flag.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice18/47-follow-up-today-row.png`.
+
+---
+
 ## Next planned slice
 
-**Accessibility** landmarks (pane regions, tab order vs OWA), **dark mode / mobile** polish, or opt-in **AI thread summarise**.
+**Accessibility** landmarks (slice 17 in #104), **dark mode / mobile** polish, or opt-in **AI thread summarise**.
 
 ---
 

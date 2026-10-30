@@ -4163,6 +4163,15 @@
                 </div>
                 <div class="form-row">
                     <div class="row-text">
+                        <strong>Follow-up flags</strong>
+                        <span class="muted">
+                            Right-click a message → <strong>Flag</strong> to set a follow-up date (Today, Tomorrow, This week, or No date).
+                            Due dates are stored in this browser; the star / <code>\Flagged</code> state syncs with your mailbox.
+                        </span>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="row-text">
                         <strong>List density</strong>
                         <span class="muted">Comfortable shows avatars + subjects on two lines. Compact packs ~2× more rows in the same height.</span>
                     </div>

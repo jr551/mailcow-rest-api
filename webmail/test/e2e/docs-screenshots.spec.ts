@@ -24,7 +24,8 @@ const ASSET13 = 'docs/assets/outlook-slice13';
 const ASSET14 = 'docs/assets/outlook-slice14';
 const ASSET15 = 'docs/assets/outlook-slice15';
 const ASSET16 = 'docs/assets/outlook-slice16';
-for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16]) mkdirSync(d, { recursive: true });
+const ASSET18 = 'docs/assets/outlook-slice18';
+for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET18]) mkdirSync(d, { recursive: true });
 
 const baseSettings = {
     aiFeatures: false,
@@ -415,6 +416,20 @@ test.describe('docs desktop (1440×900 @2x)', () => {
         await expect(page.getByTestId('detail-subject')).toBeVisible();
         await expect(page.getByTestId('copy-message-link-btn')).toBeVisible();
         await shot(page, `${ASSET16}/45-mail-deep-link.png`);
+    });
+
+    test('slice18 follow-up flag row label', async ({ page }) => {
+        await page.addInitScript((blob) => {
+            localStorage.setItem('webmail.theme', 'light');
+            localStorage.setItem('webmail.settings.v1', blob);
+        }, seedSettings());
+        await login(page);
+        const row = page.getByTestId('msg-row-1001');
+        await row.click({ button: 'right' });
+        await page.getByTestId('ctx-follow-up-trigger').hover();
+        await page.getByTestId('ctx-follow-up-item-today').click();
+        await expect(page.getByTestId('msg-follow-up-1001')).toBeVisible();
+        await shot(page, `${ASSET18}/47-follow-up-today-row.png`);
     });
 });
 
