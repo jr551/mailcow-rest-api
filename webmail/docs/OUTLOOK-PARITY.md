@@ -19,7 +19,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 | **Reading pane** | `MessageDetail.svelte`, reply/forward, conversation stack when grouped | Low–medium: richer HTML parity; pane position done (slice 3) |
 | **Conversation view** | List grouping via `threads.ts`; reading-pane stack via `conversation-view.ts` + `ConversationStack.svelte` | Medium: attachments per message in stack; richer HTML parity |
 | **Compose** | `Compose.svelte` + `FloatingPanel.svelte`, TipTap | Medium: no scheduled send, undo send, sensitivity labels |
-| **Search** | Header search + tag syntax; folder vs all scope | Medium: no unified People/Files search; no saved searches |
+| **Search** | Header search + tag syntax; optional **natural-language** translation when AI + provider configured | Medium: no unified People/Files search; no saved searches |
 | **Settings shell** | `Settings.svelte` 3-column Outlook-like modal, 19 sections | Low–medium: content differs |
 | **AI features** | Master switch **`aiFeatures`**; defaults **off** for new profiles; every AI entry point hidden when off | Low — opt-in provider config remains in Settings |
 | **People / VIP** | VIP list in Settings; local address book | Medium vs OWA People app |
@@ -38,7 +38,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ### P1 — Search & triage
 
-5. **Natural-language search** (only when AI + user provider configured); fallback keeps tag syntax.
+5. **Natural-language search** (only when AI + user provider configured); fallback keeps tag syntax — **slice 5 (this PR)**.
 6. **Quick filter bar** parity (Has files, Mentions me, etc.) where IMAP/search supports it.
 7. **Categories / flags** (user-assigned colours) synced via IMAP keywords or local overlay.
 
@@ -105,9 +105,20 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 5 (this PR)
+
+- **`webmail/src/lib/natural-language-search.ts`**: tag-syntax detection, response parsing, sanitization.
+- **`webmail/src/lib/natural-language-search.client.ts`**: opt-in translation via configured provider (`cachedChatCompletion`, scope `nl-search`).
+- **`settings.naturalLanguageSearch`**: default **off**; toggle in Settings → AI (only when `aiFeatures` is on).
+- **`Layout.svelte`**: debounced NL translation before IMAP search; shows `search-nl-hint` with the tag query used.
+- Tests: unit (`natural-language-search.test.mjs`) + Playwright (`outlook-nl-search.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice5/34-nl-search-hint.png`.
+
+---
+
 ## Next planned slice
 
-**Natural-language search** (opt-in when AI + user provider configured); tag-syntax search remains the default fallback.
+**Quick filter bar** parity (Has files, Mentions me, etc.) where IMAP/search supports it.
 
 ---
 

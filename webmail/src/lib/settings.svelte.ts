@@ -194,6 +194,9 @@ export interface Settings {
      *  third-party disclosure at all sets aiFeatures=false, which is a
      *  stronger statement than any per-feature toggle. */
     linkSafetyCheck: boolean;
+    /** When true (and AI + provider configured), plain-language search
+     *  queries are translated to tag syntax before hitting IMAP search. */
+    naturalLanguageSearch: boolean;
 }
 
 
@@ -296,7 +299,8 @@ export function sanitizeSettings(raw: unknown): Settings {
         // this field inherits the on-by-default behaviour, matching a
         // fresh profile. An explicit `false` from a user who turned
         // it off is preserved.
-        linkSafetyCheck: parsed.linkSafetyCheck !== false
+        linkSafetyCheck: parsed.linkSafetyCheck !== false,
+        naturalLanguageSearch: parsed.naturalLanguageSearch === true
     };
 }
 
@@ -663,6 +667,11 @@ export function setHideSidebar(on: boolean) {
 
 export function setLinkSafetyCheck(on: boolean) {
     state.linkSafetyCheck = on;
+    persist(state);
+}
+
+export function setNaturalLanguageSearch(on: boolean) {
+    state.naturalLanguageSearch = on;
     persist(state);
 }
 

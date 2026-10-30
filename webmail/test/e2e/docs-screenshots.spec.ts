@@ -12,7 +12,8 @@ const DOCS = 'docs/screenshots';
 const ASSET1 = 'docs/assets/outlook-slice1';
 const ASSET2 = 'docs/assets/outlook-slice2';
 const ASSET3 = 'docs/assets/outlook-slice3';
-for (const d of [DOCS, ASSET1, ASSET2, ASSET3]) mkdirSync(d, { recursive: true });
+const ASSET5 = 'docs/assets/outlook-slice5';
+for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5]) mkdirSync(d, { recursive: true });
 
 const baseSettings = {
     aiFeatures: false,
@@ -193,6 +194,17 @@ test.describe('docs desktop (1440×900 @2x)', () => {
         await page.getByTestId('msg-row-1018').click({ force: true });
         await expect(page.getByTestId('reading-pane-flyout')).toBeVisible();
         await shot(page, `${ASSET3}/31-reading-pane-hidden-flyout.png`);
+    });
+
+    test('natural-language search hint', async ({ page }) => {
+        await page.addInitScript((blob) => {
+            localStorage.setItem('webmail.theme', 'light');
+            localStorage.setItem('webmail.settings.v1', blob);
+        }, seedSettings({ aiFeatures: true, naturalLanguageSearch: true }));
+        await login(page);
+        await page.getByTestId('search-input').fill('invoices from acme billing');
+        await expect(page.getByTestId('search-nl-hint')).toContainText('from:billing@acme.example', { timeout: 8000 });
+        await shot(page, `${ASSET5}/34-nl-search-hint.png`);
     });
 });
 

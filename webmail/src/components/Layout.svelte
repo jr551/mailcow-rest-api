@@ -53,6 +53,8 @@
     import { getShortcuts, blockSender as apiBlockSender, bulkDeleteMessages, type Shortcut } from '../lib/api';
     import { shortcutsItems, embeddedShortcut, popupShortcut, safeShortcutUrl } from '../lib/shortcuts-store';
     import { probeCapabilities, settings, setHideSidebar, setReadingPaneLayout } from '../lib/settings.svelte';
+    import { translateNaturalLanguageSearch } from '../lib/natural-language-search.client';
+    import { looksLikeStructuredMailSearch } from '../lib/natural-language-search';
     import { readingPaneLayoutFromKeyboard } from '../lib/reading-pane-layout';
     import { findThreadForUid } from '../lib/conversation-view';
     import { SKINS, skinState } from '../lib/skins.svelte';
@@ -243,6 +245,10 @@
         }
     }
     let searchDebounce: ReturnType<typeof setTimeout> | null = null;
+    let searchResolveGen = 0;
+    let nlSearchResolving = $state(false);
+    /** Tag query produced from the last NL translation (for UI hint). */
+    let lastNlSearchTranslation = $state<string | null>(null);
     let installDismissed = $state(loadInstallDismissed());
     let accountMenuOpen = $state(false);
     let accountBtnEl: HTMLButtonElement | null = $state(null);
@@ -940,7 +946,9 @@
     );
     const searchPlaceholder = $derived(
         ui.app === 'mail'
-            ? 'Search — try from:alice or has:attachment…'
+            ? settings.naturalLanguageSearch && settings.aiFeatures
+                ? 'Search mail — plain language or from:alice…'
+                : 'Search — try from:alice or has:attachment…'
             : 'Search mail — from:alice, has:attachment…'
     );
 
@@ -948,17 +956,39 @@
         searchInput = value;
         if (value.trim() && ui.app !== 'mail') ui.app = 'mail';
         if (searchDebounce) clearTimeout(searchDebounce);
-        searchDebounce = setTimeout(() => {
-            ui.search = searchInput.trim();
-            // Typing a new query falls back to current-folder mode; the
-            // user has to click "Search all folders" again deliberately
-            // (lest a typo trigger a 20-folder crawl).
-            if (ui.searchScope === 'all') {
-                cancelGlobalSearch();
-                ui.searchScope = 'folder';
+        searchDebounce = setTimeout(() => void applySearchFromInput(), 300);
+    }
+
+    async function applySearchFromInput() {
+        const gen = ++searchResolveGen;
+        let q = searchInput.trim();
+        lastNlSearchTranslation = null;
+
+        if (
+            q &&
+            settings.naturalLanguageSearch &&
+            settings.aiFeatures &&
+            !looksLikeStructuredMailSearch(q)
+        ) {
+            nlSearchResolving = true;
+            try {
+                const translated = await translateNaturalLanguageSearch(q);
+                if (gen !== searchResolveGen) return;
+                if (translated) {
+                    lastNlSearchTranslation = translated;
+                    q = translated;
+                }
+            } finally {
+                if (gen === searchResolveGen) nlSearchResolving = false;
             }
-            refreshMessages({ resetPage: true });
-        }, 300);
+        }
+
+        ui.search = q;
+        if (ui.searchScope === 'all') {
+            cancelGlobalSearch();
+            ui.searchScope = 'folder';
+        }
+        refreshMessages({ resetPage: true });
     }
 
     // ----- Global search (across every folder) ---------------------------
@@ -1815,6 +1845,13 @@
                 aria-label={searchLabel}
                 data-testid="search-input"
             />
+            {#if nlSearchResolving}
+                <span class="search-nl-status muted small" data-testid="search-nl-pending">Translating…</span>
+            {:else if lastNlSearchTranslation}
+                <span class="search-nl-status muted small" data-testid="search-nl-hint" title="Translated to tag syntax">
+                    as {lastNlSearchTranslation}
+                </span>
+            {/if}
             {#if (ui.search || '').trim()}
                 {#if ui.searchScope === 'all'}
                     <button

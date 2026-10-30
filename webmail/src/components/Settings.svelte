@@ -60,7 +60,7 @@
         setSpamSuggest, setSpamSuggestConfidenceFloor, setSpamSweepBatchSize, setAiSortSweepSpam,
         setVipAddresses, setPreSendCheck, setComposeHistorySummary, setAiSuggestReply,
         aiAvailable, resolveCustomBaseUrl, resolveCustomModel, extractChatText,
-        setCalendarTicker, setCalendarTickerTitles, setWeatherChipOutlook, setLinkSafetyCheck, setReadingPaneLayout
+        setCalendarTicker, setCalendarTickerTitles, setWeatherChipOutlook, setLinkSafetyCheck, setNaturalLanguageSearch, setReadingPaneLayout
     } from '../lib/settings.svelte';
     import { warmupTesseract, teardownTesseract } from '../lib/tesseract-ocr';
     import { linkCheckConfigured } from '../lib/virustotal';
@@ -2352,6 +2352,37 @@
                                         data-testid="settings-link-safety"
                                     />
                                     <span>{settings.linkSafetyCheck ? 'On' : 'Off'}</span>
+                                </label>
+                            </div>
+                        {/if}
+                    </div>
+
+                    <div class="card">
+                        <h4><Icon name="search" size={13} /> Natural-language search</h4>
+                        {#if !settings.aiFeatures}
+                            <p class="muted small" data-testid="settings-nl-search-ai-off">
+                                Unavailable while AI features are off. When enabled, plain-language queries in the
+                                mail search box are translated to tag syntax using your configured provider.
+                            </p>
+                        {:else}
+                            <div class="form-row bare">
+                                <div class="row-text">
+                                    <strong>Translate plain-language search</strong>
+                                    <span class="muted">
+                                        Type questions like "invoices from billing last month" in the header search.
+                                        Tag syntax such as <code>from:alice</code> is left unchanged. Requires a
+                                        configured AI provider (referenced in settings only — no keys in this UI copy).
+                                    </span>
+                                </div>
+                                <label class="toggle">
+                                    <input
+                                        type="checkbox"
+                                        checked={settings.naturalLanguageSearch}
+                                        disabled={!settings.aiFeatures}
+                                        onchange={(e) => setNaturalLanguageSearch((e.currentTarget as HTMLInputElement).checked)}
+                                        data-testid="settings-nl-search"
+                                    />
+                                    <span>{settings.naturalLanguageSearch ? 'On' : 'Off'}</span>
                                 </label>
                             </div>
                         {/if}
