@@ -26,6 +26,8 @@
         overlay?: import('svelte').Snippet;
         overlayVisible?: boolean;
         testId?: string;
+        /** OWA-style open in new window — hidden when undefined. */
+        onPopOut?: (() => void) | null;
     }
 
     let {
@@ -42,7 +44,8 @@
         footer,
         overlay,
         overlayVisible = false,
-        testId = 'floating-panel'
+        testId = 'floating-panel',
+        onPopOut = null
     }: Props = $props();
 
     interface Geometry {
@@ -332,6 +335,18 @@
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="14" x2="19" y2="14"/></svg>
                 {/if}
             </button>
+            {#if !geo.minimized && onPopOut}
+                <button
+                    type="button"
+                    class="head-btn"
+                    onclick={() => onPopOut?.()}
+                    title="Open in new window"
+                    aria-label="Open in new window"
+                    data-testid={`${testId}-pop-out`}
+                >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>
+                </button>
+            {/if}
             {#if !geo.minimized}
                 <button
                     type="button"

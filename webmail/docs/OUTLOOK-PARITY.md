@@ -199,7 +199,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 14 (this PR)
+## Slice 14 (done in #101)
 
 - **`webmail/src/lib/compose-draft.ts`**: RFC822 builder + Drafts folder resolution for IMAP APPEND.
 - **`compose-draft.svelte.ts`**: **`saveComposeDraftToImap`** via `/v1/mailboxes/:path/messages?flags=Draft`.
@@ -210,9 +210,20 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 15 (this PR)
+
+- **`webmail/src/lib/compose-popout.ts`**: sessionStorage hand-off, pop-out URL builder, `window.open` helper.
+- **`ComposePopoutShell.svelte`** + **`App.svelte`**: `?composePopout=1&sid=…` route renders compose-only shell.
+- **`FloatingPanel.svelte`**: **Open in new window** title-bar control; hidden in the pop-out itself.
+- **`Compose.svelte`**: snapshots in-progress fields into the session before opening the child window.
+- Tests: unit (`compose-popout.test.mjs`) + Playwright (`outlook-compose-popout.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice15/44-compose-pop-out.png`.
+
+---
+
 ## Next planned slice
 
-**Compose pop-out** window parity or **dark mode / mobile** polish.
+**Deep links / shareable message URLs**, **dark mode / mobile** polish, or **accessibility** landmarks.
 
 ---
 

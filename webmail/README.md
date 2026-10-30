@@ -109,6 +109,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Save draft in compose](docs/assets/outlook-slice14/43-save-draft-compose.png)
 
+- **Compose pop-out** — **Open in new window** in the compose title bar moves your draft into a dedicated browser window so you can keep reading mail in the main tab.
+
+![Compose pop-out window](docs/assets/outlook-slice15/44-compose-pop-out.png)
+
 ## Keyboard shortcuts (mail)
 
 Global shortcuts are listed under **Settings → General → Keyboard shortcuts** (press **?** in the inbox for the same list). Reading-pane placement:
