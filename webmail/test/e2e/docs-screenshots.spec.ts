@@ -21,7 +21,8 @@ const ASSET10 = 'docs/assets/outlook-slice10';
 const ASSET11 = 'docs/assets/outlook-slice11';
 const ASSET12 = 'docs/assets/outlook-slice12';
 const ASSET13 = 'docs/assets/outlook-slice13';
-for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13]) mkdirSync(d, { recursive: true });
+const ASSET14 = 'docs/assets/outlook-slice14';
+for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14]) mkdirSync(d, { recursive: true });
 
 const baseSettings = {
     aiFeatures: false,
@@ -374,6 +375,31 @@ test.describe('docs desktop (1440×900 @2x)', () => {
         await expect(page.getByTestId('schedule-send-dialog')).toBeVisible();
         await page.getByTestId('schedule-preset-tomorrow-morning').click();
         await shot(page, `${ASSET13}/42-schedule-send-dialog.png`);
+    });
+
+    test('save draft compose chrome', async ({ page }) => {
+        await page.route('**/v1/mailboxes/Drafts/messages**', (route) => {
+            if (route.request().method() !== 'POST') return route.continue();
+            route.fulfill({
+                status: 201,
+                contentType: 'application/json',
+                body: JSON.stringify({ path: 'Drafts', uid: 9001, uidValidity: 1 })
+            });
+        });
+        await page.addInitScript((blob) => {
+            localStorage.setItem('webmail.theme', 'light');
+            localStorage.setItem('webmail.settings.v1', blob);
+        }, seedSettings({ undoSendSeconds: 0, aiFeatures: false, preSendCheck: false }));
+        await login(page);
+        await page.reload();
+        await page.waitForSelector('[data-testid=shell]');
+        await page.click('[data-testid=compose-btn]');
+        await page.fill('[data-testid=compose-to]', 'draft@example.com');
+        await page.fill('[data-testid=compose-subject]', 'Slice 14 save draft');
+        await page.locator('[data-testid=rich-editor-surface]').click();
+        await page.keyboard.type('Draft body for screenshot.');
+        await expect(page.getByTestId('compose-save-draft')).toBeVisible();
+        await shot(page, `${ASSET14}/43-save-draft-compose.png`);
     });
 });
 

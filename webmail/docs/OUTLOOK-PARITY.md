@@ -18,7 +18,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 | **Focused / Other** | `focused-inbox.ts` + INBOX tabs | Low–medium: optional AI refinement later |
 | **Reading pane** | `MessageDetail.svelte`, reply/forward, conversation stack when grouped | Low–medium: richer HTML parity; pane position done (slice 3) |
 | **Conversation view** | List grouping via `threads.ts`; reading-pane stack via `conversation-view.ts` + `ConversationStack.svelte` | Medium: attachments per message in stack; richer HTML parity |
-| **Compose** | `Compose.svelte` + `FloatingPanel.svelte`, TipTap | Medium: sensitivity labels; **undo send** (slice 12), **scheduled send** (slice 13) |
+| **Compose** | `Compose.svelte` + `FloatingPanel.svelte`, TipTap | Medium: sensitivity labels; **undo send** (slice 12), **scheduled send** (#100), **Save draft** (slice 14) |
 | **Search** | Header search + tag syntax; optional **natural-language** translation when AI + provider configured | Medium: no unified People/Files search; no saved searches |
 | **Settings shell** | `Settings.svelte` 3-column Outlook-like modal, 19 sections | Low–medium: content differs |
 | **AI features** | Master switch **`aiFeatures`**; defaults **off** for new profiles; every AI entry point hidden when off | Low — opt-in provider config remains in Settings |
@@ -189,7 +189,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 13 (this PR)
+## Slice 13 (done in #100)
 
 - **`webmail/src/lib/scheduled-send.ts`**: OWA-style schedule presets, send-at sanitization (1 minute – 30 days).
 - **`scheduled-send.svelte.ts`**: `webmail.scheduled-sends.v1` local queue; **`Layout.svelte`** flushes due sends via `sendStub`.
@@ -199,9 +199,20 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 14 (this PR)
+
+- **`webmail/src/lib/compose-draft.ts`**: RFC822 builder + Drafts folder resolution for IMAP APPEND.
+- **`compose-draft.svelte.ts`**: **`saveComposeDraftToImap`** via `/v1/mailboxes/:path/messages?flags=Draft`.
+- **`Compose.svelte`**: explicit **Save draft** button, **Ctrl+S**, and working save when SMTP is disabled.
+- **`Settings.svelte`**: Compose section documents save behaviour.
+- Tests: unit (`compose-draft.test.mjs`) + Playwright (`outlook-save-draft.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice14/43-save-draft-compose.png`.
+
+---
+
 ## Next planned slice
 
-**Compose pop-out** window parity, **explicit Save draft UX**, or **dark mode / mobile** polish.
+**Compose pop-out** window parity or **dark mode / mobile** polish.
 
 ---
 
