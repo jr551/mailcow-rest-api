@@ -138,6 +138,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Mobile Settings dark theme](docs/assets/outlook-slice22/52-mobile-settings-dark-theme.png)
 
+- **Mobile keyboard shortcuts (external keyboard)** — press **?** in the inbox (or **Settings → Keyboard shortcuts**) for an OWA-style chord list. **J** / **K**, **Enter**, **N**, **E**, **/**, and reply keys work on tablet or phone with a Bluetooth keyboard; touch-only use is unchanged.
+
+![Mobile keyboard shortcuts help](docs/assets/outlook-slice25/55-mobile-keyboard-shortcuts-help.png)
+
 ## Keyboard shortcuts (mail)
 
 Global shortcuts are listed under **Settings → General → Keyboard shortcuts** (press **?** in the inbox for the same list). Reading-pane placement:

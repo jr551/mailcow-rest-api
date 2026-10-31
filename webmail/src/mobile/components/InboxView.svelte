@@ -36,8 +36,10 @@
     import LatencyChip from '../../components/LatencyChip.svelte';
     import { playClick } from '../../lib/sounds.svelte';
     import { findThreadForUid } from '../../lib/conversation-view';
+    import { setMobileMailShortcutHandler } from '../lib/mail-shortcut-handlers.svelte';
 
     let searchInput = $state('');
+    let searchInputEl: HTMLInputElement | undefined = $state();
     let searchDebounce: ReturnType<typeof setTimeout> | null = null;
 
     const SERVER_CAP = 100;
@@ -596,6 +598,83 @@
         }
     }
 
+    function keyboardActiveMessage(): MessageListItem | null {
+        if (mobileState.listKeyboardUid != null) {
+            const m = filtered.find((r) => r.uid === mobileState.listKeyboardUid);
+            if (m) return m;
+        }
+        if (mobileState.selectedUid != null) {
+            return filtered.find((r) => r.uid === mobileState.selectedUid) ?? null;
+        }
+        return filtered[0] ?? null;
+    }
+
+    function moveKeyboardSelection(dir: 'next' | 'prev') {
+        const rows = filtered;
+        if (rows.length === 0) return;
+        let idx = mobileState.listKeyboardUid != null
+            ? rows.findIndex((m) => m.uid === mobileState.listKeyboardUid)
+            : -1;
+        if (idx < 0) idx = 0;
+        else idx = dir === 'next' ? Math.min(rows.length - 1, idx + 1) : Math.max(0, idx - 1);
+        mobileState.listKeyboardUid = rows[idx].uid;
+        requestAnimationFrame(() => {
+            document.querySelector(`[data-testid="msg-row-${rows[idx].uid}"]`)?.scrollIntoView({ block: 'nearest' });
+        });
+    }
+
+    async function keyboardMarkRead(wantRead: boolean) {
+        const msg = keyboardActiveMessage();
+        if (!msg) return;
+        const seen = msg.flags.includes('\\Seen');
+        if (wantRead === seen) return;
+        await actionToggleRead(msg);
+    }
+
+    $effect(() => {
+        if (mobileState.view !== 'inbox') {
+            for (const a of [
+                'focus-search', 'navigate-next', 'navigate-prev', 'open-message',
+                'archive', 'delete', 'mark-read', 'mark-unread', 'toggle-flag',
+            ] as const) {
+                setMobileMailShortcutHandler(a, null);
+            }
+            return;
+        }
+        setMobileMailShortcutHandler('focus-search', () => { searchInputEl?.focus(); });
+        setMobileMailShortcutHandler('navigate-next', () => moveKeyboardSelection('next'));
+        setMobileMailShortcutHandler('navigate-prev', () => moveKeyboardSelection('prev'));
+        setMobileMailShortcutHandler('open-message', () => {
+            const msg = keyboardActiveMessage();
+            if (msg) void selectMessage(msg);
+        });
+        setMobileMailShortcutHandler('archive', () => {
+            const msg = keyboardActiveMessage();
+            if (msg) void archiveMessage(msg);
+        });
+        setMobileMailShortcutHandler('delete', () => {
+            const msg = keyboardActiveMessage();
+            if (msg) void trashMessage(msg);
+        });
+        setMobileMailShortcutHandler('mark-read', () => { void keyboardMarkRead(true); });
+        setMobileMailShortcutHandler('mark-unread', () => { void keyboardMarkRead(false); });
+        setMobileMailShortcutHandler('toggle-flag', () => { void keyboardToggleFlag(); });
+        return () => {
+            for (const a of [
+                'focus-search', 'navigate-next', 'navigate-prev', 'open-message',
+                'archive', 'delete', 'mark-read', 'mark-unread', 'toggle-flag',
+            ] as const) {
+                setMobileMailShortcutHandler(a, null);
+            }
+        };
+    });
+
+    async function keyboardToggleFlag() {
+        const msg = keyboardActiveMessage();
+        if (!msg) return;
+        await toggleStar(msg);
+    }
+
     onMount(() => {
         hydrateMessageFollowUp();
         followUpNow = Date.now();
@@ -653,9 +732,11 @@
 
     <div class="msearch">
         <input
+            bind:this={searchInputEl}
             type="search"
             placeholder="Search"
             aria-label="Search mail"
+            data-testid="mobile-search-input"
             value={searchInput}
             oninput={(e) => onSearch((e.currentTarget as HTMLInputElement).value)}
         />
@@ -812,6 +893,7 @@
                         class:danger-4={dlevel === 4}
                         class:rule-running={ruleAnimUids.has(msg.uid)}
                         class:rule-popping={ruleDoneUids.has(msg.uid)}
+                        class:keyboard-focus={mobileState.listKeyboardUid === msg.uid}
                     >
                         <Avatar {email} {name} size={40} />
                         <div class="msg-body">
@@ -1150,6 +1232,11 @@
     .msg-row.rule-popping {
         animation: rule-pop 360ms cubic-bezier(0.4, 0.0, 1, 1) forwards;
         pointer-events: none;
+    }
+    .msg-row.keyboard-focus {
+        outline: 2px solid var(--accent);
+        outline-offset: -2px;
+        border-radius: 8px;
     }
     @keyframes rule-shimmer {
         0%   { background-position: 100% 50%; }

@@ -26,6 +26,7 @@
     import { shouldShowConversationStack } from '../../lib/conversation-view';
     import { effectiveTheme } from '../../lib/theme.svelte';
     import { messageIframeTheme } from '../../lib/mobile-appearance';
+    import { setMobileMailShortcutHandler } from '../lib/mail-shortcut-handlers.svelte';
 
     const msg = $derived(mobileState.detail);
     const loading = $derived(mobileState.detailLoading);
@@ -319,6 +320,34 @@
         mobileState.composeMode = mode;
         navigate('compose');
     }
+
+    $effect(() => {
+        if (mobileState.view !== 'message' || !msg) {
+            for (const a of ['reply', 'reply-all', 'forward', 'archive', 'delete', 'mark-read', 'mark-unread', 'toggle-flag'] as const) {
+                setMobileMailShortcutHandler(a, null);
+            }
+            return;
+        }
+        setMobileMailShortcutHandler('reply', () => reply('reply'));
+        setMobileMailShortcutHandler('reply-all', () => reply('replyAll'));
+        setMobileMailShortcutHandler('forward', () => reply('forward'));
+        setMobileMailShortcutHandler('archive', () => { void archive(); });
+        setMobileMailShortcutHandler('delete', () => { void trash(); });
+        setMobileMailShortcutHandler('mark-read', () => {
+            if (msg.flags.includes('\\Seen')) return;
+            void toggleUnread();
+        });
+        setMobileMailShortcutHandler('mark-unread', () => {
+            if (!msg.flags.includes('\\Seen')) return;
+            void toggleUnread();
+        });
+        setMobileMailShortcutHandler('toggle-flag', () => { void toggleStar(); });
+        return () => {
+            for (const a of ['reply', 'reply-all', 'forward', 'archive', 'delete', 'mark-read', 'mark-unread', 'toggle-flag'] as const) {
+                setMobileMailShortcutHandler(a, null);
+            }
+        };
+    });
 
     let headersDispose: (() => void) | null = null;
 
