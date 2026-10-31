@@ -40,6 +40,16 @@ export interface MobileState {
     resumeTick: number;
 }
 
+export function clearMobileMessageSelection() {
+    mobileState.selectedUid = null;
+    mobileState.detail = null;
+    mobileState.detailError = null;
+    mobileState.detailLoading = false;
+    mobileState.conversationStack = null;
+    mobileState.conversationDetails = {};
+    mobileState.conversationLoading = false;
+}
+
 const createInitial = (): MobileState => ({
     view: 'inbox',
     previousView: 'inbox',
@@ -169,6 +179,9 @@ export function installAndroidBackHandler(): () => void {
         const target = (e.state && (e.state as { view?: MobileView }).view) || 'inbox';
         suppressHistoryPush = true;
         try {
+            if (mobileState.view === 'message' && target === 'inbox') {
+                clearMobileMessageSelection();
+            }
             mobileState.previousView = mobileState.view;
             mobileState.view = target;
         } finally {

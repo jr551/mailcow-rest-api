@@ -18,6 +18,9 @@
     import BackgroundTaskFloater from '../components/BackgroundTaskFloater.svelte';
     import PwaUpdatePrompt from '../components/PwaUpdatePrompt.svelte';
     import { settings, setTesseractOcrInstalled, setPhishingScanOcrInline } from '../lib/settings.svelte';
+    import { shouldUseMobileTabletSplit } from '../lib/mobile-tablet-reading-pane';
+    import { getMobileViewportWidth } from './lib/viewport.svelte';
+    import TabletMailShell from './components/TabletMailShell.svelte';
     import { warmupTesseract } from '../lib/tesseract-ocr';
 
     const views: Record<string, any> = {
@@ -38,6 +41,31 @@
     const CurrentView = $derived(
         mobileState.view === 'ai' && !settings.aiFeatures ? InboxView : views[mobileState.view]
     );
+
+    const tabletMailSplit = $derived(
+        shouldUseMobileTabletSplit(settings.readingPaneLayout, getMobileViewportWidth())
+    );
+
+    const showTabletMailShell = $derived(tabletMailSplit && mobileState.view === 'inbox');
+
+    let prevTabletSplit = $state(false);
+
+    // Phone ↔ tablet width: swap between split inbox and full-screen reader.
+    $effect(() => {
+        const split = tabletMailSplit;
+        if (split === prevTabletSplit) return;
+        if (split && mobileState.view === 'message') {
+            mobileState.view = 'inbox';
+        } else if (
+            !split
+            && mobileState.view === 'inbox'
+            && mobileState.selectedUid != null
+            && (mobileState.detail || mobileState.detailLoading)
+        ) {
+            navigate('message');
+        }
+        prevTabletSplit = split;
+    });
 
     $effect(() => {
         if (authState.activeUser) {
@@ -171,7 +199,11 @@
     <div class="mobile-shell">
         {#key mobileState.view}
             <div class="view-wrap fade-in">
-                <CurrentView />
+                {#if showTabletMailShell}
+                    <TabletMailShell />
+                {:else}
+                    <CurrentView />
+                {/if}
             </div>
         {/key}
         {#if mobileState.view !== 'message' && mobileState.view !== 'compose'}
