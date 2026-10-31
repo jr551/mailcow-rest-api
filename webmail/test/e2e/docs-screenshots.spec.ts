@@ -26,8 +26,9 @@ const ASSET15 = 'docs/assets/outlook-slice15';
 const ASSET16 = 'docs/assets/outlook-slice16';
 const ASSET17 = 'docs/assets/outlook-slice17';
 const ASSET18 = 'docs/assets/outlook-slice18';
+const ASSET19 = 'docs/assets/outlook-slice19';
 const ASSET20 = 'docs/assets/outlook-slice20';
-for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET20]) mkdirSync(d, { recursive: true });
+for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET20]) mkdirSync(d, { recursive: true });
 
 const baseSettings = {
     aiFeatures: false,
@@ -476,6 +477,20 @@ test.describe('docs mobile (390×844 @2x)', () => {
         await page.click('button:has-text("Sign in")');
         await expect(page.locator('.mheader h1:has-text("INBOX")')).toBeVisible();
         await shot(page, `${DOCS}/mobile-inbox.png`);
+    });
+
+    test('slice19 mobile focused tab', async ({ page }) => {
+        await page.addInitScript((blob) => {
+            localStorage.setItem('webmail.theme', 'light');
+            localStorage.setItem('webmail.settings.v1', blob);
+        }, seedSettings({ inboxTab: 'focused' }));
+        await page.goto('/webmail/mobile/');
+        await page.fill('input[type="email"]', MOCK_USER);
+        await page.fill('input[type="password"]', 'hunter2');
+        await page.click('button:has-text("Sign in")');
+        await expect(page.getByTestId('inbox-tab-focused')).toHaveClass(/active/);
+        await expect(page.getByTestId('msg-row-1000')).not.toBeVisible();
+        await shot(page, `${ASSET19}/48-mobile-inbox-focused-tab.png`);
     });
 
     test('slice20 mobile conversation stack', async ({ page }) => {

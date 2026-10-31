@@ -255,9 +255,12 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 19 (in #106)
+## Slice 19 (done in #106)
 
-Mobile **Focused | Other** inbox tabs — see PR #106.
+- **`webmail/src/mobile/components/InboxView.svelte`**: **Focused | Other** tabs on mobile INBOX (same rules as desktop via `focused-inbox.ts`); `data-testid` row ids for e2e.
+- **`settings.inboxTab`**: shared with desktop; persists across form factors.
+- Tests: Playwright (`outlook-mobile-focused-inbox.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice19/48-mobile-inbox-focused-tab.png`.
 
 ---
 
