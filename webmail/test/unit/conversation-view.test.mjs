@@ -80,3 +80,11 @@ test('conversationSnippet trims whitespace', async () => {
     const mod = await loadModule();
     assert.equal(mod.conversationSnippet('  hello\n\nworld  '), 'hello world');
 });
+
+test('shouldShowConversationStack requires groupThreads and multiple uids', async () => {
+    const mod = await loadModule();
+    assert.equal(mod.shouldShowConversationStack(false, { uids: [1, 2] }), false);
+    assert.equal(mod.shouldShowConversationStack(true, null), false);
+    assert.equal(mod.shouldShowConversationStack(true, { uids: [1] }), false);
+    assert.equal(mod.shouldShowConversationStack(true, { uids: [1, 2] }), true);
+});

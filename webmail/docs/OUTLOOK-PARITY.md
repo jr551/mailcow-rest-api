@@ -255,7 +255,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 19 (this PR)
+## Slice 19 (done in #106)
 
 - **`webmail/src/mobile/components/InboxView.svelte`**: **Focused | Other** tabs on mobile INBOX (same rules as desktop via `focused-inbox.ts`); `data-testid` row ids for e2e.
 - **`settings.inboxTab`**: shared with desktop; persists across form factors.
@@ -264,9 +264,20 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 20 (this PR)
+
+- **`webmail/src/mobile/components/InboxView.svelte`**: loads sibling bodies when **Group threads** is on (same rules as desktop).
+- **`webmail/src/mobile/components/MessageView.svelte`**: reuses **`ConversationStack.svelte`** with mobile state overrides.
+- **`webmail/src/lib/conversation-view.ts`**: **`shouldShowConversationStack`** gate shared with desktop/mobile.
+- **`ConversationStack.svelte`**: optional props for mobile message list + conversation details.
+- Tests: unit (`conversation-view.test.mjs`) + Playwright (`outlook-mobile-conversation-view.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice20/50-mobile-conversation-stack.png`.
+
+---
+
 ## Next planned slice
 
-**Mobile conversation reader** stack, **follow-up flags** on mobile, **dark mode** polish, or opt-in **AI thread summarise** (thread summary gated on `aiFeatures` + provider).
+**Follow-up flags** on mobile, **dark mode** polish, or opt-in **AI thread summarise** (thread summary gated on `aiFeatures` + provider).
 
 ---
 

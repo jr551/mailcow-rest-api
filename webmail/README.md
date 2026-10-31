@@ -129,6 +129,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Mobile inbox Focused tab](docs/assets/outlook-slice19/48-mobile-inbox-focused-tab.png)
 
+- **Mobile conversation stack** — with **Group threads** on, opening a multi-message thread on `/webmail/mobile/` shows the same Outlook-style transcript as desktop (**Show message** on older siblings). Single messages keep the normal reader.
+
+![Mobile conversation stack](docs/assets/outlook-slice20/50-mobile-conversation-stack.png)
+
 ## Keyboard shortcuts (mail)
 
 Global shortcuts are listed under **Settings → General → Keyboard shortcuts** (press **?** in the inbox for the same list). Reading-pane placement:
