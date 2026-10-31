@@ -61,10 +61,31 @@
     import { setMobileMailShortcutHandler } from '../lib/mail-shortcut-handlers.svelte';
     import { shouldUseMobileTabletSplit } from '../../lib/mobile-tablet-reading-pane';
     import { getMobileViewportWidth } from '../lib/viewport.svelte';
+    import type { SavedMailSearch } from '../../lib/saved-mail-searches';
+    import {
+        savedMailSearches,
+        addSavedMailSearch,
+        deleteSavedMailSearch,
+        recordSavedMailSearchUse
+    } from '../../lib/saved-mail-searches.svelte';
+    import { shouldShowMobileSavedSearchPanel } from '../../lib/mobile-saved-search-panel';
 
     let searchInput = $state('');
     let searchInputEl: HTMLInputElement | undefined = $state();
     let searchDebounce: ReturnType<typeof setTimeout> | null = null;
+    let searchPanelOpen = $state(false);
+    let saveSearchFormOpen = $state(false);
+    let saveSearchDraftName = $state('');
+
+    const canSaveCurrentSearch = $derived.by(() => (searchInput || mobileState.search || '').trim().length > 0);
+    const showMobileSearchPanel = $derived(
+        shouldShowMobileSavedSearchPanel(
+            searchPanelOpen,
+            savedMailSearches.items.length,
+            canSaveCurrentSearch,
+            saveSearchFormOpen
+        )
+    );
 
     const SERVER_CAP = 100;
     let appending = $state(false);
@@ -372,6 +393,47 @@
     }
 
     function exitGlobalSearch() {
+        cancelGlobalSearch();
+        mobileState.searchScope = 'folder';
+        refreshMessages(true);
+    }
+
+    function startSaveCurrentSearch() {
+        const q = (searchInput || mobileState.search || '').trim();
+        if (!q) return;
+        saveSearchFormOpen = true;
+        saveSearchDraftName = q.slice(0, 40);
+        searchPanelOpen = true;
+    }
+
+    function confirmSaveCurrentSearch() {
+        const q = (searchInput || mobileState.search || '').trim();
+        if (!q) return;
+        const scope = mobileState.searchScope === 'all' ? 'all' : 'folder';
+        const name = saveSearchDraftName.trim() || q;
+        const entry = addSavedMailSearch(name, q, scope);
+        if (!entry) return;
+        saveSearchFormOpen = false;
+        saveSearchDraftName = '';
+        showToast('success', 'Search saved');
+    }
+
+    function cancelSaveSearchForm() {
+        saveSearchFormOpen = false;
+        saveSearchDraftName = '';
+    }
+
+    async function applySavedMailSearch(entry: SavedMailSearch) {
+        recordSavedMailSearchUse(entry.id);
+        searchInput = entry.query;
+        searchPanelOpen = false;
+        saveSearchFormOpen = false;
+        if (searchDebounce) clearTimeout(searchDebounce);
+        mobileState.search = entry.query.trim();
+        if (entry.scope === 'all') {
+            await searchAllFolders();
+            return;
+        }
         cancelGlobalSearch();
         mobileState.searchScope = 'folder';
         refreshMessages(true);
@@ -836,28 +898,110 @@
         </button>
     </header>
 
-    <div class="msearch">
-        <input
-            bind:this={searchInputEl}
-            type="search"
-            placeholder="Search"
-            aria-label="Search mail"
-            data-testid="mobile-search-input"
-            value={searchInput}
-            oninput={(e) => onSearch((e.currentTarget as HTMLInputElement).value)}
-        />
-        {#if (mobileState.search || '').trim()}
-            {#if mobileState.searchScope === 'all'}
-                <button type="button" class="search-scope-btn active" onclick={exitGlobalSearch}>
-                    <Icon name="close" size={11} />
-                    <span>All</span>
-                </button>
-            {:else}
-                <button type="button" class="search-scope-btn" onclick={searchAllFolders}>
-                    <Icon name="folder" size={11} />
-                    <span>All folders</span>
-                </button>
+    <div class="msearch-wrap">
+        <div class="msearch">
+            <input
+                bind:this={searchInputEl}
+                type="search"
+                placeholder="Search"
+                aria-label="Search mail"
+                aria-expanded={showMobileSearchPanel}
+                data-testid="mobile-search-input"
+                value={searchInput}
+                oninput={(e) => onSearch((e.currentTarget as HTMLInputElement).value)}
+                onfocus={() => (searchPanelOpen = true)}
+                onblur={(e) => {
+                    const next = e.relatedTarget as Node | null;
+                    if (next && e.currentTarget.closest('.msearch-wrap')?.contains(next)) return;
+                    setTimeout(() => (searchPanelOpen = false), 150);
+                }}
+            />
+            {#if (mobileState.search || '').trim()}
+                {#if mobileState.searchScope === 'all'}
+                    <button type="button" class="search-scope-btn active" onclick={exitGlobalSearch}>
+                        <Icon name="close" size={11} />
+                        <span>All</span>
+                    </button>
+                {:else}
+                    <button type="button" class="search-scope-btn" onclick={searchAllFolders}>
+                        <Icon name="folder" size={11} />
+                        <span>All folders</span>
+                    </button>
+                {/if}
             {/if}
+        </div>
+        {#if showMobileSearchPanel}
+            <div
+                class="msearch-panel scroll-y"
+                role="group"
+                aria-label="Saved searches"
+                data-testid="mobile-search-suggest"
+                onfocusout={(e) => {
+                    const next = e.relatedTarget as Node | null;
+                    if (!next || !e.currentTarget.closest('.msearch-wrap')?.contains(next)) {
+                        searchPanelOpen = false;
+                    }
+                }}
+            >
+                {#if savedMailSearches.items.length > 0}
+                    <div class="msearch-panel-hint">Saved searches</div>
+                    {#each savedMailSearches.items as saved (saved.id)}
+                        <div class="msearch-saved-row">
+                            <button
+                                type="button"
+                                class="msearch-saved-chip"
+                                onmousedown={(e) => e.preventDefault()}
+                                onclick={() => void applySavedMailSearch(saved)}
+                                data-testid={`saved-search-${saved.id}`}
+                            >
+                                <span class="msearch-saved-name">{saved.name}</span>
+                                <span class="msearch-saved-query">{saved.query}</span>
+                                {#if saved.scope === 'all'}
+                                    <span class="msearch-saved-scope">All folders</span>
+                                {/if}
+                            </button>
+                            <button
+                                type="button"
+                                class="msearch-saved-remove"
+                                title="Remove saved search"
+                                aria-label={`Remove saved search ${saved.name}`}
+                                onmousedown={(e) => e.preventDefault()}
+                                onclick={() => deleteSavedMailSearch(saved.id)}
+                                data-testid={`saved-search-remove-${saved.id}`}
+                            >
+                                <Icon name="close" size={14} />
+                            </button>
+                        </div>
+                    {/each}
+                {/if}
+                {#if saveSearchFormOpen}
+                    <div class="msearch-save-form" data-testid="search-save-form">
+                        <label class="msearch-save-label" for="mobile-search-save-name">Name this search</label>
+                        <input
+                            id="mobile-search-save-name"
+                            type="text"
+                            class="msearch-save-input"
+                            bind:value={saveSearchDraftName}
+                            data-testid="search-save-name"
+                        />
+                        <div class="msearch-save-actions">
+                            <button type="button" class="mbtn mbtn-secondary" onclick={confirmSaveCurrentSearch} data-testid="search-save-confirm">Save</button>
+                            <button type="button" class="mbtn mbtn-ghost" onclick={cancelSaveSearchForm} data-testid="search-save-cancel">Cancel</button>
+                        </div>
+                    </div>
+                {:else if canSaveCurrentSearch}
+                    <button
+                        type="button"
+                        class="msearch-save-trigger"
+                        onmousedown={(e) => e.preventDefault()}
+                        onclick={startSaveCurrentSearch}
+                        data-testid="search-save-trigger"
+                    >
+                        <Icon name="star" size={16} />
+                        <span>Save this search</span>
+                    </button>
+                {/if}
+            </div>
         {/if}
     </div>
     {#if globalScan}
