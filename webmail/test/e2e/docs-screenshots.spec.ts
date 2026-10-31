@@ -37,8 +37,9 @@ const ASSET27 = 'docs/assets/outlook-slice27';
 const ASSET28 = 'docs/assets/outlook-slice28';
 const ASSET29 = 'docs/assets/outlook-slice29';
 const ASSET30 = 'docs/assets/outlook-slice30';
+const ASSET31 = 'docs/assets/outlook-slice31';
 const ASSET32 = 'docs/assets/outlook-slice32';
-for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET20, ASSET22, ASSET23, ASSET24, ASSET25, ASSET26, ASSET27, ASSET28, ASSET29, ASSET30, ASSET32]) mkdirSync(d, { recursive: true });
+for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET20, ASSET22, ASSET23, ASSET24, ASSET25, ASSET26, ASSET27, ASSET28, ASSET29, ASSET30, ASSET31, ASSET32]) mkdirSync(d, { recursive: true });
 
 const baseSettings = {
     aiFeatures: false,
@@ -652,6 +653,40 @@ test.describe('docs mobile (390×844 @2x)', () => {
         await expect(page.getByTestId('mobile-quick-filter-menu')).toBeVisible();
         await settleForScreenshot(page);
         await shot(page, `${ASSET27}/57-mobile-quick-filter-menu.png`);
+    });
+
+    test('slice31 mobile saved searches panel', async ({ page }) => {
+        await page.addInitScript(() => {
+            localStorage.setItem('webmail.theme', 'light');
+            localStorage.setItem(
+                'webmail.saved-searches.v1',
+                JSON.stringify([
+                    { id: 'shot-team', name: 'Team updates', query: 'subject:team', scope: 'folder' },
+                    { id: 'shot-unread', name: 'Unread mail', query: 'is:unread', scope: 'all' }
+                ])
+            );
+            localStorage.setItem(
+                'webmail.settings.v1',
+                JSON.stringify({
+                    aiFeatures: false,
+                    density: 'comfortable',
+                    listFilter: 'all',
+                    inboxTab: 'focused',
+                    readingPaneLayout: 'right',
+                    groupThreads: true,
+                    useCustomLlm: false,
+                    llm: { kind: 'openai', preset: '', apiKey: '', baseUrl: '', model: '' }
+                })
+            );
+        });
+        await page.goto('/webmail/mobile/');
+        await page.fill('input[type="email"]', MOCK_USER);
+        await page.fill('input[type="password"]', 'hunter2');
+        await page.click('button:has-text("Sign in")');
+        await page.getByTestId('mobile-search-input').click();
+        await expect(page.getByTestId('mobile-search-suggest')).toBeVisible();
+        await settleForScreenshot(page);
+        await shot(page, `${ASSET31}/61-mobile-saved-searches-panel.png`);
     });
 
     test('slice32 mobile category stripe', async ({ page }) => {
