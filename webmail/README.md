@@ -129,6 +129,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Mobile inbox Focused tab](docs/assets/outlook-slice19/48-mobile-inbox-focused-tab.png)
 
+- **Mobile follow-up flags** — long-press a message → **Flag for follow-up** (Today / Tomorrow / This week / No date). The inbox row shows the same follow-up hint as desktop; due dates stay on this device.
+
+![Mobile follow-up today on message row](docs/assets/outlook-slice21/51-mobile-follow-up-today-row.png)
+
 ## Keyboard shortcuts (mail)
 
 Global shortcuts are listed under **Settings → General → Keyboard shortcuts** (press **?** in the inbox for the same list). Reading-pane placement:

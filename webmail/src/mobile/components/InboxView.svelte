@@ -18,6 +18,17 @@
     import { sortInboxClient, type InboxSortRanking } from '../../lib/sort-inbox-client';
     import { settings, setInboxTab, isVipAddress } from '../../lib/settings.svelte';
     import { filterMessagesByInboxTab } from '../../lib/focused-inbox';
+    import {
+        followUpDueLabel,
+        getFollowUpDueMs,
+        type FollowUpPresetId,
+    } from '../../lib/message-follow-up';
+    import {
+        hydrateMessageFollowUp,
+        followUpOverlay,
+        setFollowUpDue,
+        clearFollowUpDue,
+    } from '../../lib/message-follow-up.svelte';
     import Icon from '../../components/Icon.svelte';
     import Avatar from '../../components/Avatar.svelte';
     import SwipeableRow from './SwipeableRow.svelte';
@@ -190,11 +201,14 @@
     async function toggleStar(msg: MessageListItem) {
         const li = findRow(msg);
         if (!li) return;
+        const path = rowPath(li);
         const isFlagged = li.flags.includes('\\Flagged');
         try {
-            const r = await modifyFlags(rowPath(li), li.uid, isFlagged ? { remove: ['\\Flagged'] } : { add: ['\\Flagged'] });
+            const r = await modifyFlags(path, li.uid, isFlagged ? { remove: ['\\Flagged'] } : { add: ['\\Flagged'] });
             li.flags = r.flags;
             if (mobileState.detail && detailIsRow(li)) mobileState.detail.flags = r.flags;
+            if (isFlagged) clearFollowUpDue(path, li.uid);
+            else setFollowUpDue(path, li.uid, 'no-date');
         } catch {
             showToast('error', "Couldn't update star");
         }
@@ -488,6 +502,47 @@
         if (actionSheetDispose) { actionSheetDispose(); actionSheetDispose = null; }
     }
 
+    let followUpNow = $state(Date.now());
+
+    function rowFollowUpHint(uid: number, isFlagged: boolean): string | null {
+        if (!isFlagged) return null;
+        void followUpOverlay();
+        const due = getFollowUpDueMs(followUpOverlay(), mobileState.selectedPath, uid);
+        return followUpDueLabel(due, followUpNow);
+    }
+
+    async function applyFollowUpFlag(msg: MessageListItem, preset: FollowUpPresetId | 'clear') {
+        const li = findRow(msg);
+        if (!li) return;
+        const path = rowPath(li);
+        if (preset === 'clear') {
+            clearFollowUpDue(path, li.uid);
+            if (!li.flags.includes('\\Flagged')) return;
+            try {
+                const r = await modifyFlags(path, li.uid, { remove: ['\\Flagged'] });
+                li.flags = r.flags;
+                if (mobileState.detail && detailIsRow(li)) mobileState.detail.flags = r.flags;
+                showToast('success', 'Follow-up flag cleared');
+            } catch {
+                showToast('error', 'Failed to clear flag');
+            }
+            return;
+        }
+        setFollowUpDue(path, li.uid, preset);
+        if (li.flags.includes('\\Flagged')) {
+            showToast('success', 'Follow-up date updated');
+            return;
+        }
+        try {
+            const r = await modifyFlags(path, li.uid, { add: ['\\Flagged'] });
+            li.flags = r.flags;
+            if (mobileState.detail && detailIsRow(li)) mobileState.detail.flags = r.flags;
+            showToast('success', 'Flagged for follow-up');
+        } catch {
+            showToast('error', 'Failed to set follow-up flag');
+        }
+    }
+
     async function actionToggleRead(msg: MessageListItem) {
         const seen = msg.flags.includes('\\Seen');
         try {
@@ -503,6 +558,9 @@
     }
 
     onMount(() => {
+        hydrateMessageFollowUp();
+        followUpNow = Date.now();
+        const followUpTick = setInterval(() => { followUpNow = Date.now(); }, 60_000);
         refreshMailboxes();
         // Coming back from a message keeps an all-folders result set as is.
         if (!(mobileState.searchScope === 'all' && mobileState.messages.length > 0)) refreshMessages();
@@ -510,6 +568,7 @@
         window.addEventListener('webmail:client-rule', onRule);
         return () => {
             clearInterval(interval);
+            clearInterval(followUpTick);
             window.removeEventListener('webmail:client-rule', onRule);
             if (searchDebounce) clearTimeout(searchDebounce);
             cancelGlobalSearch();
@@ -688,6 +747,7 @@
                 {@const name = msg.envelope.from?.[0]?.name || null}
                 {@const isTracked = isTrackingEmail(msg.envelope.subject)}
                 {@const dlevel = mobileState.filter === 'ai-sorted' ? dangerLevel(msg.uid) : 0}
+                {@const followUpHint = rowFollowUpHint(msg.uid, isStarred)}
                 <SwipeableRow
                     onOpen={() => selectMessage(msg)}
                     onSwipeRight={() => toggleStar(msg)}
@@ -703,6 +763,7 @@
                     <div
                         class="msg-row"
                         data-testid={`msg-row-${msg.uid}`}
+                        data-follow-up={followUpHint ?? ''}
                         class:unread={isUnread}
                         class:fresh={isFresh}
                         class:spy-tracked={isTracked}
@@ -717,6 +778,9 @@
                         <div class="msg-body">
                             <div class="msg-top">
                                 <span class="msg-from truncate" class:bold={isUnread}>{sender}</span>
+                                {#if followUpHint}
+                                    <span class="follow-up-due" title={followUpHint} data-testid={`msg-follow-up-${msg.uid}`}>{followUpHint}</span>
+                                {/if}
                                 <span class="msg-date">{formatDate(msg.internalDate || msg.envelope.date)}</span>
                             </div>
                             <div class="msg-subject truncate" class:bold={isUnread}>
@@ -760,6 +824,7 @@
             navigate('compose');
         }}
         onToggleStar={() => toggleStar(sheetMsg)}
+        onFollowUp={(preset) => applyFollowUpFlag(sheetMsg, preset)}
         onToggleRead={() => actionToggleRead(sheetMsg)}
         onArchive={() => archiveMessage(sheetMsg)}
         onTrash={() => trashMessage(sheetMsg)}
@@ -989,6 +1054,16 @@
         font-weight: 400;
         color: var(--text-tertiary);
         flex-shrink: 0;
+    }
+    .follow-up-due {
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--accent);
+        flex-shrink: 0;
+        max-width: 42%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
     .msg-subject {
         font-size: 14px;

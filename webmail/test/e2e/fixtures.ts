@@ -11,6 +11,14 @@ import { fixtureMessages } from './fixture-messages';
 
 export const messages = fixtureMessages;
 
+/** Deep copy taken at module load; tests mutate `messages` in-memory via mock routes. */
+const FIXTURE_SNAPSHOT = structuredClone(fixtureMessages);
+
+/** Restore list flags/envelopes so e2e order does not leak state between tests. */
+export function resetFixtureMessages() {
+    messages.splice(0, messages.length, ...structuredClone(FIXTURE_SNAPSHOT));
+}
+
 export const mailboxes = [
     { path: 'INBOX', name: 'INBOX', delimiter: '/', flags: ['\\HasNoChildren'], specialUse: '\\Inbox', subscribed: true },
     { path: 'Sent', name: 'Sent', delimiter: '/', flags: [], specialUse: '\\Sent', subscribed: true },
@@ -141,6 +149,7 @@ function genericDetailFor(uid: number) {
 }
 
 export async function applyMocks(page: Page) {
+    resetFixtureMessages();
     await page.route(/\/health$/, (route) => {
         route.fulfill({
             status: 200,

@@ -20,8 +20,8 @@ test.describe('mobile webmail', () => {
         // Inbox header
         await expect(page.locator('.mheader h1:has-text("INBOX")')).toBeVisible();
 
-        // Message rows appear
-        await expect(page.locator('.msg-row')).toHaveCount(20);
+        // Message rows appear (default Focused tab hides bulk / Other bucket mail)
+        await expect(page.locator('.msg-row')).toHaveCount(15);
 
         // Unread styling: first message has a blue dot
         const firstRow = page.locator('.msg-row').first();
@@ -131,15 +131,17 @@ test.describe('mobile webmail', () => {
         await page.fill('input[type="email"]', MOCK_USER);
         await page.fill('input[type="password"]', 'hunter2');
         await page.click('button:has-text("Sign in")');
+        await expect(page.locator('.msg-row')).toHaveCount(15);
 
         await page.locator('.segment:has-text("Unread")').click();
-        await expect(page.locator('.msg-row')).toHaveCount(7);
+        await expect(page.getByTestId('msg-row-1001')).toBeVisible();
+        await expect(page.locator('.msg-row')).toHaveCount(6);
 
         await page.locator('.segment:has-text("Starred")').click();
         await expect(page.locator('.msg-row')).toHaveCount(2);
 
         await page.locator('.segment:has-text("All")').click();
-        await expect(page.locator('.msg-row')).toHaveCount(20);
+        await expect(page.locator('.msg-row')).toHaveCount(15);
     });
 
     test('search filters messages', async ({ page }) => {
@@ -291,8 +293,9 @@ test.describe('mobile webmail', () => {
         await page.fill('input[type="password"]', 'hunter2');
         await page.click('button:has-text("Sign in")');
 
-        // Open the invoice message (billing / Q2 invoice in fixtures)
-        await page.locator('.msg-row', { hasText: 'Q2 invoice' }).click();
+        // Q2 invoice lives in the Other bucket (billing sender)
+        await page.getByTestId('inbox-tab-other').click();
+        await page.getByTestId('msg-row-1000').click();
         await expect(page.locator('.message-view')).toBeVisible();
 
         // Wait for phishing overlay

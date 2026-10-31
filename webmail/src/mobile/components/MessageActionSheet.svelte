@@ -3,6 +3,7 @@
     import { summarizeMessage, type MessageListItem, type MessageDetail, ApiError } from '../../lib/api';
     import { showToast } from '../lib/store.svelte';
     import { settings } from '../../lib/settings.svelte';
+    import { followUpSubmenuItems, type FollowUpPresetId } from '../../lib/message-follow-up';
 
     interface Props {
         msg: MessageListItem;
@@ -12,6 +13,7 @@
         onOpen: () => void;
         onReply: () => void;
         onToggleStar: () => void;
+        onFollowUp: (preset: FollowUpPresetId | 'clear') => void | Promise<void>;
         onToggleRead: () => void;
         onArchive: () => void;
         onTrash: () => void;
@@ -25,6 +27,7 @@
         onOpen,
         onReply,
         onToggleStar,
+        onFollowUp,
         onToggleRead,
         onArchive,
         onTrash
@@ -33,6 +36,9 @@
     let summaryLoading = $state(false);
     let summaryResult = $state<string | null>(null);
     let summaryError = $state<string | null>(null);
+    let followUpMenuOpen = $state(false);
+
+    const followUpItems = followUpSubmenuItems();
 
     // Derived, not captured at init: the sheet stays open after a Star /
     // mark-read tap and the handlers mutate `msg.flags` in place, so frozen
@@ -77,6 +83,13 @@
     function closeAll() {
         summaryResult = null;
         summaryError = null;
+        followUpMenuOpen = false;
+        onClose();
+    }
+
+    async function pickFollowUp(key: string) {
+        await onFollowUp(key as FollowUpPresetId | 'clear');
+        followUpMenuOpen = false;
         onClose();
     }
 </script>
@@ -106,6 +119,29 @@
                     <pre class="summary">{summaryResult}</pre>
                 {/if}
             </div>
+        {:else if followUpMenuOpen}
+            <div class="sheet-header">
+                <button type="button" class="back-btn" aria-label="Back" onclick={() => { followUpMenuOpen = false; }}>
+                    <Icon name="chevronLeft" size={18} />
+                </button>
+                <h3>Flag for follow-up</h3>
+                <button type="button" class="close-btn" aria-label="Close" onclick={onClose}>
+                    <Icon name="close" size={18} />
+                </button>
+            </div>
+            <div class="actions">
+                {#each followUpItems as item (item.key)}
+                    <button
+                        type="button"
+                        class="action-row"
+                        data-testid={`mobile-follow-up-item-${item.key}`}
+                        onclick={() => pickFollowUp(item.key)}
+                    >
+                        <Icon name={item.key === 'clear' ? 'star' : 'starFilled'} size={20} />
+                        <span>{item.label}</span>
+                    </button>
+                {/each}
+            </div>
         {:else}
             <div class="sheet-header">
                 <h3>{msg.envelope.subject || '(no subject)'}</h3>
@@ -131,6 +167,15 @@
                 <button type="button" class="action-row" onclick={() => { onToggleStar(); onClose(); }}>
                     <Icon name={isStarred ? 'starFilled' : 'star'} size={20} />
                     <span>{isStarred ? 'Unstar' : 'Star'}</span>
+                </button>
+                <button
+                    type="button"
+                    class="action-row"
+                    data-testid="mobile-follow-up-trigger"
+                    onclick={() => { followUpMenuOpen = true; }}
+                >
+                    <Icon name="starFilled" size={20} />
+                    <span>{isStarred ? 'Follow-up date…' : 'Flag for follow-up'}</span>
                 </button>
                 <button type="button" class="action-row" onclick={() => { onToggleRead(); onClose(); }}>
                     <Icon name={isUnread ? 'eye' : 'mail'} size={20} />
@@ -201,6 +246,19 @@
         height: 44px;
         border-radius: 50%;
         cursor: pointer;
+    }
+    .back-btn {
+        background: none;
+        border: none;
+        color: var(--text-secondary);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 44px;
+        height: 44px;
+        border-radius: 50%;
+        cursor: pointer;
+        flex-shrink: 0;
     }
     .actions {
         display: flex;
