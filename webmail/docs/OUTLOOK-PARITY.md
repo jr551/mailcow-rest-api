@@ -294,6 +294,16 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 23 (done in #110)
+
+- **`webmail/src/lib/thread-ai-summarize.ts`**: build single-message or full-thread text for `/v1/ai/summarize`.
+- **`settings.aiThreadSummary`**: default **off**; toggle in Settings → AI (requires `aiFeatures` + configured provider).
+- **`AiPanel.svelte`**: **Summarize thread** when grouping + toggle are on and the reading pane shows a multi-message stack.
+- Tests: unit (`thread-ai-summarize.test.mjs`) + Playwright (`outlook-ai-thread-summary.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice23/53-ai-thread-summary-panel.png`.
+
+---
+
 ## Slice 24 (this PR)
 
 - **`webmail/src/lib/mobile-tablet-reading-pane.ts`**: tablet split breakpoint (768px+) and **`settings.readingPaneLayout`** axis (right = horizontal, bottom = vertical, hidden = phone full-screen).
@@ -306,7 +316,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ## Next planned slice
 
-**Opt-in AI thread summarise** (gated on `aiFeatures` + provider), **mobile keyboard shortcuts** help sheet, or **opt-in AI draft/rewrite reply**.
+**Mobile keyboard shortcuts** help sheet, **opt-in AI draft/rewrite reply**, or **mobile snooze / sweep** parity on the action sheet.
 
 ---
 
