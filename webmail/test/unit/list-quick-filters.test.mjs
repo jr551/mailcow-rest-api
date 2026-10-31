@@ -74,3 +74,11 @@ test('imapFilterToken maps Outlook filters', async () => {
     assert.equal(imapFilterToken('to-me', 'Demo@Test.Local'), 'to:demo@test.local');
     assert.equal(imapFilterToken('mentions', 'demo@test.local'), 'body:@demo');
 });
+
+test('OUTLOOK_FILTER_MENU matches mobile and desktop quick filter bar', async () => {
+    const { OUTLOOK_FILTER_MENU } = await loadModule();
+    assert.deepEqual(
+        OUTLOOK_FILTER_MENU.map((f) => f.value),
+        ['all', 'unread', 'starred', 'to-me', 'attachments', 'mentions']
+    );
+});
