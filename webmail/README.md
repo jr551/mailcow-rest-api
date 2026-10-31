@@ -182,6 +182,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Mobile undo send toast](docs/assets/outlook-slice35/65-mobile-undo-send-toast.png)
 
+- **Mobile schedule send** — **Send** chevron → **Schedule send** (same `webmail.scheduled-sends.v1` queue and presets as desktop slice 13). The message stays on-device until the chosen time.
+
+![Mobile schedule send dialog](docs/assets/outlook-slice36/66-mobile-schedule-send-dialog.png)
+
 ## Keyboard shortcuts (mail)
 
 Global shortcuts are listed under **Settings → General → Keyboard shortcuts** (press **?** in the inbox for the same list). Reading-pane placement:
