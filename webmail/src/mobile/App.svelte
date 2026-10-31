@@ -26,6 +26,7 @@
     import { warmupTesseract } from '../lib/tesseract-ocr';
     import { resolveMobileMailShortcut } from '../lib/mobile-mail-keyboard-shortcuts';
     import { dispatchMobileMailShortcut } from './lib/mail-shortcut-handlers.svelte';
+    import { startMobileScheduledSendFlusher } from './lib/compose-schedule-send.svelte';
 
     let mobileShortcutHelpOpen = $state(false);
 
@@ -104,10 +105,12 @@
         window.addEventListener('webmail:mobile-show-shortcut-help', showShortcuts);
         // Settings + trusted-senders sync from the hidden IMAP folder.
         import('../lib/settings-sync').then((m) => m.startSync()).catch(() => { /* */ });
+        const stopScheduled = startMobileScheduledSendFlusher();
         return () => {
             stop();
             stopBack();
             stopResume();
+            stopScheduled();
             window.removeEventListener('webmail:mobile-show-shortcut-help', showShortcuts);
         };
     });

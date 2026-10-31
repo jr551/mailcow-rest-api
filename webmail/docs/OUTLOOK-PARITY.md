@@ -422,11 +422,23 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 36 (done in #123)
+
+- **`mobile-compose-schedule.ts`**: queued-send toast copy for mobile.
+- **`compose-schedule-send.svelte.ts`**: enqueue into shared scheduled-send queue with mobile toasts; background flush on mobile app mount.
+- **`scheduled-send.svelte.ts`**: `enqueueScheduledSend` + injectable notify for mobile flush toasts.
+- **`ComposeView.svelte`**: **Send** split button → **Schedule send** sheet (presets + datetime, same test ids as desktop); immediate **Send** still honours undo send (slice 35).
+- **`App.svelte`**: 30s scheduled-send flusher while signed in.
+- Tests: unit (`mobile-compose-schedule.test.mjs`) + Playwright (`outlook-mobile-scheduled-send.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice36/66-mobile-schedule-send-dialog.png`.
+
+---
+
 ## Slice 37 (this PR)
 
 - **`mobile-compose-save-draft.ts`**: toast copy + plain-text → draft HTML helper.
 - **`compose-save-draft.svelte.ts`**: **`saveMobileComposeDraft`** via shared `buildComposeDraftRfc822` / `appendRawMessage` (same as desktop slice 14).
-- **`ComposeView.svelte`**: **Save draft** in the compose header, **Ctrl+S**, SMTP-off hint, primary button saves to Drafts when send is disabled.
+- **`ComposeView.svelte`**: **Save draft** in the compose header, **Ctrl+S**, SMTP-off hint, **Send** split (slice 36) when SMTP is enabled.
 - **`SettingsView.svelte`**: Compose **Save draft** documentation.
 - Tests: unit (`mobile-compose-save-draft.test.mjs`) + Playwright (`outlook-mobile-save-draft.spec.ts`) against API mocks.
 - Screenshot: `webmail/docs/assets/outlook-slice37/67-mobile-save-draft-compose.png`.
@@ -435,7 +447,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ## Next planned slice
 
-**Smart triage / categorise** (opt-in AI), richer conversation HTML parity, or mobile scheduled send (slice 36).
+**Smart triage / categorise** (opt-in AI), richer conversation HTML parity, or mobile compose accessibility polish.
 
 ---
 

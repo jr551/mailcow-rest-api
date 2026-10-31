@@ -1,10 +1,19 @@
 <script lang="ts">
     import { onMount } from 'svelte';
-    import { mobileState, goBack, showToast, pushOverlay } from '../lib/store.svelte';
+    import { mobileState, goBack, showToast, pushOverlay, dropOverlay, navigate } from '../lib/store.svelte';
     import { authState } from '../../lib/auth.svelte';
     import { sendStub, getSendFromAddresses, type SendAttachment } from '../../lib/api';
     import { trackSent } from '../../lib/sent-status.svelte';
     import { settings, pickFromName, setDisplayName, deriveNameFromAddress, aiAvailable, smtpAvailable } from '../../lib/settings.svelte';
+    import {
+        SCHEDULED_SEND_PRESETS,
+        computePresetSendAt,
+        minScheduledSendAt,
+        sanitizeSendAtMs,
+        formatScheduledSendWhen,
+        type ScheduledSendPresetId
+    } from '../../lib/scheduled-send';
+    import { queueMobileScheduledSend } from '../lib/compose-schedule-send.svelte';
     import { undoSendEnabled } from '../../lib/undo-send';
     import { scheduleMobileUndoSend } from '../lib/compose-undo-send.svelte';
     import { composeDraftHasContent } from '../../lib/compose-draft';
@@ -28,6 +37,9 @@
     let sendFromOptions = $state<string[]>([]);
     let attachments = $state<SendAttachment[]>([]);
     let showFromPicker = $state(false);
+    let sendMenuOpen = $state(false);
+    let scheduleSheetOpen = $state(false);
+    let scheduleAtMs = $state(minScheduledSendAt());
     // Tracking pixel parity with desktop. Defaults to settings.trackOpensDefault.
     let trackOpens = $state(settings.trackOpensDefault);
 
@@ -68,6 +80,71 @@
     function closeFromPicker() {
         showFromPicker = false;
         if (fromPickerDispose) { fromPickerDispose(); fromPickerDispose = null; }
+    }
+
+    let sendMenuDispose: (() => void) | null = null;
+    function openSendMenu() {
+        sendMenuOpen = true;
+        sendMenuDispose = pushOverlay('compose-send-menu', () => {
+            sendMenuOpen = false;
+            sendMenuDispose = null;
+        });
+    }
+    function closeSendMenu() {
+        sendMenuOpen = false;
+        if (sendMenuDispose) { sendMenuDispose(); sendMenuDispose = null; }
+    }
+
+    let scheduleDispose: (() => void) | null = null;
+    function openScheduleSheet() {
+        dropOverlay('compose-send-menu');
+        sendMenuOpen = false;
+        sendMenuDispose = null;
+        scheduleAtMs = minScheduledSendAt();
+        scheduleSheetOpen = true;
+        scheduleDispose = pushOverlay('compose-schedule-send', () => {
+            scheduleSheetOpen = false;
+            scheduleDispose = null;
+        });
+    }
+    function closeScheduleSheet() {
+        scheduleSheetOpen = false;
+        if (scheduleDispose) { scheduleDispose(); scheduleDispose = null; }
+    }
+
+    function buildSendPayload() {
+        const fromName = pickFromName(from || authState.activeUser || '');
+        return {
+            payload: {
+                to: to.split(',').map((s) => s.trim()).filter(Boolean),
+                cc: showCc ? cc.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
+                bcc: showCc ? bcc.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
+                from: from.trim() || undefined,
+                fromName,
+                subject: subject.trim(),
+                text: body,
+                inReplyTo: mode !== 'new' && replyTo?.envelope.messageId ? replyTo.envelope.messageId : undefined,
+                attachments: attachments.length ? attachments : undefined,
+                trackOpens: trackOpens || undefined
+            },
+            sentSubject: subject.trim(),
+            toLabel: to.split(',').map((s) => s.trim()).filter(Boolean).join(', ')
+        };
+    }
+
+    function applySchedulePreset(id: ScheduledSendPresetId) {
+        scheduleAtMs = computePresetSendAt(id);
+    }
+
+    function confirmScheduleSend() {
+        if (!to.trim() || !subject.trim() || !smtpAvailable()) return;
+        const sendAtMs = sanitizeSendAtMs(scheduleAtMs);
+        const { payload, sentSubject, toLabel } = buildSendPayload();
+        queueMobileScheduledSend({ sendAtMs, payload, subject: sentSubject, toLabel });
+        dropOverlay('compose-schedule-send');
+        scheduleSheetOpen = false;
+        scheduleDispose = null;
+        navigate(mobileState.previousView || 'inbox');
     }
 
     function removeAttachment(idx: number) {
@@ -169,21 +246,7 @@
     async function handleSend() {
         if (!to.trim() || !subject.trim() || !smtpAvailable()) return;
         sending = true;
-        const fromName = pickFromName(from || authState.activeUser || '');
-        const payload = {
-            to: to.split(',').map((s) => s.trim()).filter(Boolean),
-            cc: showCc ? cc.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
-            bcc: showCc ? bcc.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
-            from: from.trim() || undefined,
-            fromName,
-            subject: subject.trim(),
-            text: body,
-            inReplyTo: mode !== 'new' && replyTo?.envelope.messageId ? replyTo.envelope.messageId : undefined,
-            attachments: attachments.length ? attachments : undefined,
-            trackOpens: trackOpens || undefined,
-        };
-        const sentSubject = subject.trim();
-        const toLabel = payload.to.join(', ');
+        const { payload, sentSubject, toLabel } = buildSendPayload();
         const undoSec = settings.undoSendSeconds;
         try {
             if (undoSendEnabled(undoSec)) {
@@ -378,16 +441,26 @@
                 {#if draftSaving}<span class="spinner" style="width:14px;height:14px"></span>{/if}
                 {draftSaving ? 'Saving…' : 'Save draft'}
             </button>
-            <button
-                type="button"
-                class="mbtn mbtn-primary"
-                data-testid="compose-send"
-                disabled={sending || (smtpAvailable() ? !to.trim() || !subject.trim() : !canSaveDraft)}
-                onclick={() => (smtpAvailable() ? void handleSend() : void saveDraft({ close: true }))}
-            >
-                {#if sending}<span class="spinner" style="width:16px;height:16px"></span>{/if}
-                {sending ? 'Sending…' : smtpAvailable() ? 'Send' : 'Save draft'}
-            </button>
+            {#if smtpAvailable()}
+                <div class="send-split">
+                    <button type="button" class="mbtn mbtn-primary send-main" data-testid="compose-send" disabled={sending || !to.trim() || !subject.trim()} onclick={() => void handleSend()}>
+                        {#if sending}<span class="spinner" style="width:16px;height:16px"></span>{/if}
+                        {sending ? 'Sending…' : 'Send'}
+                    </button>
+                    <button
+                        type="button"
+                        class="mbtn mbtn-primary send-caret"
+                        data-testid="compose-send-menu-btn"
+                        disabled={sending || !to.trim() || !subject.trim()}
+                        aria-expanded={sendMenuOpen}
+                        aria-haspopup="menu"
+                        aria-label="Send options"
+                        onclick={openSendMenu}
+                    >
+                        <Icon name="chevronDown" size={16} />
+                    </button>
+                </div>
+            {/if}
         </div>
     </header>
 
@@ -578,6 +651,75 @@
                     {#if from === addr}<Icon name="check" size={16} />{/if}
                 </button>
             {/each}
+        </div>
+    </div>
+{/if}
+
+{#if sendMenuOpen}
+    <div class="sheet-backdrop" role="presentation" onclick={closeSendMenu}></div>
+    <div class="picker-sheet slide-up send-options-sheet" role="menu" data-testid="compose-send-menu">
+        <div class="picker-header">
+            <h2>Send options</h2>
+            <button type="button" class="mbtn mbtn-ghost" aria-label="Close" onclick={closeSendMenu}>
+                <Icon name="close" size={18} />
+            </button>
+        </div>
+        <button
+            type="button"
+            class="picker-row schedule-option"
+            role="menuitem"
+            data-testid="compose-schedule-send"
+            onclick={openScheduleSheet}
+        >
+            Schedule send
+        </button>
+    </div>
+{/if}
+
+{#if scheduleSheetOpen}
+    <div class="sheet-backdrop" role="presentation" onclick={closeScheduleSheet}></div>
+    <div class="picker-sheet slide-up schedule-sheet" role="dialog" aria-labelledby="mobile-schedule-title" data-testid="schedule-send-dialog">
+        <div class="picker-header">
+            <h2 id="mobile-schedule-title">Schedule send</h2>
+            <button type="button" class="mbtn mbtn-ghost" aria-label="Close" onclick={closeScheduleSheet}>
+                <Icon name="close" size={18} />
+            </button>
+        </div>
+        <div class="schedule-body scroll-y">
+            <p class="muted small schedule-hint">Message stays on this device until the send time.</p>
+            <div class="schedule-presets">
+                {#each SCHEDULED_SEND_PRESETS as preset (preset.id)}
+                    <button
+                        type="button"
+                        class="mbtn mbtn-secondary preset-btn"
+                        data-testid={`schedule-preset-${preset.id}`}
+                        onclick={() => applySchedulePreset(preset.id)}
+                    >{preset.label}</button>
+                {/each}
+            </div>
+            <label class="schedule-datetime">
+                <span>Date and time</span>
+                <input
+                    type="datetime-local"
+                    data-testid="schedule-send-datetime"
+                    value={new Date(scheduleAtMs - new Date(scheduleAtMs).getTimezoneOffset() * 60000)
+                        .toISOString()
+                        .slice(0, 16)}
+                    oninput={(e) => {
+                        const v = (e.currentTarget as HTMLInputElement).value;
+                        if (!v) return;
+                        const parsed = new Date(v).getTime();
+                        if (Number.isFinite(parsed)) scheduleAtMs = sanitizeSendAtMs(parsed);
+                    }}
+                />
+            </label>
+            <p class="schedule-when" data-testid="schedule-send-preview">
+                Sends {formatScheduledSendWhen(scheduleAtMs)}
+            </p>
+            <div class="schedule-actions">
+                <button type="button" class="mbtn mbtn-secondary" onclick={closeScheduleSheet}>Cancel</button>
+                <button type="button" class="mbtn mbtn-primary" data-testid="schedule-send-confirm" onclick={confirmScheduleSend}>Schedule</button>
+            </div>
         </div>
     </div>
 {/if}
@@ -829,6 +971,70 @@
     .close-btn:active {
         background: var(--bg-hover);
         border-radius: 10px;
+    }
+
+    .send-split {
+        display: inline-flex;
+        align-items: stretch;
+        flex-shrink: 0;
+        border-radius: 10px;
+        overflow: hidden;
+    }
+    .send-main {
+        border-radius: 10px 0 0 10px;
+        min-height: 36px;
+        padding: 0 14px;
+    }
+    .send-caret {
+        border-radius: 0 10px 10px 0;
+        min-width: 36px;
+        padding: 0 8px;
+        border-left: 1px solid color-mix(in srgb, var(--bg-base) 35%, transparent);
+    }
+    .send-options-sheet .schedule-option {
+        font-weight: 600;
+        color: var(--accent-text);
+    }
+    .schedule-sheet { max-height: 85vh; }
+    .schedule-body {
+        padding: 0 16px 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
+    .schedule-hint { margin: 0; }
+    .schedule-presets {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+    .preset-btn { font-size: 14px; }
+    .schedule-datetime {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        font-size: 14px;
+        color: var(--text-secondary);
+    }
+    .schedule-datetime input {
+        font-size: 16px;
+        padding: 10px 12px;
+        border-radius: 10px;
+        border: 0.5px solid var(--border-subtle);
+        background: var(--bg-base);
+        color: var(--text-primary);
+    }
+    .schedule-when {
+        margin: 0;
+        font-size: 15px;
+        font-weight: 600;
+        color: var(--accent-text);
+    }
+    .schedule-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 10px;
+        margin-top: 4px;
     }
 
     /* AI reply suggestion strip — sits between the header fields and the

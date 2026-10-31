@@ -36,7 +36,12 @@ export function scheduledSendQueue(): readonly ScheduledSendItem[] {
     return _queue;
 }
 
-export function queueScheduledSend(input: {
+export type ScheduledSendNotify = (
+    kind: 'info' | 'error' | 'success',
+    message: string
+) => void;
+
+export function enqueueScheduledSend(input: {
     sendAtMs: number;
     payload: ScheduledSendPayload;
     subject: string;
@@ -53,6 +58,16 @@ export function queueScheduledSend(input: {
     _queue.push(item);
     _queue.sort((a, b) => a.sendAtMs - b.sendAtMs);
     persist();
+    return item;
+}
+
+export function queueScheduledSend(input: {
+    sendAtMs: number;
+    payload: ScheduledSendPayload;
+    subject: string;
+    toLabel: string;
+}): ScheduledSendItem {
+    const item = enqueueScheduledSend(input);
     showToast('success', `Send scheduled for ${formatScheduledSendWhen(item.sendAtMs)}`);
     return item;
 }
@@ -66,23 +81,26 @@ export function cancelScheduledSend(id: string): boolean {
     return true;
 }
 
-async function flushOne(item: ScheduledSendItem) {
+async function flushOne(item: ScheduledSendItem, notify: ScheduledSendNotify) {
     try {
         const r = await sendStub(item.payload);
         playSent();
         if (r?.messageId) {
             trackSent({ messageId: r.messageId, subject: item.subject, to: item.toLabel });
-            showToast('success', `Scheduled message sent — ${item.subject}`);
+            notify('success', `Scheduled message sent — ${item.subject}`);
         } else {
-            showToast('success', 'Scheduled message sent');
+            notify('success', 'Scheduled message sent');
         }
     } catch (err) {
         const detail = err instanceof ApiError ? (err.detail || err.title) : (err as Error).message;
-        showToast('error', detail || 'Scheduled send failed');
+        notify('error', detail || 'Scheduled send failed');
     }
 }
 
-export async function processDueScheduledSends(now = Date.now()): Promise<number> {
+export async function processDueScheduledSends(
+    now = Date.now(),
+    notify: ScheduledSendNotify = showToast
+): Promise<number> {
     hydrateScheduledSends();
     if (flushing || !_queue.length) return 0;
     const due = _queue.filter((i) => i.sendAtMs <= now);
@@ -94,7 +112,7 @@ export async function processDueScheduledSends(now = Date.now()): Promise<number
             const idx = _queue.findIndex((i) => i.id === item.id);
             if (idx >= 0) _queue.splice(idx, 1);
             persist();
-            await flushOne(item);
+            await flushOne(item, notify);
             sent += 1;
         }
     } finally {

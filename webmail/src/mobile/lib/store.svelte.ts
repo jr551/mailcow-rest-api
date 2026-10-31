@@ -161,6 +161,12 @@ export function pushOverlay(id: string, close: () => void): () => void {
     };
 }
 
+/** Remove an overlay from the stack without syncing browser history (sheet → sheet handoff). */
+export function dropOverlay(id: string) {
+    const idx = overlayStack.findIndex((o) => o.id === id);
+    if (idx >= 0) overlayStack.splice(idx, 1);
+}
+
 // Wires popstate → mobile view restore. Called once from App.svelte
 // onMount. Idempotent (no-op when called twice; the listener is
 // installed against window so a fresh listener replaces the old one
