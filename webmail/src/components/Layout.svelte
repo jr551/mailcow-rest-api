@@ -1081,7 +1081,7 @@
         if (!entry) return;
         saveSearchFormOpen = false;
         saveSearchDraftName = '';
-        showToast('Search saved');
+        showToast('success', 'Search saved');
     }
 
     function cancelSaveSearchForm() {
