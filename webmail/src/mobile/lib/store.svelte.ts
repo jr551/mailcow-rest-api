@@ -30,6 +30,10 @@ export interface MobileState {
     composePrefillBody: string;
     toast: { kind: 'info' | 'error' | 'success'; message: string; ts: number } | null;
     filter: 'all' | 'unread' | 'starred' | 'ai-sorted';
+    /** Mobile reading-pane conversation stack (Outlook parity slice 20). */
+    conversationStack: { threadId: string; uids: number[] } | null;
+    conversationDetails: Record<number, MessageDetail>;
+    conversationLoading: boolean;
     /** Increments every time the document goes hidden→visible. Views
      *  that need to revalidate stale state on app-resume can mirror
      *  this in an $effect. */
@@ -59,6 +63,9 @@ const createInitial = (): MobileState => ({
     composePrefillBody: '',
     toast: null,
     filter: 'all',
+    conversationStack: null,
+    conversationDetails: {},
+    conversationLoading: false,
     resumeTick: 0,
 });
 

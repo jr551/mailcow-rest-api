@@ -243,7 +243,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 18 (this PR)
+## Slice 18 (done in #105)
 
 - **`webmail/src/lib/message-follow-up.ts`**: OWA-style follow-up due presets (Today / Tomorrow / This week / No date).
 - **`message-follow-up.svelte.ts`**: `webmail.message-follow-up.v1` local due-date overlay; `\Flagged` on the server.
@@ -255,9 +255,26 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 19 (in #106)
+
+Mobile **Focused | Other** inbox tabs — see PR #106.
+
+---
+
+## Slice 20 (this PR)
+
+- **`webmail/src/mobile/components/InboxView.svelte`**: loads sibling bodies when **Group threads** is on (same rules as desktop).
+- **`webmail/src/mobile/components/MessageView.svelte`**: reuses **`ConversationStack.svelte`** with mobile state overrides.
+- **`webmail/src/lib/conversation-view.ts`**: **`shouldShowConversationStack`** gate shared with desktop/mobile.
+- **`ConversationStack.svelte`**: optional props for mobile message list + conversation details.
+- Tests: unit (`conversation-view.test.mjs`) + Playwright (`outlook-mobile-conversation-view.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice20/50-mobile-conversation-stack.png`.
+
+---
+
 ## Next planned slice
 
-**Dark mode / mobile** polish, or opt-in **AI thread summarise** (thread summary gated on `aiFeatures` + provider).
+**Follow-up flags** on mobile, **dark mode** polish, or opt-in **AI thread summarise** (thread summary gated on `aiFeatures` + provider).
 
 ---
 

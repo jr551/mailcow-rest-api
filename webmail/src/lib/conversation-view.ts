@@ -37,6 +37,14 @@ export function isConversationMessageExpanded(
     return userExpanded.has(uid);
 }
 
+/** Shared desktop + mobile gate for the reading-pane conversation stack. */
+export function shouldShowConversationStack(
+    groupThreads: boolean,
+    stack: { uids: number[] } | null | undefined
+): boolean {
+    return groupThreads && !!stack && stack.uids.length > 1;
+}
+
 /** One-line preview for a collapsed sibling. */
 export function conversationSnippet(text: string | null | undefined, max = 140): string {
     if (!text) return '(no preview)';

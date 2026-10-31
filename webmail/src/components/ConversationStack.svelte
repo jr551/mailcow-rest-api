@@ -1,6 +1,6 @@
 <script lang="ts">
     import { ui } from '../lib/store.svelte';
-    import type { MessageDetail } from '../lib/api';
+    import type { MessageDetail, MessageListItem } from '../lib/api';
     import {
         conversationOrderChronological,
         conversationSnippet,
@@ -12,21 +12,36 @@
 
     interface Props {
         focusUid: number;
+        /** When set (mobile), use instead of desktop `ui.messages`. */
+        messages?: MessageListItem[];
+        /** When set (mobile), use instead of `ui.conversationDetails`. */
+        conversationDetails?: Record<number, MessageDetail>;
+        /** When set (mobile), use instead of `ui.conversationStack`. */
+        conversationStack?: { threadId: string; uids: number[] } | null;
     }
-    let { focusUid }: Props = $props();
+    let {
+        focusUid,
+        messages: messagesOverride,
+        conversationDetails: detailsOverride,
+        conversationStack: stackOverride
+    }: Props = $props();
 
     let userExpanded = $state(new Set<number>());
 
+    const messageList = $derived(messagesOverride ?? ui.messages);
+    const stackMeta = $derived(stackOverride !== undefined ? stackOverride : ui.conversationStack);
+
     const thread = $derived(
-        ui.conversationStack && ui.selectedUid != null
-            ? findThreadForUid(ui.messages, ui.selectedUid)
+        stackMeta && stackMeta.uids.length > 1 && focusUid != null
+            ? findThreadForUid(messageList, focusUid)
             : null
     );
 
     const ordered = $derived(thread ? conversationOrderChronological(thread) : []);
 
     function bodyFor(uid: number): MessageDetail | undefined {
-        return ui.conversationDetails[uid];
+        const map = detailsOverride ?? ui.conversationDetails;
+        return map[uid];
     }
 
     function toggleExpand(uid: number) {
@@ -47,7 +62,7 @@
     $effect(() => {
         // Reset manual expansion when the user opens a different message/thread.
         focusUid;
-        ui.conversationStack?.threadId;
+        stackMeta?.threadId;
         userExpanded = new Set();
     });
 </script>

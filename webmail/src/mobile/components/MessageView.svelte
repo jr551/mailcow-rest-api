@@ -22,6 +22,8 @@
     import DriveFolderPicker from '../../components/drive/DriveFolderPicker.svelte';
     import { saveAttachmentToDrive, loadDriveConfig } from '../../lib/drive.svelte';
     import Avatar from '../../components/Avatar.svelte';
+    import ConversationStack from '../../components/ConversationStack.svelte';
+    import { shouldShowConversationStack } from '../../lib/conversation-view';
 
     const msg = $derived(mobileState.detail);
     const loading = $derived(mobileState.detailLoading);
@@ -347,6 +349,10 @@
     }
 
     const fromAddr = $derived(msg?.envelope.from?.[0]);
+
+    const showConversationStack = $derived(
+        shouldShowConversationStack(settings.groupThreads, mobileState.conversationStack)
+    );
 </script>
 
 <div class="message-view">
@@ -424,6 +430,14 @@
                 </div>
             </div>
 
+            {#if showConversationStack && msg}
+                <ConversationStack
+                    focusUid={msg.uid}
+                    messages={mobileState.messages}
+                    conversationDetails={mobileState.conversationDetails}
+                    conversationStack={mobileState.conversationStack}
+                />
+            {:else}
             <div class="msg-content" class:blurred={phishingFlagged && !phishingDismissed}>
                 {#if msg.html}
                     <iframe bind:this={iframeEl} srcdoc={proxiedSrcDoc ?? iframeSrc} title="Message body" sandbox="allow-same-origin" frameborder="0" onload={resizeIframe}></iframe>
@@ -486,6 +500,7 @@
                     </div>
                 {/if}
             </div>
+            {/if}
 
             {#if msg.attachments.length}
                 <div class="attachments">
