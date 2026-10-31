@@ -35,6 +35,7 @@
     import MessageActionSheet from './MessageActionSheet.svelte';
     import LatencyChip from '../../components/LatencyChip.svelte';
     import { playClick } from '../../lib/sounds.svelte';
+    import { findThreadForUid } from '../../lib/conversation-view';
 
     let searchInput = $state('');
     let searchDebounce: ReturnType<typeof setTimeout> | null = null;
@@ -168,6 +169,42 @@
         finally { appending = false; }
     }
 
+    function resetConversationStack() {
+        mobileState.conversationStack = null;
+        mobileState.conversationDetails = {};
+        mobileState.conversationLoading = false;
+    }
+
+    async function loadConversationStackForSelection(path: string, uid: number) {
+        resetConversationStack();
+        if (!settings.groupThreads) return;
+        const thread = findThreadForUid(mobileState.messages, uid);
+        if (!thread || thread.count <= 1) return;
+        mobileState.conversationStack = {
+            threadId: thread.id,
+            uids: thread.messages.map((m) => m.uid)
+        };
+        mobileState.conversationLoading = true;
+        const details: Record<number, MessageDetail> = {};
+        const threadId = thread.id;
+        try {
+            await Promise.all(
+                thread.messages.map(async (m) => {
+                    try {
+                        details[m.uid] = await getMessage(path, m.uid);
+                    } catch {
+                        /* sibling bodies are best-effort */
+                    }
+                })
+            );
+            if (mobileState.selectedUid === uid && mobileState.conversationStack?.threadId === threadId) {
+                mobileState.conversationDetails = details;
+            }
+        } finally {
+            if (mobileState.selectedUid === uid) mobileState.conversationLoading = false;
+        }
+    }
+
     async function selectMessage(msg: MessageListItem) {
         playClick();
         const uid = msg.uid;
@@ -175,6 +212,7 @@
         mobileState.detail = null;
         mobileState.detailError = null;
         mobileState.detailLoading = true;
+        resetConversationStack();
         // In all-folders search the row carries its source mailbox; switch
         // selectedPath so detail/flags/move target the right folder.
         if (mobileState.searchScope === 'all' && msg.mailbox && mobileState.selectedPath !== msg.mailbox) {
@@ -185,6 +223,7 @@
         try {
             const fresh = await getMessage(path, uid);
             mobileState.detail = fresh;
+            void loadConversationStackForSelection(path, uid);
             if (fresh.flags && !fresh.flags.includes('\\Seen')) {
                 const r = await modifyFlags(path, uid, { add: ['\\Seen'] });
                 fresh.flags = r.flags;

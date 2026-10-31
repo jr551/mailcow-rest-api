@@ -27,8 +27,8 @@ const ASSET16 = 'docs/assets/outlook-slice16';
 const ASSET17 = 'docs/assets/outlook-slice17';
 const ASSET18 = 'docs/assets/outlook-slice18';
 const ASSET19 = 'docs/assets/outlook-slice19';
-const ASSET21 = 'docs/assets/outlook-slice21';
-for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET21]) mkdirSync(d, { recursive: true });
+const ASSET20 = 'docs/assets/outlook-slice20';
+for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET20]) mkdirSync(d, { recursive: true });
 
 const baseSettings = {
     aiFeatures: false,
@@ -493,19 +493,18 @@ test.describe('docs mobile (390×844 @2x)', () => {
         await shot(page, `${ASSET19}/48-mobile-inbox-focused-tab.png`);
     });
 
-    test('slice21 mobile follow-up today row', async ({ page }) => {
-        await page.addInitScript(() => localStorage.setItem('webmail.theme', 'light'));
+    test('slice20 mobile conversation stack', async ({ page }) => {
+        await page.addInitScript((blob) => {
+            localStorage.setItem('webmail.theme', 'light');
+            localStorage.setItem('webmail.settings.v1', blob);
+        }, seedSettings({ groupThreads: true }));
         await page.goto('/webmail/mobile/');
         await page.fill('input[type="email"]', MOCK_USER);
         await page.fill('input[type="password"]', 'hunter2');
         await page.click('button:has-text("Sign in")');
-        const row = page.getByTestId('msg-row-1001');
-        await row.dispatchEvent('pointerdown', { button: 0, clientX: 100, clientY: 200, pointerId: 1, pointerType: 'touch' });
-        await page.waitForTimeout(600);
-        await row.dispatchEvent('pointerup', { button: 0, clientX: 100, clientY: 200, pointerId: 1, pointerType: 'touch' });
-        await page.getByTestId('mobile-follow-up-trigger').click();
-        await page.getByTestId('mobile-follow-up-item-today').click();
-        await expect(page.getByTestId('msg-row-1001')).toHaveAttribute('data-follow-up', 'Follow up today');
-        await shot(page, `${ASSET21}/51-mobile-follow-up-today-row.png`);
+        await page.getByTestId('msg-row-999').click();
+        await expect(page.getByTestId('conversation-stack')).toBeVisible();
+        await expect(page.getByTestId('conversation-msg-999')).toHaveAttribute('data-expanded', 'true');
+        await shot(page, `${ASSET20}/50-mobile-conversation-stack.png`);
     });
 });

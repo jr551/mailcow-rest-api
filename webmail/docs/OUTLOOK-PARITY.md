@@ -264,20 +264,20 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 21 (this PR)
+## Slice 20 (this PR)
 
-- **`webmail/src/mobile/components/InboxView.svelte`**: follow-up row hints (`data-follow-up`, shared overlay with desktop).
-- **`webmail/src/mobile/components/MessageActionSheet.svelte`**: **Flag for follow-up** preset menu (long-press sheet).
-- **`SettingsView.svelte`**: Appearance section documents mobile follow-up flags.
-- **`test/e2e/fixtures.ts`**: `resetFixtureMessages()` in `applyMocks` for deterministic e2e.
-- Tests: Playwright (`outlook-mobile-follow-up-flag.spec.ts`) against API mocks.
-- Screenshot: `webmail/docs/assets/outlook-slice21/51-mobile-follow-up-today-row.png`.
+- **`webmail/src/mobile/components/InboxView.svelte`**: loads sibling bodies when **Group threads** is on (same rules as desktop).
+- **`webmail/src/mobile/components/MessageView.svelte`**: reuses **`ConversationStack.svelte`** with mobile state overrides.
+- **`webmail/src/lib/conversation-view.ts`**: **`shouldShowConversationStack`** gate shared with desktop/mobile.
+- **`ConversationStack.svelte`**: optional props for mobile message list + conversation details.
+- Tests: unit (`conversation-view.test.mjs`) + Playwright (`outlook-mobile-conversation-view.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice20/50-mobile-conversation-stack.png`.
 
 ---
 
 ## Next planned slice
 
-**Mobile conversation reader** stack (see PR #107), **dark mode** polish, or opt-in **AI thread summarise** (thread summary gated on `aiFeatures` + provider).
+**Follow-up flags** on mobile, **dark mode** polish, or opt-in **AI thread summarise** (thread summary gated on `aiFeatures` + provider).
 
 ---
 
