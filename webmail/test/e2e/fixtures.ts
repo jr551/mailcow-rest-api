@@ -99,7 +99,9 @@ export const detailFor997 = {
         'Are you free for lunch on Friday? I was thinking we could try the new place on Main.\n\n' +
         'Sam',
     html: null,
-    attachments: []
+    attachments: [
+        { id: '1', filename: 'lunch-menu.pdf', contentType: 'application/pdf', size: 52_400, disposition: 'attachment', related: false }
+    ]
 };
 
 export const detailFor1000 = {
