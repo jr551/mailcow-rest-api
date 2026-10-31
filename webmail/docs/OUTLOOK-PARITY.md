@@ -401,7 +401,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 34 (open in #121)
+## Slice 34 (done)
 
 - **`mobile-message-pin.ts`**: row mailbox path + pin state for all-folder search rows (shared `message-pin-snooze` overlay).
 - **`MessageActionSheet.svelte`**: **Pin to top** / **Unpin** on the long-press sheet.
