@@ -390,7 +390,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 33 (this PR)
+## Slice 33 (done in #120)
 
 - **`mobile-mail-landmarks.ts`**: mobile region labels, shared list landmark id, skip-link focus helper.
 - **`InboxView.svelte`**: **Skip to message list** link, command bar + message list landmarks.
@@ -398,6 +398,16 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 - **`SettingsView.svelte`**: **Accessibility** section documents landmarks and tab order.
 - Tests: unit (`mobile-mail-landmarks.test.mjs`) + Playwright (`outlook-mobile-mail-landmarks.spec.ts`) against API mocks.
 - Screenshot: `webmail/docs/assets/outlook-slice33/63-mobile-skip-link-focused.png`.
+
+---
+
+## Slice 34 (this PR)
+
+- **`mobile-message-pin.ts`**: row mailbox path + pin state for all-folder search rows (shared `message-pin-snooze` overlay).
+- **`MessageActionSheet.svelte`**: **Pin to top** / **Unpin** on the long-press sheet.
+- **`InboxView.svelte`**: pin icon on rows, `data-pinned`, sort-with-pinned-first (same as desktop slice 9).
+- Tests: unit (`mobile-message-pin.test.mjs`) + Playwright (`outlook-mobile-message-pin.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice34/64-mobile-pinned-row.png`.
 
 ---
 

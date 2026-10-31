@@ -19,6 +19,7 @@
         MESSAGE_CATEGORY_BY_ID,
         type MessageCategoryId
     } from '../../lib/message-categories';
+    import { mobilePinActionLabel } from '../../lib/mobile-message-pin';
 
     interface Props {
         msg: MessageListItem;
@@ -35,6 +36,8 @@
         onSnooze: (preset: SnoozePresetId) => void | Promise<void>;
         onSweep: (action: SenderSweepAction) => void | Promise<void>;
         onCategory: (category: MessageCategoryId | 'clear') => void | Promise<void>;
+        onTogglePin: () => void;
+        isPinned?: boolean;
         currentCategory?: MessageCategoryId | null;
         sweepBusy?: boolean;
     }
@@ -54,6 +57,8 @@
         onSnooze,
         onSweep,
         onCategory,
+        onTogglePin,
+        isPinned = false,
         currentCategory = null,
         sweepBusy = false
     }: Props = $props();
@@ -318,6 +323,15 @@
                 >
                     <Icon name="palette" size={20} />
                     <span>Categorize</span>
+                </button>
+                <button
+                    type="button"
+                    class="action-row"
+                    data-testid="mobile-pin-toggle"
+                    onclick={() => { onTogglePin(); onClose(); }}
+                >
+                    <Icon name="pin" size={20} />
+                    <span>{mobilePinActionLabel(isPinned)}</span>
                 </button>
                 <button
                     type="button"
