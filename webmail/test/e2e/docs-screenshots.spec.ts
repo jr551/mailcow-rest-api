@@ -37,7 +37,8 @@ const ASSET27 = 'docs/assets/outlook-slice27';
 const ASSET28 = 'docs/assets/outlook-slice28';
 const ASSET29 = 'docs/assets/outlook-slice29';
 const ASSET30 = 'docs/assets/outlook-slice30';
-for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET20, ASSET22, ASSET23, ASSET24, ASSET25, ASSET26, ASSET27, ASSET28, ASSET29, ASSET30]) mkdirSync(d, { recursive: true });
+const ASSET32 = 'docs/assets/outlook-slice32';
+for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET20, ASSET22, ASSET23, ASSET24, ASSET25, ASSET26, ASSET27, ASSET28, ASSET29, ASSET30, ASSET32]) mkdirSync(d, { recursive: true });
 
 const baseSettings = {
     aiFeatures: false,
@@ -651,6 +652,26 @@ test.describe('docs mobile (390×844 @2x)', () => {
         await expect(page.getByTestId('mobile-quick-filter-menu')).toBeVisible();
         await settleForScreenshot(page);
         await shot(page, `${ASSET27}/57-mobile-quick-filter-menu.png`);
+    });
+
+    test('slice32 mobile category stripe', async ({ page }) => {
+        await page.addInitScript((blob) => {
+            localStorage.setItem('webmail.theme', 'light');
+            localStorage.setItem('webmail.settings.v1', blob);
+        }, seedSettings());
+        await page.goto('/webmail/mobile/');
+        await page.fill('input[type="email"]', MOCK_USER);
+        await page.fill('input[type="password"]', 'hunter2');
+        await page.click('button:has-text("Sign in")');
+        const row = page.getByTestId('msg-row-1001');
+        await row.dispatchEvent('pointerdown', { button: 0, clientX: 100, clientY: 200, pointerId: 1, pointerType: 'touch' });
+        await page.waitForTimeout(600);
+        await row.dispatchEvent('pointerup', { button: 0, clientX: 100, clientY: 200, pointerId: 1, pointerType: 'touch' });
+        await page.getByTestId('mobile-category-trigger').click();
+        await page.getByTestId('mobile-category-item-green').click();
+        await expect(page.getByTestId('msg-category-1001')).toBeVisible();
+        await settleForScreenshot(page);
+        await shot(page, `${ASSET32}/62-mobile-category-green-row.png`);
     });
 });
 

@@ -362,7 +362,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 30 (this PR)
+## Slice 30 (done in #117)
 
 - **`conversation-attachments.ts`**: attachment hints from list metadata or loaded message bodies.
 - **`ConversationStack.svelte`**: paperclip hint on collapsed siblings; filename chips when expanded (desktop + mobile stack).
@@ -371,9 +371,19 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 32 (this PR)
+
+- **`mobile-message-category.ts`**: row category resolution for all-folder search rows (shared with desktop overlay).
+- **`MessageActionSheet.svelte`**: **Categorize** submenu (same colour categories as desktop slice 7).
+- **`InboxView.svelte`**: list colour stripe + `modifyFlags` / local overlay when assigning categories on mobile.
+- Tests: unit (`mobile-message-category.test.mjs`) + Playwright (`outlook-mobile-message-categories.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice32/62-mobile-category-green-row.png`.
+
+---
+
 ## Next planned slice
 
-**Smart triage / categorise**, **mobile saved-search parity**, or richer conversation HTML parity.
+**Mobile saved searches** (slice 31), **smart triage / categorise** (opt-in AI), or richer conversation HTML parity.
 
 ---
 

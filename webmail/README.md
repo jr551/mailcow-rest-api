@@ -160,6 +160,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Mobile quick filter menu](docs/assets/outlook-slice27/57-mobile-quick-filter-menu.png)
 
+- **Mobile colour categories** — long-press a message for **Categorize** (same OWA colour categories and `webmail.message-categories.v1` overlay as desktop). Rows show a left colour stripe when categorized.
+
+![Mobile category stripe](docs/assets/outlook-slice32/62-mobile-category-green-row.png)
+
 - **Saved searches** — save a header search (folder or **Search all folders** scope) with a name; reopen from the search dropdown (localStorage only, no AI required).
 
 ![Saved searches menu](docs/assets/outlook-slice29/59-saved-searches-menu.png)
