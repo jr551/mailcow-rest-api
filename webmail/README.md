@@ -128,6 +128,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Skip link focused](docs/assets/outlook-slice17/46-skip-link-focused.png)
 
+- **Reading pane focus** — opening a message moves keyboard focus to the **Reading pane** landmark (docked pane or hidden-layout slide-over). Documented under **Settings → General → Accessibility**.
+
+![Desktop reading pane focused](docs/assets/outlook-slice41/71-desktop-reading-pane-focused.png)
+
 - **Follow-up flags** — right-click **Flag** to set **Today**, **Tomorrow**, **This week**, or **No date**; the list shows a follow-up hint (e.g. “Follow up today”). Due dates stay in this browser; `\Flagged` syncs with IMAP.
 
 ![Follow-up today on message row](docs/assets/outlook-slice18/47-follow-up-today-row.png)

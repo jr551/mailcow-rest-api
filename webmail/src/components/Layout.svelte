@@ -97,7 +97,8 @@
         MAIL_MESSAGE_LIST_LANDMARK_ID,
         MAIL_READING_PANE_LABEL,
         MAIL_READING_PANE_LANDMARK_ID,
-        MAIL_SKIP_LINK_TEXT
+        MAIL_SKIP_LINK_TEXT,
+        focusMailReadingPaneLandmark
     } from '../lib/mail-landmarks';
     import MailShortcutHelp from './MailShortcutHelp.svelte';
     import { findThreadForUid } from '../lib/conversation-view';
@@ -492,6 +493,14 @@
         ui.detail = null;
         ui.detailError = null;
     }
+
+    $effect(() => {
+        const uid = ui.selectedUid;
+        if (uid == null || ui.detailLoading) return;
+        if (settings.readingPaneLayout === 'hidden' && !readingFlyoutOpen) return;
+        const t = requestAnimationFrame(() => focusMailReadingPaneLandmark());
+        return () => cancelAnimationFrame(t);
+    });
 
     // --- Mailbox CRUD (right-click in Sidebar) -------------------------
     async function createFolder(parent: string | null) {
@@ -3083,6 +3092,14 @@
         min-height: 0;
         display: flex;
         flex-direction: column;
+    }
+    .docked-reading-landmark:focus {
+        outline: 2px solid var(--accent, #0078d4);
+        outline-offset: -2px;
+    }
+    .reading-flyout:focus {
+        outline: 2px solid var(--accent, #0078d4);
+        outline-offset: -2px;
     }
     .content.layout-bottom .docked-reading-landmark {
         grid-column: 1;
