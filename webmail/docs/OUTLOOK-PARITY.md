@@ -380,7 +380,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 32 (this PR)
+## Slice 32 (done in #119)
 
 - **`mobile-message-category.ts`**: row category resolution for all-folder search rows (shared with desktop overlay).
 - **`MessageActionSheet.svelte`**: **Categorize** submenu (same colour categories as desktop slice 7).
@@ -390,9 +390,19 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 34 (this PR)
+
+- **`mobile-message-pin.ts`**: row mailbox path + pin state for all-folder search rows (shared `message-pin-snooze` overlay).
+- **`MessageActionSheet.svelte`**: **Pin to top** / **Unpin** on the long-press sheet.
+- **`InboxView.svelte`**: pin icon on rows, `data-pinned`, sort-with-pinned-first (same as desktop slice 9).
+- Tests: unit (`mobile-message-pin.test.mjs`) + Playwright (`outlook-mobile-message-pin.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice34/64-mobile-pinned-row.png`.
+
+---
+
 ## Next planned slice
 
-**Smart triage / categorise** (opt-in AI), richer conversation HTML parity, or mobile compose parity.
+**Slice 33 mobile landmarks** (#120), **Smart triage / categorise** (opt-in AI), richer conversation HTML parity, or mobile compose parity.
 
 ---
 

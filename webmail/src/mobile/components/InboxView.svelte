@@ -41,7 +41,9 @@
         pinSnoozeOverlay,
         snoozeMessage,
         tickPinSnoozeOverlay,
+        toggleMessagePin,
     } from '../../lib/message-pin-snooze.svelte';
+    import { mobileRowIsPinned } from '../../lib/mobile-message-pin';
     import {
         senderAddressFromMessage,
         senderDisplayLabel,
@@ -666,6 +668,18 @@
         return mobileRowCategory(mobileState.selectedPath, msg, messageCategoryOverlay());
     }
 
+    function rowIsPinned(msg: MessageListItem): boolean {
+        void pinSnoozeOverlay();
+        return mobileRowIsPinned(pinSnoozeOverlay(), mobileState.selectedPath, msg);
+    }
+
+    function togglePin(msg: MessageListItem) {
+        const path = rowPath(msg);
+        const wasPinned = mobileRowIsPinned(pinSnoozeOverlay(), mobileState.selectedPath, msg);
+        toggleMessagePin(path, msg.uid);
+        showToast('success', wasPinned ? 'Unpinned' : 'Pinned to top');
+    }
+
     async function applyMessageCategory(msg: MessageListItem, category: MessageCategoryId | null) {
         const li = findRow(msg);
         if (!li) return;
@@ -1154,6 +1168,7 @@
                 {@const dlevel = settings.listFilter === 'ai-sorted' ? dangerLevel(msg.uid) : 0}
                 {@const followUpHint = rowFollowUpHint(msg.uid, isStarred)}
                 {@const rowCategory = rowMessageCategory(msg)}
+                {@const rowPinned = rowIsPinned(msg)}
                 <SwipeableRow
                     onOpen={() => selectMessage(msg)}
                     onSwipeRight={() => toggleStar(msg)}
@@ -1171,7 +1186,9 @@
                         data-testid={`msg-row-${msg.uid}`}
                         data-category={rowCategory ?? ''}
                         data-follow-up={followUpHint ?? ''}
+                        data-pinned={rowPinned ? 'true' : 'false'}
                         class:unread={isUnread}
+                        class:pinned={rowPinned}
                         class:fresh={isFresh}
                         class:spy-tracked={isTracked}
                         class:danger-1={dlevel === 1}
@@ -1212,6 +1229,9 @@
                                 {msg.envelope.subject || '(no subject)'}
                             </div>
                         </div>
+                        {#if rowPinned}
+                            <span class="pin-mark" data-testid={`msg-pin-mark-${msg.uid}`} title="Pinned"><Icon name="pin" size={14} /></span>
+                        {/if}
                         {#if isStarred}
                             <span class="star-mark"><Icon name="starFilled" size={14} /></span>
                         {/if}
@@ -1249,6 +1269,8 @@
         onSnooze={(preset) => applySnooze(sheetMsg, preset)}
         onSweep={(action) => runMobileSenderSweep(sheetMsg, action)}
         onCategory={(cat) => applyMessageCategory(sheetMsg, cat === 'clear' ? null : cat)}
+        onTogglePin={() => togglePin(sheetMsg)}
+        isPinned={rowIsPinned(sheetMsg)}
         currentCategory={rowMessageCategory(sheetMsg)}
         sweepBusy={mobileSweepBusy}
     />
@@ -1520,6 +1542,13 @@
     .star-mark {
         color: var(--star);
         flex-shrink: 0;
+    }
+    .pin-mark {
+        color: var(--accent, #0078d4);
+        flex-shrink: 0;
+    }
+    .msg-row.pinned {
+        background: color-mix(in srgb, var(--accent, #0078d4) 6%, transparent);
     }
     .load-more {
         display: flex;
