@@ -434,7 +434,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 37 (this PR)
+## Slice 37 (done in #124)
 
 - **`mobile-compose-save-draft.ts`**: toast copy + plain-text → draft HTML helper.
 - **`compose-save-draft.svelte.ts`**: **`saveMobileComposeDraft`** via shared `buildComposeDraftRfc822` / `appendRawMessage` (same as desktop slice 14).
@@ -445,9 +445,19 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 39 (this PR)
+
+- **`mobile-compose-discard.ts`**: discard sheet copy + **`mobileComposeNeedsDiscardConfirm`** helper.
+- **`ComposeView.svelte`**: hardware-back guard overlay; **Close** / back with draft content opens **Keep editing / Save draft / Discard** sheet.
+- **`SettingsView.svelte`**: Compose discard confirmation docs.
+- Tests: unit (`mobile-compose-discard.test.mjs`) + Playwright (`outlook-mobile-compose-discard.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice39/69-mobile-compose-discard-sheet.png`.
+
+---
+
 ## Next planned slice
 
-**Smart triage / categorise** (opt-in AI), richer conversation HTML parity, or mobile compose accessibility polish.
+**Smart triage / categorise** (opt-in AI), richer conversation HTML parity, or mobile compose accessibility polish (slice 38).
 
 ---
 
