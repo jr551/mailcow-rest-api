@@ -324,7 +324,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 26 (this PR)
+## Slice 26 (done in #113)
 
 - **`MessageActionSheet.svelte`**: **Snooze** and **Sweep** submenus on the mobile long-press sheet (same presets and sender sweep actions as desktop).
 - **`InboxView.svelte`**: snooze overlay filtering + sender sweep via `resolveSenderSweepTargets` / `bulkMove`.
@@ -333,9 +333,18 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 27 (this PR)
+
+- **`MobileQuickFilterBar.svelte`**: mobile **Filter** / **Sort** menus (same `list-quick-filters.ts` options as desktop).
+- **`InboxView.svelte`**: uses **`settings.listFilter`** / **`settings.listSort`** via `filterMessagesByOutlookFilter` and `sortWithPinnedFirst`; removes legacy segment chips.
+- Tests: unit (`list-quick-filters.test.mjs` menu parity) + Playwright (`outlook-mobile-quick-filter-bar.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice27/57-mobile-quick-filter-menu.png`.
+
+---
+
 ## Next planned slice
 
-**Opt-in AI draft/rewrite reply**, **saved searches**, or **mobile quick filter bar**.
+**Opt-in AI draft/rewrite reply**, **saved searches**, or **mobile search scope parity**.
 
 ---
 

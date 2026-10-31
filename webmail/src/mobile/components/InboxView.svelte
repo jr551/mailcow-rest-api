@@ -16,7 +16,9 @@
     } from '../../lib/api';
     import { formatDate, senderShort, isTrackingEmail } from '../../lib/format';
     import { sortInboxClient, type InboxSortRanking } from '../../lib/sort-inbox-client';
-    import { settings, setInboxTab, isVipAddress } from '../../lib/settings.svelte';
+    import { settings, setInboxTab, setListFilter, isVipAddress } from '../../lib/settings.svelte';
+    import { authState } from '../../lib/auth.svelte';
+    import { filterMessagesByOutlookFilter } from '../../lib/list-quick-filters';
     import { filterMessagesByInboxTab } from '../../lib/focused-inbox';
     import {
         followUpDueLabel,
@@ -52,6 +54,7 @@
     import Avatar from '../../components/Avatar.svelte';
     import SwipeableRow from './SwipeableRow.svelte';
     import MessageActionSheet from './MessageActionSheet.svelte';
+    import MobileQuickFilterBar from './MobileQuickFilterBar.svelte';
     import LatencyChip from '../../components/LatencyChip.svelte';
     import { playClick } from '../../lib/sounds.svelte';
     import { findThreadForUid } from '../../lib/conversation-view';
@@ -440,13 +443,13 @@
         // filter value must not keep re-firing a paid sort behind the
         // scenes. Reset to the plain list rather than silently doing work.
         if (!settings.aiFeatures) {
-            if (mobileState.filter === 'ai-sorted') mobileState.filter = 'all';
+            if (settings.listFilter === 'ai-sorted') setListFilter('all');
             aiSortError = null;
             aiRankings = [];
             lastSortedKey = '';
             return;
         }
-        if (mobileState.filter !== 'ai-sorted') {
+        if (settings.listFilter !== 'ai-sorted') {
             aiSortError = null;
             return;
         }
@@ -488,10 +491,9 @@
     // Same bucket order as MessageList: human → important → info → marketing.
     const CAT_RANK: Record<string, number> = { human: 0, important: 1, info: 2, marketing: 3 };
     const filtered = $derived.by(() => {
-        const f = mobileState.filter;
-        let base = mobileState.messages;
-        if (f === 'unread') base = mobileState.messages.filter((m) => !m.flags.includes('\\Seen'));
-        else if (f === 'starred') base = mobileState.messages.filter((m) => m.flags.includes('\\Flagged'));
+        const f = settings.listFilter;
+        const userEmail = authState.activeUser ?? '';
+        let base = filterMessagesByOutlookFilter(mobileState.messages, f, { userEmail });
         if (showInboxTabs) {
             base = filterMessagesByInboxTab(base, settings.inboxTab, { isVip: isVipAddress });
         }
@@ -499,8 +501,9 @@
         void pinSnoozeNow;
         const mailboxPath = mobileState.selectedPath;
         base = filterOutSnoozedMessages(base, mailboxPath, pinSnoozeOverlay(), pinSnoozeNow);
+        const sort = f === 'ai-sorted' ? 'date-desc' : settings.listSort;
         if (f !== 'ai-sorted' || aiRankings.length === 0) {
-            return sortWithPinnedFirst(base, mailboxPath, pinSnoozeOverlay(), settings.listSort);
+            return sortWithPinnedFirst(base, mailboxPath, pinSnoozeOverlay(), sort);
         }
         const indexFor = new Map<number, number>();
         aiRankings.forEach((r, i) => indexFor.set(r.uid, i));
@@ -885,19 +888,7 @@
         </nav>
     {/if}
 
-    <div class="segments" style="margin: 8px 16px 0;">
-        {#each (settings.aiFeatures ? ['all','unread','starred','ai-sorted'] : ['all','unread','starred']) as f}
-            <button
-                type="button"
-                class="segment"
-                class:active={mobileState.filter === f}
-                aria-pressed={mobileState.filter === f}
-                onclick={() => { mobileState.filter = f as any; }}
-            >
-                {f === 'all' ? 'All' : f === 'unread' ? 'Unread' : f === 'starred' ? 'Starred' : 'AI sort'}
-            </button>
-        {/each}
-    </div>
+    <MobileQuickFilterBar />
 
     <!-- The touch handlers drive pull-to-refresh / swipe gestures — pointer
          enhancements over a plain content list, not a widget. -->
@@ -969,7 +960,7 @@
                 {@const email = msg.envelope.from?.[0]?.address || ''}
                 {@const name = msg.envelope.from?.[0]?.name || null}
                 {@const isTracked = isTrackingEmail(msg.envelope.subject)}
-                {@const dlevel = mobileState.filter === 'ai-sorted' ? dangerLevel(msg.uid) : 0}
+                {@const dlevel = settings.listFilter === 'ai-sorted' ? dangerLevel(msg.uid) : 0}
                 {@const followUpHint = rowFollowUpHint(msg.uid, isStarred)}
                 <SwipeableRow
                     onOpen={() => selectMessage(msg)}

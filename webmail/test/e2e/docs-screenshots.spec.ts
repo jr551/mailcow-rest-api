@@ -33,7 +33,8 @@ const ASSET23 = 'docs/assets/outlook-slice23';
 const ASSET24 = 'docs/assets/outlook-slice24';
 const ASSET25 = 'docs/assets/outlook-slice25';
 const ASSET26 = 'docs/assets/outlook-slice26';
-for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET20, ASSET22, ASSET23, ASSET24, ASSET25, ASSET26]) mkdirSync(d, { recursive: true });
+const ASSET27 = 'docs/assets/outlook-slice27';
+for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET20, ASSET22, ASSET23, ASSET24, ASSET25, ASSET26, ASSET27]) mkdirSync(d, { recursive: true });
 
 const baseSettings = {
     aiFeatures: false,
@@ -575,6 +576,21 @@ test.describe('docs mobile (390×844 @2x)', () => {
         await expect(page.getByTestId('mobile-snooze-item-later-today')).toBeVisible();
         await settleForScreenshot(page);
         await shot(page, `${ASSET26}/56-mobile-snooze-menu.png`);
+    });
+
+    test('slice27 mobile quick filter menu', async ({ page }) => {
+        await page.addInitScript((blob) => {
+            localStorage.setItem('webmail.theme', 'light');
+            localStorage.setItem('webmail.settings.v1', blob);
+        }, seedSettings());
+        await page.goto('/webmail/mobile/');
+        await page.fill('input[type="email"]', MOCK_USER);
+        await page.fill('input[type="password"]', 'hunter2');
+        await page.click('button:has-text("Sign in")');
+        await page.getByTestId('mobile-quick-filter-trigger').click();
+        await expect(page.getByTestId('mobile-quick-filter-menu')).toBeVisible();
+        await settleForScreenshot(page);
+        await shot(page, `${ASSET27}/57-mobile-quick-filter-menu.png`);
     });
 });
 

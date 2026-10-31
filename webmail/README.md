@@ -150,6 +150,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Mobile snooze menu](docs/assets/outlook-slice26/56-mobile-snooze-menu.png)
 
+- **Mobile Filter / Sort bar** — Outlook-style **Filter** and **Sort** menus on `/webmail/mobile/` share **`settings.listFilter`** and **`settings.listSort`** with desktop (All, Unread, Flagged, To me, Has files, Mentions me; full sort list). Optional **AI sort** chip when AI features are on.
+
+![Mobile quick filter menu](docs/assets/outlook-slice27/57-mobile-quick-filter-menu.png)
+
 ## Keyboard shortcuts (mail)
 
 Global shortcuts are listed under **Settings → General → Keyboard shortcuts** (press **?** in the inbox for the same list). Reading-pane placement:
