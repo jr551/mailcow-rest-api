@@ -4,6 +4,16 @@
     import { showToast } from '../lib/store.svelte';
     import { settings } from '../../lib/settings.svelte';
     import { followUpSubmenuItems, type FollowUpPresetId } from '../../lib/message-follow-up';
+    import {
+        snoozeSubmenuItems,
+        type SnoozePresetId
+    } from '../../lib/message-pin-snooze';
+    import {
+        senderAddressFromMessage,
+        senderDisplayLabel,
+        senderSweepMenuItems,
+        type SenderSweepAction
+    } from '../../lib/message-sender-sweep';
 
     interface Props {
         msg: MessageListItem;
@@ -17,6 +27,9 @@
         onToggleRead: () => void;
         onArchive: () => void;
         onTrash: () => void;
+        onSnooze: (preset: SnoozePresetId) => void | Promise<void>;
+        onSweep: (action: SenderSweepAction) => void | Promise<void>;
+        sweepBusy?: boolean;
     }
 
     let {
@@ -30,15 +43,23 @@
         onFollowUp,
         onToggleRead,
         onArchive,
-        onTrash
+        onTrash,
+        onSnooze,
+        onSweep,
+        sweepBusy = false
     }: Props = $props();
 
     let summaryLoading = $state(false);
     let summaryResult = $state<string | null>(null);
     let summaryError = $state<string | null>(null);
     let followUpMenuOpen = $state(false);
+    let snoozeMenuOpen = $state(false);
+    let sweepMenuOpen = $state(false);
 
     const followUpItems = followUpSubmenuItems();
+    const snoozeItems = snoozeSubmenuItems();
+    const sweepSender = $derived(senderAddressFromMessage(msg));
+    const sweepItems = $derived(senderSweepMenuItems(senderDisplayLabel(msg)));
 
     // Derived, not captured at init: the sheet stays open after a Star /
     // mark-read tap and the handlers mutate `msg.flags` in place, so frozen
@@ -84,12 +105,27 @@
         summaryResult = null;
         summaryError = null;
         followUpMenuOpen = false;
+        snoozeMenuOpen = false;
+        sweepMenuOpen = false;
         onClose();
     }
 
     async function pickFollowUp(key: string) {
         await onFollowUp(key as FollowUpPresetId | 'clear');
         followUpMenuOpen = false;
+        onClose();
+    }
+
+    async function pickSnooze(key: string) {
+        await onSnooze(key as SnoozePresetId);
+        snoozeMenuOpen = false;
+        onClose();
+    }
+
+    async function pickSweep(key: string) {
+        if (sweepBusy) return;
+        await onSweep(key as SenderSweepAction);
+        sweepMenuOpen = false;
         onClose();
     }
 </script>
@@ -118,6 +154,53 @@
                 {:else}
                     <pre class="summary">{summaryResult}</pre>
                 {/if}
+            </div>
+        {:else if snoozeMenuOpen}
+            <div class="sheet-header">
+                <button type="button" class="back-btn" aria-label="Back" onclick={() => { snoozeMenuOpen = false; }}>
+                    <Icon name="chevronLeft" size={18} />
+                </button>
+                <h3>Snooze</h3>
+                <button type="button" class="close-btn" aria-label="Close" onclick={onClose}>
+                    <Icon name="close" size={18} />
+                </button>
+            </div>
+            <div class="actions">
+                {#each snoozeItems as item (item.key)}
+                    <button
+                        type="button"
+                        class="action-row"
+                        data-testid={`mobile-snooze-item-${item.key}`}
+                        onclick={() => pickSnooze(item.key)}
+                    >
+                        <Icon name="clock" size={20} />
+                        <span>{item.label}</span>
+                    </button>
+                {/each}
+            </div>
+        {:else if sweepMenuOpen}
+            <div class="sheet-header">
+                <button type="button" class="back-btn" aria-label="Back" onclick={() => { sweepMenuOpen = false; }}>
+                    <Icon name="chevronLeft" size={18} />
+                </button>
+                <h3>Sweep</h3>
+                <button type="button" class="close-btn" aria-label="Close" onclick={onClose}>
+                    <Icon name="close" size={18} />
+                </button>
+            </div>
+            <div class="actions">
+                {#each sweepItems as item (item.key)}
+                    <button
+                        type="button"
+                        class="action-row"
+                        disabled={sweepBusy}
+                        data-testid={`mobile-sweep-item-${item.key}`}
+                        onclick={() => pickSweep(item.key)}
+                    >
+                        <Icon name="filter" size={20} />
+                        <span>{item.label}</span>
+                    </button>
+                {/each}
             </div>
         {:else if followUpMenuOpen}
             <div class="sheet-header">
@@ -177,6 +260,27 @@
                     <Icon name="starFilled" size={20} />
                     <span>{isStarred ? 'Follow-up date…' : 'Flag for follow-up'}</span>
                 </button>
+                <button
+                    type="button"
+                    class="action-row"
+                    data-testid="mobile-snooze-trigger"
+                    onclick={() => { snoozeMenuOpen = true; }}
+                >
+                    <Icon name="clock" size={20} />
+                    <span>Snooze</span>
+                </button>
+                {#if sweepSender}
+                    <button
+                        type="button"
+                        class="action-row"
+                        data-testid="mobile-sweep-trigger"
+                        disabled={sweepBusy}
+                        onclick={() => { sweepMenuOpen = true; }}
+                    >
+                        <Icon name="filter" size={20} />
+                        <span>Sweep</span>
+                    </button>
+                {/if}
                 <button type="button" class="action-row" onclick={() => { onToggleRead(); onClose(); }}>
                     <Icon name={isUnread ? 'eye' : 'mail'} size={20} />
                     <span>{isUnread ? 'Mark read' : 'Mark unread'}</span>

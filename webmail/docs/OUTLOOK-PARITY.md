@@ -304,7 +304,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 24 (this PR)
+## Slice 24 (done in #111)
 
 - **`webmail/src/lib/mobile-tablet-reading-pane.ts`**: tablet split breakpoint (768px+) and **`settings.readingPaneLayout`** axis (right = horizontal, bottom = vertical, hidden = phone full-screen).
 - **`TabletMailShell.svelte`**: list + reading pane on tablet widths; **`MessageView`** **`embedded`** mode hides back navigation.
@@ -314,9 +314,18 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 26 (this PR)
+
+- **`MessageActionSheet.svelte`**: **Snooze** and **Sweep** submenus on the mobile long-press sheet (same presets and sender sweep actions as desktop).
+- **`InboxView.svelte`**: snooze overlay filtering + sender sweep via `resolveSenderSweepTargets` / `bulkMove`.
+- Tests: Playwright (`outlook-mobile-snooze-sweep.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice26/56-mobile-snooze-menu.png`.
+
+---
+
 ## Next planned slice
 
-**Mobile keyboard shortcuts** help sheet, **opt-in AI draft/rewrite reply**, or **mobile snooze / sweep** parity on the action sheet.
+**Mobile keyboard shortcuts** help sheet (slice 25), **opt-in AI draft/rewrite reply**, or **saved searches**.
 
 ---
 

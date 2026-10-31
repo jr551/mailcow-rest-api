@@ -142,6 +142,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Tablet split reading pane](docs/assets/outlook-slice24/54-tablet-split-reading-pane.png)
 
+- **Mobile Snooze & Sweep** — long-press a message for **Snooze** presets (same local overlay as desktop) or **Sweep** bulk actions for the sender (delete all / keep latest / archive all).
+
+![Mobile snooze menu](docs/assets/outlook-slice26/56-mobile-snooze-menu.png)
+
 ## Keyboard shortcuts (mail)
 
 Global shortcuts are listed under **Settings → General → Keyboard shortcuts** (press **?** in the inbox for the same list). Reading-pane placement:
