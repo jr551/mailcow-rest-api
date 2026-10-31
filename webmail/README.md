@@ -67,7 +67,9 @@ The lookup is a server call to `GET /v1/link-check?url=…` (VirusTotal, with th
 Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 - **Focused / Other** — on INBOX only, rule-based tabs (`focused-inbox.ts`); your choice is stored in `settings.inboxTab`. See [`docs/OUTLOOK-PARITY.md`](docs/OUTLOOK-PARITY.md).
-- **Conversation stacking** — when **Settings → Mail → Group messages by conversation** is on, the reading pane shows a stacked transcript for multi-message threads (`ConversationStack.svelte`).
+- **Conversation stacking** — when **Settings → Mail → Group messages by conversation** is on, the reading pane shows a stacked transcript for multi-message threads (`ConversationStack.svelte`). Collapsed siblings show a paperclip hint; expanding a message lists attachment filenames in the stack.
+
+![Conversation attachment chips](docs/assets/outlook-slice30/60-conversation-attachment-chips.png)
 - **Reading pane position** — **right** (default), **bottom**, or **hidden** (list full width; opening a message uses a flyout). Change it in **Settings → Mail → Reading pane**, the layout control in the message list header, or with **Alt+Shift+R** (right), **Alt+Shift+B** (bottom), or **Alt+Shift+H** (hidden).
 - **Folder Favorites** — pin common folders above the tree (Inbox / Sent / Drafts by default); reorder and edit via the sidebar context menu.
 - **Natural-language search (opt-in)** — with **AI features** on and a configured provider, enable **Settings → AI → Natural-language search** to translate plain-language header queries into tag syntax (`from:`, `has:attachment`, …). Tag syntax is always available without AI.

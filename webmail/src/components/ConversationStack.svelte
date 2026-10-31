@@ -7,8 +7,13 @@
         isConversationMessageExpanded,
         findThreadForUid
     } from '../lib/conversation-view';
+    import {
+        conversationAttachmentEntries,
+        conversationAttachmentHint
+    } from '../lib/conversation-attachments';
     import { formatFullDate, formatAddressList } from '../lib/format';
     import Avatar from './Avatar.svelte';
+    import Icon from './Icon.svelte';
 
     interface Props {
         focusUid: number;
@@ -73,6 +78,8 @@
             {@const expanded = isConversationMessageExpanded(item.uid, focusUid, userExpanded)}
             {@const detail = bodyFor(item.uid)}
             {@const from = item.envelope.from?.[0]}
+            {@const attHint = conversationAttachmentHint(item, detail)}
+            {@const attEntries = conversationAttachmentEntries(item, detail)}
             <article
                 class="conv-msg"
                 class:expanded
@@ -123,6 +130,16 @@
                             <div class="conv-recipients muted small">
                                 To: {formatAddressList(detail.envelope.to)}
                             </div>
+                            {#if attEntries.length > 0}
+                                <ul class="conv-attachments" data-testid={`conversation-attachments-${item.uid}`}>
+                                    {#each attEntries as att (att.id)}
+                                        <li class="conv-att-chip">
+                                            <Icon name="paperclip" size={12} />
+                                            <span class="conv-att-name">{att.filename || `Attachment ${att.id}`}</span>
+                                        </li>
+                                    {/each}
+                                </ul>
+                            {/if}
                             <pre class="conv-text">{detail.text || viewText(detail) || '(no text body)'}</pre>
                         {/if}
                     </div>
@@ -130,6 +147,12 @@
                     <p class="conv-snippet muted" data-testid={`conversation-snippet-${item.uid}`}>
                         {conversationSnippet(detail ? viewText(detail) : '')}
                     </p>
+                    {#if attHint}
+                        <p class="conv-att-hint muted" data-testid={`conversation-att-hint-${item.uid}`}>
+                            <Icon name="paperclip" size={12} />
+                            <span>{attHint}</span>
+                        </p>
+                    {/if}
                 {/if}
             </article>
         {/each}
@@ -188,6 +211,38 @@
         margin: 0 0 0 42px;
         font-size: 13px;
         line-height: 1.35;
+    }
+    .conv-att-hint {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin: 4px 0 0 42px;
+        font-size: 12px;
+    }
+    .conv-attachments {
+        list-style: none;
+        margin: 0 0 10px;
+        padding: 0;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+    .conv-att-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 8px;
+        border-radius: 6px;
+        border: 1px solid var(--border-subtle);
+        background: var(--bg-hover);
+        font-size: 12px;
+        max-width: 100%;
+    }
+    .conv-att-name {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        max-width: 220px;
     }
     .conv-body {
         margin-top: 10px;

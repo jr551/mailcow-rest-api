@@ -17,7 +17,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 | **Message list** | `MessageList.svelte`, density, **Outlook Filter / Sort** menus, **colour categories**, **pin / snooze**, **Sweep**, **Quick steps** on selection | Low–medium: richer row chrome |
 | **Focused / Other** | `focused-inbox.ts` + INBOX tabs | Low–medium: optional AI refinement later |
 | **Reading pane** | `MessageDetail.svelte`, reply/forward, conversation stack when grouped | Low–medium: richer HTML parity; pane position done (slice 3) |
-| **Conversation view** | List grouping via `threads.ts`; reading-pane stack via `conversation-view.ts` + `ConversationStack.svelte` | Medium: attachments per message in stack; richer HTML parity |
+| **Conversation view** | List grouping via `threads.ts`; reading-pane stack via `conversation-view.ts` + `ConversationStack.svelte` | Low–medium: richer HTML parity |
 | **Compose** | `Compose.svelte` + `FloatingPanel.svelte`, TipTap | Medium: sensitivity labels; **undo send** (slice 12), **scheduled send** (#100), **Save draft** (slice 14) |
 | **Search** | Header search + tag syntax; **saved searches** (local); optional **natural-language** translation when AI + provider configured | Medium: no unified People/Files search |
 | **Settings shell** | `Settings.svelte` 3-column Outlook-like modal, 19 sections | Low–medium: content differs |
@@ -353,7 +353,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 29 (this PR)
+## Slice 29 (done in #116)
 
 - **`saved-mail-searches.ts`** / **`saved-mail-searches.svelte.ts`**: named queries in `webmail.saved-searches.v1` (folder or all-folders scope).
 - **`Layout.svelte`**: search dropdown lists saved searches, **Save this search**, remove control; reapplies scope when run.
@@ -362,9 +362,18 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 30 (this PR)
+
+- **`conversation-attachments.ts`**: attachment hints from list metadata or loaded message bodies.
+- **`ConversationStack.svelte`**: paperclip hint on collapsed siblings; filename chips when expanded (desktop + mobile stack).
+- Tests: unit (`conversation-attachments.test.mjs`) + Playwright (`outlook-conversation-attachments.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice30/60-conversation-attachment-chips.png`.
+
+---
+
 ## Next planned slice
 
-**Smart triage / categorise**, **mobile saved-search parity**, or **conversation attachment chrome**.
+**Smart triage / categorise**, **mobile saved-search parity**, or richer conversation HTML parity.
 
 ---
 

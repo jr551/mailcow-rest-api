@@ -33,6 +33,7 @@ test('reading pane stacks a grouped thread with older message collapsed', async 
     await expect(page.getByTestId('conversation-msg-997')).toHaveAttribute('data-expanded', 'false');
     await expect(page.getByTestId('conversation-msg-999')).toHaveAttribute('data-expanded', 'true');
     await expect(page.getByTestId('conversation-body-999')).toContainText('noon at the usual place');
+    await expect(page.getByTestId('conversation-att-hint-997')).toContainText('lunch-menu.pdf');
 
     await page.screenshot({ path: `${SCREEN_DIR}/28-conversation-stack-collapsed.png`, fullPage: true });
     await page.screenshot({ path: `${ASSET_DIR}/28-conversation-stack-collapsed.png`, fullPage: true });
@@ -40,6 +41,7 @@ test('reading pane stacks a grouped thread with older message collapsed', async 
     await page.getByTestId('conversation-expand-997').click();
     await expect(page.getByTestId('conversation-msg-997')).toHaveAttribute('data-expanded', 'true');
     await expect(page.getByTestId('conversation-body-997')).toContainText('lunch on Friday');
+    await expect(page.getByTestId('conversation-attachments-997')).toContainText('lunch-menu.pdf');
 
     await page.screenshot({ path: `${SCREEN_DIR}/29-conversation-stack-expanded.png`, fullPage: true });
     await page.screenshot({ path: `${ASSET_DIR}/29-conversation-stack-expanded.png`, fullPage: true });
