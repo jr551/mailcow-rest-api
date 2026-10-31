@@ -411,7 +411,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 35 (this PR)
+## Slice 35 (done in #122)
 
 - **`mobile-compose-undo.ts`**: toast copy helper shared with unit tests.
 - **`compose-undo-send.svelte.ts`**: queues `sendStub` on mobile with **`mobileState.sendUndo`** + compose restore snapshot.
@@ -422,9 +422,20 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 37 (this PR)
+
+- **`mobile-compose-save-draft.ts`**: toast copy + plain-text → draft HTML helper.
+- **`compose-save-draft.svelte.ts`**: **`saveMobileComposeDraft`** via shared `buildComposeDraftRfc822` / `appendRawMessage` (same as desktop slice 14).
+- **`ComposeView.svelte`**: **Save draft** in the compose header, **Ctrl+S**, SMTP-off hint, primary button saves to Drafts when send is disabled.
+- **`SettingsView.svelte`**: Compose **Save draft** documentation.
+- Tests: unit (`mobile-compose-save-draft.test.mjs`) + Playwright (`outlook-mobile-save-draft.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice37/67-mobile-save-draft-compose.png`.
+
+---
+
 ## Next planned slice
 
-**Smart triage / categorise** (opt-in AI), richer conversation HTML parity, or mobile scheduled send.
+**Smart triage / categorise** (opt-in AI), richer conversation HTML parity, or mobile scheduled send (slice 36).
 
 ---
 

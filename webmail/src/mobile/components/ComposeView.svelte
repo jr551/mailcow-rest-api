@@ -7,6 +7,8 @@
     import { settings, pickFromName, setDisplayName, deriveNameFromAddress, aiAvailable, smtpAvailable } from '../../lib/settings.svelte';
     import { undoSendEnabled } from '../../lib/undo-send';
     import { scheduleMobileUndoSend } from '../lib/compose-undo-send.svelte';
+    import { composeDraftHasContent } from '../../lib/compose-draft';
+    import { saveMobileComposeDraft } from '../lib/compose-save-draft.svelte';
     import { ReplySuggest, DraftSparkle, htmlToPlainText } from '../../lib/reply-suggest.svelte';
     import { addressBook } from '../../lib/address-book.svelte';
     import Icon from '../../components/Icon.svelte';
@@ -18,6 +20,10 @@
     let subject = $state('');
     let body = $state('');
     let sending = $state(false);
+    let draftSaving = $state(false);
+    const canSaveDraft = $derived(
+        composeDraftHasContent({ to, subject, html: body, text: body })
+    );
     let showCc = $state(false);
     let sendFromOptions = $state<string[]>([]);
     let attachments = $state<SendAttachment[]>([]);
@@ -232,6 +238,28 @@
         goBack();
     }
 
+    async function saveDraft(opts: { close?: boolean } = {}) {
+        if (draftSaving || sending) return;
+        draftSaving = true;
+        const fromName = pickFromName(from || authState.activeUser || '');
+        try {
+            const ok = await saveMobileComposeDraft({
+                from: from.trim() || authState.activeUser || '',
+                fromName,
+                to: to.split(',').map((s) => s.trim()).filter(Boolean),
+                cc: showCc ? cc.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
+                bcc: showCc ? bcc.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
+                subject: subject.trim(),
+                body,
+                inReplyTo: mode !== 'new' && replyTo?.envelope.messageId ? replyTo.envelope.messageId : undefined,
+                attachments: attachments.length ? attachments : undefined
+            });
+            if (ok && opts.close) goBack();
+        } finally {
+            draftSaving = false;
+        }
+    }
+
     onMount(async () => {
         // Consume launch-intent prefill (Web Share Target, manifest
         // shortcut, mailto: protocol). One-shot — clear immediately so
@@ -320,6 +348,17 @@
             replySuggest.abort();
         };
     });
+
+    onMount(() => {
+        function onKey(e: KeyboardEvent) {
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+                e.preventDefault();
+                void saveDraft();
+            }
+        }
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    });
 </script>
 
 <div class="compose-view">
@@ -328,13 +367,36 @@
             <Icon name="close" size={20} />
         </button>
         <h1>{mode === 'new' ? 'New Message' : mode === 'reply' ? 'Reply' : mode === 'replyAll' ? 'Reply All' : 'Forward'}</h1>
-        <button type="button" class="mbtn mbtn-primary" data-testid="compose-send" disabled={sending || !to.trim() || !subject.trim()} onclick={handleSend}>
-            {#if sending}<span class="spinner" style="width:16px;height:16px"></span>{/if}
-            {sending ? 'Sending…' : 'Send'}
-        </button>
+        <div class="compose-header-actions">
+            <button
+                type="button"
+                class="mbtn mbtn-ghost save-draft-btn"
+                data-testid="compose-save-draft"
+                disabled={draftSaving || sending || !canSaveDraft}
+                onclick={() => void saveDraft()}
+            >
+                {#if draftSaving}<span class="spinner" style="width:14px;height:14px"></span>{/if}
+                {draftSaving ? 'Saving…' : 'Save draft'}
+            </button>
+            <button
+                type="button"
+                class="mbtn mbtn-primary"
+                data-testid="compose-send"
+                disabled={sending || (smtpAvailable() ? !to.trim() || !subject.trim() : !canSaveDraft)}
+                onclick={() => (smtpAvailable() ? void handleSend() : void saveDraft({ close: true }))}
+            >
+                {#if sending}<span class="spinner" style="width:16px;height:16px"></span>{/if}
+                {sending ? 'Sending…' : smtpAvailable() ? 'Send' : 'Save draft'}
+            </button>
+        </div>
     </header>
 
     <div class="compose-fields scroll-y">
+        {#if !smtpAvailable()}
+            <p class="compose-smtp-hint muted small" data-testid="compose-smtp-hint">
+                Sending is not enabled on this server — use <strong>Save draft</strong> to stash the message in Drafts.
+            </p>
+        {/if}
         <div class="field-group">
             <div class="field">
                 <span class="field-label">From</span>
@@ -528,6 +590,21 @@
         min-height: 0;
         overflow: hidden;
         background: var(--bg-base);
+    }
+    .compose-header-actions {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-shrink: 0;
+    }
+    .save-draft-btn {
+        font-size: 14px;
+        padding-inline: 8px;
+        white-space: nowrap;
+    }
+    .compose-smtp-hint {
+        margin: 0;
+        padding: 10px 16px 0;
     }
     .compose-fields {
         /* min-height:0 + overflow-y:auto are what keeps the scrolling

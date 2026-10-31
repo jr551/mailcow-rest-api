@@ -182,6 +182,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Mobile undo send toast](docs/assets/outlook-slice35/65-mobile-undo-send-toast.png)
 
+- **Mobile save draft** — explicit **Save draft** in compose (and **Ctrl+S** with a hardware keyboard). Appends RFC822 to IMAP **Drafts** with the `\\Draft` flag; works when SMTP send is disabled.
+
+![Mobile save draft compose](docs/assets/outlook-slice37/67-mobile-save-draft-compose.png)
+
 ## Keyboard shortcuts (mail)
 
 Global shortcuts are listed under **Settings → General → Keyboard shortcuts** (press **?** in the inbox for the same list). Reading-pane placement:

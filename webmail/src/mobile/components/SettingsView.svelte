@@ -626,6 +626,12 @@
             </div>
             <div class="ios-row" style="flex-direction:column;align-items:stretch;gap:6px;">
                 <div class="toggle-info" style="margin-bottom:2px;">
+                    <span class="row-label">Save draft</span>
+                    <span class="muted small">Compose includes an explicit <strong>Save draft</strong> button (and <strong>Ctrl+S</strong> with a hardware keyboard). Drafts append to your IMAP Drafts folder with the <strong>\\Draft</strong> flag, even when SMTP send is disabled.</span>
+                </div>
+            </div>
+            <div class="ios-row" style="flex-direction:column;align-items:stretch;gap:6px;">
+                <div class="toggle-info" style="margin-bottom:2px;">
                     <span class="row-label">Undo send</span>
                     <span class="muted small">Delay sending so you can tap Undo on the toast (0–30 seconds, same as desktop).</span>
                 </div>
