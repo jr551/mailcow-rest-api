@@ -214,6 +214,9 @@ export interface Settings {
     /** When true (and AI + provider configured), plain-language search
      *  queries are translated to tag syntax before hitting IMAP search. */
     naturalLanguageSearch: boolean;
+    /** When true (and AI + provider configured), the reading-pane AI panel
+     *  summarizes the whole conversation thread when thread grouping is on. */
+    aiThreadSummary: boolean;
 }
 
 
@@ -319,7 +322,8 @@ export function sanitizeSettings(raw: unknown): Settings {
         // fresh profile. An explicit `false` from a user who turned
         // it off is preserved.
         linkSafetyCheck: parsed.linkSafetyCheck !== false,
-        naturalLanguageSearch: parsed.naturalLanguageSearch === true
+        naturalLanguageSearch: parsed.naturalLanguageSearch === true,
+        aiThreadSummary: parsed.aiThreadSummary === true
     };
 }
 
@@ -701,6 +705,11 @@ export function setLinkSafetyCheck(on: boolean) {
 
 export function setNaturalLanguageSearch(on: boolean) {
     state.naturalLanguageSearch = on;
+    persist(state);
+}
+
+export function setAiThreadSummary(on: boolean) {
+    state.aiThreadSummary = on;
     persist(state);
 }
 

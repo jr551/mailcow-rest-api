@@ -60,7 +60,7 @@
         setSpamSuggest, setSpamSuggestConfidenceFloor, setSpamSweepBatchSize, setAiSortSweepSpam,
         setVipAddresses, setPreSendCheck, setComposeHistorySummary, setUndoSendSeconds, setAiSuggestReply,
         aiAvailable, resolveCustomBaseUrl, resolveCustomModel, extractChatText,
-        setCalendarTicker, setCalendarTickerTitles, setWeatherChipOutlook, setLinkSafetyCheck, setNaturalLanguageSearch, setReadingPaneLayout
+        setCalendarTicker, setCalendarTickerTitles, setWeatherChipOutlook, setLinkSafetyCheck, setNaturalLanguageSearch, setAiThreadSummary, setReadingPaneLayout
     } from '../lib/settings.svelte';
     import { warmupTesseract, teardownTesseract } from '../lib/tesseract-ocr';
     import { linkCheckConfigured } from '../lib/virustotal';
@@ -2387,6 +2387,37 @@
                                         data-testid="settings-nl-search"
                                     />
                                     <span>{settings.naturalLanguageSearch ? 'On' : 'Off'}</span>
+                                </label>
+                            </div>
+                        {/if}
+                    </div>
+
+                    <div class="card">
+                        <h4><Icon name="sparkles" size={13} /> Thread summary</h4>
+                        {#if !settings.aiFeatures}
+                            <p class="muted small" data-testid="settings-ai-thread-summary-ai-off">
+                                Unavailable while AI features are off. When enabled, the AI tools panel can summarize
+                                an entire conversation thread (not just the selected message) when thread grouping is on.
+                            </p>
+                        {:else}
+                            <div class="form-row bare">
+                                <div class="row-text">
+                                    <strong>Summarize conversation in AI panel</strong>
+                                    <span class="muted">
+                                        With thread grouping enabled, Summarize in the reading-pane AI panel sends the
+                                        full transcript to your configured provider. Off by default; single-message
+                                        summarize is unchanged.
+                                    </span>
+                                </div>
+                                <label class="toggle">
+                                    <input
+                                        type="checkbox"
+                                        checked={settings.aiThreadSummary}
+                                        disabled={!settings.aiFeatures}
+                                        onchange={(e) => setAiThreadSummary((e.currentTarget as HTMLInputElement).checked)}
+                                        data-testid="settings-ai-thread-summary"
+                                    />
+                                    <span>{settings.aiThreadSummary ? 'On' : 'Off'}</span>
                                 </label>
                             </div>
                         {/if}
