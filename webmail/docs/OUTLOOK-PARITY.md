@@ -401,7 +401,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 34 (this PR)
+## Slice 34 (done)
 
 - **`mobile-message-pin.ts`**: row mailbox path + pin state for all-folder search rows (shared `message-pin-snooze` overlay).
 - **`MessageActionSheet.svelte`**: **Pin to top** / **Unpin** on the long-press sheet.
@@ -411,9 +411,21 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 36 (this PR)
+
+- **`mobile-compose-schedule.ts`**: queued-send toast copy for mobile.
+- **`compose-schedule-send.svelte.ts`**: enqueue into shared scheduled-send queue with mobile toasts; background flush on mobile app mount.
+- **`scheduled-send.svelte.ts`**: `enqueueScheduledSend` + injectable notify for mobile flush toasts.
+- **`ComposeView.svelte`**: **Send** split button → **Schedule send** sheet (presets + datetime, same test ids as desktop).
+- **`App.svelte`**: 30s scheduled-send flusher while signed in.
+- Tests: unit (`mobile-compose-schedule.test.mjs`) + Playwright (`outlook-mobile-scheduled-send.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice36/66-mobile-schedule-send-dialog.png`.
+
+---
+
 ## Next planned slice
 
-**Smart triage / categorise** (opt-in AI), richer conversation HTML parity, or mobile compose parity.
+**Smart triage / categorise** (opt-in AI), richer conversation HTML parity, or mobile compose undo send.
 
 ---
 
