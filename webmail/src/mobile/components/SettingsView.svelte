@@ -410,6 +410,12 @@
                     <span class="muted small">INBOX uses Focused and Other tabs (same as desktop). Your last tab is remembered.</span>
                 </div>
             </div>
+            <div class="ios-row">
+                <div class="toggle-info">
+                    <span class="row-label">Follow-up flags</span>
+                    <span class="muted small">Long-press a message → <strong>Flag for follow-up</strong> (Today, Tomorrow, This week). Due dates stay on this device; the star syncs via IMAP.</span>
+                </div>
+            </div>
             <div class="ios-row toggle-row">
                 <div class="toggle-info">
                     <span class="row-label">Sounds</span>
