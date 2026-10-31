@@ -60,7 +60,7 @@
         setSpamSuggest, setSpamSuggestConfidenceFloor, setSpamSweepBatchSize, setAiSortSweepSpam,
         setVipAddresses, setPreSendCheck, setComposeHistorySummary, setUndoSendSeconds, setAiSuggestReply,
         aiAvailable, resolveCustomBaseUrl, resolveCustomModel, extractChatText,
-        setCalendarTicker, setCalendarTickerTitles, setWeatherChipOutlook, setLinkSafetyCheck, setNaturalLanguageSearch, setAiThreadSummary, setReadingPaneLayout
+        setCalendarTicker, setCalendarTickerTitles, setWeatherChipOutlook, setLinkSafetyCheck, setNaturalLanguageSearch, setAiThreadSummary, setAiRewriteCompose, setReadingPaneLayout
     } from '../lib/settings.svelte';
     import { warmupTesseract, teardownTesseract } from '../lib/tesseract-ocr';
     import { linkCheckConfigured } from '../lib/virustotal';
@@ -2418,6 +2418,36 @@
                                         data-testid="settings-ai-thread-summary"
                                     />
                                     <span>{settings.aiThreadSummary ? 'On' : 'Off'}</span>
+                                </label>
+                            </div>
+                        {/if}
+                    </div>
+
+                    <div class="card">
+                        <h4><Icon name="sparkles" size={13} /> Compose rewrite</h4>
+                        {#if !settings.aiFeatures}
+                            <p class="muted small" data-testid="settings-ai-rewrite-compose-ai-off">
+                                Unavailable while AI features are off. When enabled, selecting text in Compose
+                                offers tone presets to rewrite the selection via your configured provider.
+                            </p>
+                        {:else}
+                            <div class="form-row bare">
+                                <div class="row-text">
+                                    <strong>Rewrite selected text in Compose</strong>
+                                    <span class="muted">
+                                        Highlight text in the message body, then pick Professional, Casual,
+                                        Concise, or Friendly. Off by default; nothing is sent until you choose a preset.
+                                    </span>
+                                </div>
+                                <label class="toggle">
+                                    <input
+                                        type="checkbox"
+                                        checked={settings.aiRewriteCompose}
+                                        disabled={!settings.aiFeatures || !aiAvailable()}
+                                        onchange={(e) => setAiRewriteCompose((e.currentTarget as HTMLInputElement).checked)}
+                                        data-testid="settings-ai-rewrite-compose"
+                                    />
+                                    <span>{settings.aiRewriteCompose ? 'On' : 'Off'}</span>
                                 </label>
                             </div>
                         {/if}

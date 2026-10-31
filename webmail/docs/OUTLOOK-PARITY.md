@@ -342,18 +342,20 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 29 (this PR)
+## Slice 28 (this PR)
 
-- **`saved-mail-searches.ts`** / **`saved-mail-searches.svelte.ts`**: named queries in `webmail.saved-searches.v1` (folder or all-folders scope).
-- **`Layout.svelte`**: search dropdown lists saved searches, **Save this search**, remove control; reapplies scope when run.
-- Tests: unit (`saved-mail-searches.test.mjs`) + Playwright (`outlook-saved-searches.spec.ts`) against API mocks.
-- Screenshot: `webmail/docs/assets/outlook-slice29/59-saved-searches-menu.png`.
+- **`webmail/src/lib/compose-ai-rewrite.ts`**: tone presets, prompt builder, selection eligibility.
+- **`compose-ai-rewrite.client.ts`**: opt-in rewrite via configured provider (`cachedChatCompletion`, scope `compose-rewrite`).
+- **`settings.aiRewriteCompose`**: default **off**; toggle in Settings → AI (requires `aiFeatures` + configured provider).
+- **`RichEditor.svelte`** / **`Compose.svelte`**: selection handle + rewrite bar above the editor.
+- Tests: unit (`compose-ai-rewrite.test.mjs`) + Playwright (`outlook-ai-compose-rewrite.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice28/58-compose-rewrite-bar.png`.
 
 ---
 
 ## Next planned slice
 
-**Opt-in AI compose rewrite** (slice 28, PR #115), **smart triage / categorise**, or **mobile search scope parity**.
+**Saved searches**, **smart triage / categorise**, or **mobile search scope parity**.
 
 ---
 
