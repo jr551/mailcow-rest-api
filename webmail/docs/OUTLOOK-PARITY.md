@@ -314,7 +314,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 25 (this PR)
+## Slice 25 (done in #112)
 
 - **`webmail/src/lib/mobile-mail-keyboard-shortcuts.ts`**: OWA-style chords for `/webmail/mobile/` with an external keyboard; **`Enter`** opens the highlighted row.
 - **`MobileMailShortcutHelp.svelte`**: bottom-sheet help (**?** or **Settings → Keyboard shortcuts**).
@@ -324,9 +324,18 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 26 (this PR)
+
+- **`MessageActionSheet.svelte`**: **Snooze** and **Sweep** submenus on the mobile long-press sheet (same presets and sender sweep actions as desktop).
+- **`InboxView.svelte`**: snooze overlay filtering + sender sweep via `resolveSenderSweepTargets` / `bulkMove`.
+- Tests: Playwright (`outlook-mobile-snooze-sweep.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice26/56-mobile-snooze-menu.png`.
+
+---
+
 ## Next planned slice
 
-**Opt-in AI draft/rewrite reply**, **mobile snooze / sweep** on the action sheet, or **saved searches**.
+**Opt-in AI draft/rewrite reply**, **saved searches**, or **mobile quick filter bar**.
 
 ---
 
