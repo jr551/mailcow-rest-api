@@ -233,7 +233,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 17 (this PR)
+## Slice 17 (done in #104)
 
 - **`webmail/src/lib/mail-landmarks.ts`**: OWA-aligned region labels and skip-link target ids.
 - **`Layout.svelte`**: **Skip to message list** link, `banner` command bar, folder **`navigation`**, message list **`region`**, reading pane **`main`** landmark; flyout reading pane uses the same label.
@@ -243,9 +243,21 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 18 (this PR)
+
+- **`webmail/src/lib/message-follow-up.ts`**: OWA-style follow-up due presets (Today / Tomorrow / This week / No date).
+- **`message-follow-up.svelte.ts`**: `webmail.message-follow-up.v1` local due-date overlay; `\Flagged` on the server.
+- **`MessageList.svelte`**: **Flag** context submenu; row hint (e.g. “Follow up today”).
+- **`Layout.svelte`**: applies presets via `modifyFlags` + overlay; star toggle clears due dates.
+- **`Settings.svelte`**: General section documents follow-up flags.
+- Tests: unit (`message-follow-up.test.mjs`) + Playwright (`outlook-follow-up-flag.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice18/47-follow-up-today-row.png`.
+
+---
+
 ## Next planned slice
 
-**Dark mode / mobile** polish, **flags / follow-up** UX, or opt-in **AI thread summarise**.
+**Dark mode / mobile** polish, or opt-in **AI thread summarise** (thread summary gated on `aiFeatures` + provider).
 
 ---
 

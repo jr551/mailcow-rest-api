@@ -121,6 +121,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Skip link focused](docs/assets/outlook-slice17/46-skip-link-focused.png)
 
+- **Follow-up flags** — right-click **Flag** to set **Today**, **Tomorrow**, **This week**, or **No date**; the list shows a follow-up hint (e.g. “Follow up today”). Due dates stay in this browser; `\Flagged` syncs with IMAP.
+
+![Follow-up today on message row](docs/assets/outlook-slice18/47-follow-up-today-row.png)
+
 ## Keyboard shortcuts (mail)
 
 Global shortcuts are listed under **Settings → General → Keyboard shortcuts** (press **?** in the inbox for the same list). Reading-pane placement:
