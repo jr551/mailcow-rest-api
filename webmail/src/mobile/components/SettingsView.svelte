@@ -26,6 +26,7 @@
     import Toggle from './Toggle.svelte';
     import { themeState, setTheme, effectiveTheme } from '../../lib/theme.svelte';
     import { MOBILE_THEME_OPTIONS } from '../../lib/mobile-appearance';
+    import { MAIL_SKIP_LINK_TEXT, MOBILE_LANDMARK_ROWS } from '../../lib/mobile-mail-landmarks';
 
     // Mail rules — minimal port of the desktop block. Mobile keeps to
     // contains-only conditions to avoid a deep dropdown stack on phones.
@@ -446,6 +447,23 @@
                     <span class="muted small">Look up sender portraits</span>
                 </div>
                 <Toggle checked={gravatarPref.on} label="Gravatar avatars" onToggle={() => setGravatarEnabled(!gravatarPref.on)} />
+            </div>
+        </div>
+
+        <p class="ios-section-title"><Icon name="monitor" size={13} /> Accessibility</p>
+        <div class="ios-list">
+            <div class="ios-row" style="flex-direction:column;align-items:stretch;gap:8px;">
+                <span class="row-label">Landmarks &amp; tab order</span>
+                <p class="muted small" style="margin:0;">
+                    The mobile inbox exposes Outlook-style regions for screen readers. Tab order follows the layout:
+                    command bar → app tabs → message list → reading pane. Press Tab on the inbox to reveal
+                    <strong>{MAIL_SKIP_LINK_TEXT}</strong>.
+                </p>
+                <ul class="landmark-list muted small" style="margin:0;padding-left:18px;" data-testid="mobile-settings-landmarks">
+                    {#each MOBILE_LANDMARK_ROWS as row}
+                        <li><strong>{row.region}</strong> — {row.description}</li>
+                    {/each}
+                </ul>
             </div>
         </div>
 

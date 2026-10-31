@@ -170,6 +170,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Mobile category stripe](docs/assets/outlook-slice32/62-mobile-category-green-row.png)
 
+- **Mobile landmarks & skip link** — OWA-style **Command bar**, **App navigation**, **Message list**, and **Reading pane** regions on `/webmail/mobile/`, plus **Skip to message list** (keyboard focus). Documented under mobile **Settings → Accessibility**.
+
+![Mobile skip link focused](docs/assets/outlook-slice33/63-mobile-skip-link-focused.png)
+
 - **Mobile pin to top** — long-press a message and choose **Pin to top** (same `webmail.message-pin-snooze.v1` overlay as desktop). Pinned rows show a pin icon and stay at the top of the list.
 
 ![Mobile pinned row](docs/assets/outlook-slice34/64-mobile-pinned-row.png)
