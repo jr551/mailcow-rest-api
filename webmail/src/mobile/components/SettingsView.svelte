@@ -642,6 +642,12 @@
             </div>
             <div class="ios-row" style="flex-direction:column;align-items:stretch;gap:6px;">
                 <div class="toggle-info" style="margin-bottom:2px;">
+                    <span class="row-label">Discard confirmation</span>
+                    <span class="muted small">Closing compose with unsaved changes opens an Outlook-style sheet: <strong>Keep editing</strong>, <strong>Save draft</strong>, or <strong>Discard</strong>. Hardware back uses the same prompt.</span>
+                </div>
+            </div>
+            <div class="ios-row" style="flex-direction:column;align-items:stretch;gap:6px;">
+                <div class="toggle-info" style="margin-bottom:2px;">
                     <span class="row-label">Undo send</span>
                     <span class="muted small">Delay sending so you can tap Undo on the toast (0–30 seconds, same as desktop).</span>
                 </div>

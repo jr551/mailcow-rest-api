@@ -194,6 +194,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Mobile compose To field focused](docs/assets/outlook-slice38/68-mobile-compose-to-focused.png)
 
+- **Mobile compose discard confirmation** — closing compose or pressing hardware back with unsaved changes shows **Keep editing**, **Save draft**, and **Discard** (same overlay stack as other mobile sheets).
+
+![Mobile compose discard sheet](docs/assets/outlook-slice39/69-mobile-compose-discard-sheet.png)
+
 ## Keyboard shortcuts (mail)
 
 Global shortcuts are listed under **Settings → General → Keyboard shortcuts** (press **?** in the inbox for the same list). Reading-pane placement:
