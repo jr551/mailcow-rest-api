@@ -411,12 +411,23 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 35 (done in #122)
+
+- **`mobile-compose-undo.ts`**: toast copy helper shared with unit tests.
+- **`compose-undo-send.svelte.ts`**: queues `sendStub` on mobile with **`mobileState.sendUndo`** + compose restore snapshot.
+- **`ComposeView.svelte`**: honours **`settings.undoSendSeconds`** (same as desktop slice 12).
+- **`App.svelte`**: **Undo** on the mobile toast; **`SettingsView.svelte`**: Compose **Undo send** seconds.
+- Tests: unit (`mobile-compose-undo.test.mjs`) + Playwright (`outlook-mobile-undo-send.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice35/65-mobile-undo-send-toast.png`.
+
+---
+
 ## Slice 36 (this PR)
 
 - **`mobile-compose-schedule.ts`**: queued-send toast copy for mobile.
 - **`compose-schedule-send.svelte.ts`**: enqueue into shared scheduled-send queue with mobile toasts; background flush on mobile app mount.
 - **`scheduled-send.svelte.ts`**: `enqueueScheduledSend` + injectable notify for mobile flush toasts.
-- **`ComposeView.svelte`**: **Send** split button → **Schedule send** sheet (presets + datetime, same test ids as desktop).
+- **`ComposeView.svelte`**: **Send** split button → **Schedule send** sheet (presets + datetime, same test ids as desktop); immediate **Send** still honours undo send (slice 35).
 - **`App.svelte`**: 30s scheduled-send flusher while signed in.
 - Tests: unit (`mobile-compose-schedule.test.mjs`) + Playwright (`outlook-mobile-scheduled-send.spec.ts`) against API mocks.
 - Screenshot: `webmail/docs/assets/outlook-slice36/66-mobile-schedule-send-dialog.png`.
@@ -425,7 +436,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ## Next planned slice
 
-**Smart triage / categorise** (opt-in AI), richer conversation HTML parity, or mobile compose undo send.
+**Smart triage / categorise** (opt-in AI), richer conversation HTML parity, or mobile explicit save draft UX.
 
 ---
 

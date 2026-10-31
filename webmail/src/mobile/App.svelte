@@ -4,6 +4,7 @@
     import { initImapSync } from '../lib/ai-threads.svelte';
     import { doctor, installErrorDoctor } from '../lib/error-doctor.svelte';
     import { mobileState, navigate, goBack, installAndroidBackHandler, resetMobileState } from './lib/store.svelte';
+    import { cancelMobilePendingSend } from './lib/compose-undo-send.svelte';
     import { setAppBadge, onResume } from './lib/native-bridge';
     import { onMount } from 'svelte';
     import LoginView from './components/LoginView.svelte';
@@ -277,7 +278,10 @@
 
 {#if mobileState.toast}
     <div class="mtoast {mobileState.toast.kind}" data-testid="mobile-toast" role={mobileState.toast.kind === 'error' ? 'alert' : 'status'} aria-live={mobileState.toast.kind === 'error' ? 'assertive' : 'polite'}>
-        {mobileState.toast.message}
+        <span>{mobileState.toast.message}</span>
+        {#if mobileState.sendUndo && mobileState.toast.ts >= mobileState.sendUndo.ts && mobileState.toast.ts - mobileState.sendUndo.ts < 500}
+            <button type="button" class="mtoast-undo" data-testid="mobile-send-undo-btn" onclick={() => cancelMobilePendingSend()}>Undo</button>
+        {/if}
     </div>
 {/if}
 

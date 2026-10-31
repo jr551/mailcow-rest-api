@@ -178,6 +178,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Mobile pinned row](docs/assets/outlook-slice34/64-mobile-pinned-row.png)
 
+- **Mobile undo send** — same delayed-send window as desktop (`settings.undoSendSeconds`). After **Send**, the toast offers **Undo** to restore the compose draft. Configure under mobile **Settings → Compose**.
+
+![Mobile undo send toast](docs/assets/outlook-slice35/65-mobile-undo-send-toast.png)
+
 - **Mobile schedule send** — **Send** chevron → **Schedule send** (same `webmail.scheduled-sends.v1` queue and presets as desktop slice 13). The message stays on-device until the chosen time.
 
 ![Mobile schedule send dialog](docs/assets/outlook-slice36/66-mobile-schedule-send-dialog.png)

@@ -14,6 +14,8 @@
         type ScheduledSendPresetId
     } from '../../lib/scheduled-send';
     import { queueMobileScheduledSend } from '../lib/compose-schedule-send.svelte';
+    import { undoSendEnabled } from '../../lib/undo-send';
+    import { scheduleMobileUndoSend } from '../lib/compose-undo-send.svelte';
     import { ReplySuggest, DraftSparkle, htmlToPlainText } from '../../lib/reply-suggest.svelte';
     import { addressBook } from '../../lib/address-book.svelte';
     import Icon from '../../components/Icon.svelte';
@@ -146,6 +148,26 @@
     const replyTo = $derived(mobileState.composeReplyTo);
     const mode = $derived(mobileState.composeMode);
 
+    $effect(() => {
+        const snap = mobileState.composeRestore;
+        if (!snap) return;
+        to = snap.to;
+        cc = snap.cc;
+        bcc = snap.bcc;
+        subject = snap.subject;
+        body = snap.body;
+        from = snap.from;
+        trackOpens = snap.trackOpens;
+        attachments = snap.attachments.map((a) => ({
+            filename: a.filename,
+            contentType: a.contentType,
+            content: a.content
+        }));
+        showCc = mobileState.composeRestoreShowCc || Boolean(snap.cc.trim() || snap.bcc.trim());
+        mobileState.composeRestore = null;
+        mobileState.composeRestoreShowCc = false;
+    });
+
     // htmlToPlainText now lives in lib/reply-suggest.svelte, shared with
     // the desktop compose window.
 
@@ -218,16 +240,44 @@
     async function handleSend() {
         if (!to.trim() || !subject.trim() || !smtpAvailable()) return;
         sending = true;
+        const { payload, sentSubject, toLabel } = buildSendPayload();
+        const undoSec = settings.undoSendSeconds;
         try {
-            const { payload } = buildSendPayload();
+            if (undoSendEnabled(undoSec)) {
+                scheduleMobileUndoSend({
+                    seconds: undoSec,
+                    payload,
+                    sentSubject,
+                    toLabel,
+                    composeContext: {
+                        mode,
+                        replyTo,
+                        showCc,
+                        previousView: mobileState.previousView
+                    },
+                    restore: {
+                        to,
+                        cc,
+                        bcc,
+                        subject,
+                        body,
+                        from,
+                        trackOpens,
+                        attachments: attachments.map((a) => ({
+                            filename: a.filename,
+                            contentType: a.contentType || 'application/octet-stream',
+                            size: 0,
+                            content: a.content
+                        }))
+                    },
+                    onScheduled: () => goBack()
+                });
+                return;
+            }
             const result = await sendStub(payload);
             if (result.sent) {
                 if (result.messageId) {
-                    trackSent({
-                        messageId: result.messageId,
-                        subject: payload.subject,
-                        to: payload.to.join(', ')
-                    });
+                    trackSent({ messageId: result.messageId, subject: sentSubject, to: toLabel });
                 }
                 showToast('success', 'Message sent');
                 goBack();
@@ -390,6 +440,7 @@
                     bind:value={to}
                     list="mc-to-suggestions"
                     autocomplete="email"
+                    inputmode="email"
                     data-testid="compose-to"
                 />
             </label>
