@@ -4,7 +4,9 @@
     import { authState } from '../../lib/auth.svelte';
     import { sendStub, getSendFromAddresses, type SendAttachment } from '../../lib/api';
     import { trackSent } from '../../lib/sent-status.svelte';
-    import { settings, pickFromName, setDisplayName, deriveNameFromAddress, aiAvailable } from '../../lib/settings.svelte';
+    import { settings, pickFromName, setDisplayName, deriveNameFromAddress, aiAvailable, smtpAvailable } from '../../lib/settings.svelte';
+    import { undoSendEnabled } from '../../lib/undo-send';
+    import { scheduleMobileUndoSend } from '../lib/compose-undo-send.svelte';
     import { ReplySuggest, DraftSparkle, htmlToPlainText } from '../../lib/reply-suggest.svelte';
     import { addressBook } from '../../lib/address-book.svelte';
     import Icon from '../../components/Icon.svelte';
@@ -68,6 +70,26 @@
 
     const replyTo = $derived(mobileState.composeReplyTo);
     const mode = $derived(mobileState.composeMode);
+
+    $effect(() => {
+        const snap = mobileState.composeRestore;
+        if (!snap) return;
+        to = snap.to;
+        cc = snap.cc;
+        bcc = snap.bcc;
+        subject = snap.subject;
+        body = snap.body;
+        from = snap.from;
+        trackOpens = snap.trackOpens;
+        attachments = snap.attachments.map((a) => ({
+            filename: a.filename,
+            contentType: a.contentType,
+            content: a.content
+        }));
+        showCc = mobileState.composeRestoreShowCc || Boolean(snap.cc.trim() || snap.bcc.trim());
+        mobileState.composeRestore = null;
+        mobileState.composeRestoreShowCc = false;
+    });
 
     // htmlToPlainText now lives in lib/reply-suggest.svelte, shared with
     // the desktop compose window.
@@ -139,25 +161,60 @@
     });
 
     async function handleSend() {
-        if (!to.trim() || !subject.trim()) return;
+        if (!to.trim() || !subject.trim() || !smtpAvailable()) return;
         sending = true;
+        const fromName = pickFromName(from || authState.activeUser || '');
+        const payload = {
+            to: to.split(',').map((s) => s.trim()).filter(Boolean),
+            cc: showCc ? cc.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
+            bcc: showCc ? bcc.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
+            from: from.trim() || undefined,
+            fromName,
+            subject: subject.trim(),
+            text: body,
+            inReplyTo: mode !== 'new' && replyTo?.envelope.messageId ? replyTo.envelope.messageId : undefined,
+            attachments: attachments.length ? attachments : undefined,
+            trackOpens: trackOpens || undefined,
+        };
+        const sentSubject = subject.trim();
+        const toLabel = payload.to.join(', ');
+        const undoSec = settings.undoSendSeconds;
         try {
-            const fromName = pickFromName(from || authState.activeUser || '');
-            const result = await sendStub({
-                to: to.split(',').map((s) => s.trim()).filter(Boolean),
-                cc: showCc ? cc.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
-                bcc: showCc ? bcc.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
-                from: from.trim() || undefined,
-                fromName,
-                subject: subject.trim(),
-                text: body,
-                inReplyTo: mode !== 'new' && replyTo?.envelope.messageId ? replyTo.envelope.messageId : undefined,
-                attachments: attachments.length ? attachments : undefined,
-                trackOpens: trackOpens || undefined,
-            });
+            if (undoSendEnabled(undoSec)) {
+                scheduleMobileUndoSend({
+                    seconds: undoSec,
+                    payload,
+                    sentSubject,
+                    toLabel,
+                    composeContext: {
+                        mode,
+                        replyTo,
+                        showCc,
+                        previousView: mobileState.previousView
+                    },
+                    restore: {
+                        to,
+                        cc,
+                        bcc,
+                        subject,
+                        body,
+                        from,
+                        trackOpens,
+                        attachments: attachments.map((a) => ({
+                            filename: a.filename,
+                            contentType: a.contentType || 'application/octet-stream',
+                            size: 0,
+                            content: a.content
+                        }))
+                    },
+                    onScheduled: () => goBack()
+                });
+                return;
+            }
+            const result = await sendStub(payload);
             if (result.sent) {
                 if (result.messageId) {
-                    trackSent({ messageId: result.messageId, subject: subject.trim(), to: to.split(',').map((s) => s.trim()).filter(Boolean).join(', ') });
+                    trackSent({ messageId: result.messageId, subject: sentSubject, to: toLabel });
                 }
                 showToast('success', 'Message sent');
                 goBack();
@@ -271,7 +328,7 @@
             <Icon name="close" size={20} />
         </button>
         <h1>{mode === 'new' ? 'New Message' : mode === 'reply' ? 'Reply' : mode === 'replyAll' ? 'Reply All' : 'Forward'}</h1>
-        <button type="button" class="mbtn mbtn-primary" disabled={sending || !to.trim() || !subject.trim()} onclick={handleSend}>
+        <button type="button" class="mbtn mbtn-primary" data-testid="compose-send" disabled={sending || !to.trim() || !subject.trim()} onclick={handleSend}>
             {#if sending}<span class="spinner" style="width:16px;height:16px"></span>{/if}
             {sending ? 'Sending…' : 'Send'}
         </button>
@@ -307,6 +364,7 @@
                     list="mc-to-suggestions"
                     autocomplete="email"
                     inputmode="email"
+                    data-testid="compose-to"
                 />
             </label>
             {#if showCc}
@@ -332,7 +390,7 @@
             </button>
             <label class="field">
                 <span class="field-label">Subject</span>
-                <input type="text" placeholder="Subject" bind:value={subject} />
+                <input type="text" placeholder="Subject" bind:value={subject} data-testid="compose-subject" />
             </label>
         </div>
 
@@ -395,6 +453,7 @@
             class:sparkle={draftSparkle.tick > 0}
             placeholder="Write your message…"
             bind:value={body}
+            data-testid="compose-body"
         ></textarea>
 
         {#if attachments.length}

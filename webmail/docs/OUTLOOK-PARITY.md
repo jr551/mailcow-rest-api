@@ -390,7 +390,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 33 (this PR)
+## Slice 33 (done in #120)
 
 - **`mobile-mail-landmarks.ts`**: mobile region labels, shared list landmark id, skip-link focus helper.
 - **`InboxView.svelte`**: **Skip to message list** link, command bar + message list landmarks.
@@ -401,9 +401,30 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 34 (open in #121)
+
+- **`mobile-message-pin.ts`**: row mailbox path + pin state for all-folder search rows (shared `message-pin-snooze` overlay).
+- **`MessageActionSheet.svelte`**: **Pin to top** / **Unpin** on the long-press sheet.
+- **`InboxView.svelte`**: pin icon on rows, `data-pinned`, sort-with-pinned-first (same as desktop slice 9).
+- Tests: unit (`mobile-message-pin.test.mjs`) + Playwright (`outlook-mobile-message-pin.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice34/64-mobile-pinned-row.png`.
+
+---
+
+## Slice 35 (this PR)
+
+- **`mobile-compose-undo.ts`**: toast copy helper shared with unit tests.
+- **`compose-undo-send.svelte.ts`**: queues `sendStub` on mobile with **`mobileState.sendUndo`** + compose restore snapshot.
+- **`ComposeView.svelte`**: honours **`settings.undoSendSeconds`** (same as desktop slice 12).
+- **`App.svelte`**: **Undo** on the mobile toast; **`SettingsView.svelte`**: Compose **Undo send** seconds.
+- Tests: unit (`mobile-compose-undo.test.mjs`) + Playwright (`outlook-mobile-undo-send.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice35/65-mobile-undo-send-toast.png`.
+
+---
+
 ## Next planned slice
 
-**Smart triage / categorise** (opt-in AI), richer conversation HTML parity, or mobile compose parity.
+**Smart triage / categorise** (opt-in AI), richer conversation HTML parity, or mobile scheduled send.
 
 ---
 

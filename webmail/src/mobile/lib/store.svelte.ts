@@ -1,4 +1,6 @@
 import type { Mailbox, MessageDetail, MessageListItem } from '../../lib/api';
+import type { ComposeRestoreSnapshot } from '../../lib/undo-send';
+import { settings } from '../../lib/settings.svelte';
 import { vibrate } from './native-bridge';
 
 export type MobileView = 'inbox' | 'message' | 'compose' | 'folders' | 'ai' | 'drive' | 'settings';
@@ -28,6 +30,11 @@ export interface MobileState {
     composePrefillTo: string;
     composePrefillSubject: string;
     composePrefillBody: string;
+    /** Restores fields after mobile undo-send (slice 35). */
+    composeRestore: ComposeRestoreSnapshot | null;
+    composeRestoreShowCc: boolean;
+    /** Active undo-send window — toast shows Undo while this is set. */
+    sendUndo: { id: string; ts: number } | null;
     toast: { kind: 'info' | 'error' | 'success'; message: string; ts: number } | null;
     /** Mobile reading-pane conversation stack (Outlook parity slice 20). */
     conversationStack: { threadId: string; uids: number[] } | null;
@@ -72,6 +79,9 @@ const createInitial = (): MobileState => ({
     composePrefillTo: '',
     composePrefillSubject: '',
     composePrefillBody: '',
+    composeRestore: null,
+    composeRestoreShowCc: false,
+    sendUndo: null,
     toast: null,
     conversationStack: null,
     conversationDetails: {},
@@ -218,7 +228,10 @@ export function clearToast() {
 $effect.root(() => {
     $effect(() => {
         if (!mobileState.toast) return;
-        const t = setTimeout(clearToast, 3000);
+        const delay = mobileState.sendUndo
+            ? Math.max(4000, (settings.undoSendSeconds + 2) * 1000)
+            : 3000;
+        const t = setTimeout(clearToast, delay);
         return () => clearTimeout(t);
     });
 });

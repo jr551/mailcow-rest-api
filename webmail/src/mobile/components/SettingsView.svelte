@@ -8,7 +8,7 @@
         settings, capabilities, setProxyImages, setDefaultFromAddress,
         setDensity, setGroupThreads, setPageSize, setAccountChipDisplay,
         setLlm, setUseCustomLlm, setAiFeatures,
-        setPhishingScan, setTrackOpensDefault, setAiSuggestSubjectOnBlur, setDisplayName,
+        setPhishingScan, setTrackOpensDefault, setAiSuggestSubjectOnBlur, setDisplayName, setUndoSendSeconds,
         setPhishingScanTimeoutSec, setPhishingScanPromptAddendum, setPhishingScanConfidenceFloor,
         setTesseractOcrInstalled, setPhishingScanOcrInline
     } from '../../lib/settings.svelte';
@@ -623,6 +623,22 @@
                     <span class="muted small">New messages start with the spy pixel pre-enabled</span>
                 </div>
                 <Toggle checked={settings.trackOpensDefault} label="Default to tracked" onToggle={() => setTrackOpensDefault(!settings.trackOpensDefault)} />
+            </div>
+            <div class="ios-row" style="flex-direction:column;align-items:stretch;gap:6px;">
+                <div class="toggle-info" style="margin-bottom:2px;">
+                    <span class="row-label">Undo send</span>
+                    <span class="muted small">Delay sending so you can tap Undo on the toast (0–30 seconds, same as desktop).</span>
+                </div>
+                <input
+                    type="number"
+                    min="0"
+                    max="30"
+                    step="1"
+                    value={settings.undoSendSeconds}
+                    oninput={(e) => setUndoSendSeconds(Number((e.currentTarget as HTMLInputElement).value))}
+                    data-testid="settings-undo-send-seconds"
+                    style="font:inherit;padding:8px 10px;background:var(--bg-base);border:1px solid var(--border-soft);border-radius:var(--radius-sm);color:var(--text-primary);width:5rem;"
+                />
             </div>
             <div class="ios-row toggle-row">
                 <div class="toggle-info">
