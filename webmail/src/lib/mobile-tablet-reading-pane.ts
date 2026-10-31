@@ -1,10 +1,13 @@
 /** Tablet-width split reading pane (Outlook mobile web parity). */
 
-import type { ReadingPaneLayout } from './reading-pane-layout.ts';
-import { isDockedReadingPane } from './reading-pane-layout.ts';
+export type ReadingPaneLayout = 'right' | 'bottom' | 'hidden';
 
 /** Minimum inner width to show list + reading pane together (iPad portrait). */
 export const MOBILE_TABLET_SPLIT_MIN_WIDTH_PX = 768;
+
+function isDockedReadingPane(layout: ReadingPaneLayout): boolean {
+    return layout === 'right' || layout === 'bottom';
+}
 
 export function isTabletSplitViewport(viewportWidthPx: number): boolean {
     return viewportWidthPx >= MOBILE_TABLET_SPLIT_MIN_WIDTH_PX;
