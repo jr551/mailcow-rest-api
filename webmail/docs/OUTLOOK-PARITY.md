@@ -264,7 +264,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 20 (this PR)
+## Slice 20 (done in #107)
 
 - **`webmail/src/mobile/components/InboxView.svelte`**: loads sibling bodies when **Group threads** is on (same rules as desktop).
 - **`webmail/src/mobile/components/MessageView.svelte`**: reuses **`ConversationStack.svelte`** with mobile state overrides.
@@ -275,9 +275,19 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 22 (this PR)
+
+- **`webmail/src/lib/mobile-appearance.ts`**: mobile theme mode list + **`messageIframeTheme`** helper (uses `effectiveTheme()`, not `html.dark`).
+- **`SettingsView.svelte`**: **Theme** segmented control (Auto / Light / Dark), shared `webmail.theme` with desktop.
+- **`MessageView.svelte`**: message-body iframe follows the resolved app theme in dark mode.
+- Tests: unit (`mobile-appearance.test.mjs`) + Playwright (`outlook-mobile-dark-mode.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice22/52-mobile-settings-dark-theme.png`.
+
+---
+
 ## Next planned slice
 
-**Follow-up flags** on mobile, **dark mode** polish, or opt-in **AI thread summarise** (thread summary gated on `aiFeatures` + provider).
+**Mobile follow-up flags** (PR #108), **opt-in AI thread summarise**, or **mobile reading-pane layout** notes for tablet widths.
 
 ---
 

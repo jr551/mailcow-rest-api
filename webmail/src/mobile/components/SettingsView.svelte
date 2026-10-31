@@ -24,6 +24,8 @@
     } from '../../lib/api';
     import Icon from '../../components/Icon.svelte';
     import Toggle from './Toggle.svelte';
+    import { themeState, setTheme, effectiveTheme } from '../../lib/theme.svelte';
+    import { MOBILE_THEME_OPTIONS } from '../../lib/mobile-appearance';
 
     // Mail rules — minimal port of the desktop block. Mobile keeps to
     // contains-only conditions to avoid a deep dropdown stack on phones.
@@ -368,6 +370,26 @@
 
         <p class="ios-section-title"><Icon name="palette" size={13} /> Appearance</p>
         <div class="ios-list">
+            <div class="ios-row theme-row">
+                <div class="toggle-info">
+                    <span class="row-label">Theme</span>
+                    <span class="muted small">Auto follows your device; Light and Dark match Outlook on the web. Showing <strong>{effectiveTheme()}</strong> now.</span>
+                </div>
+            </div>
+            <div class="ios-row theme-segments-row">
+                <div class="segments theme-segments" role="group" aria-label="Theme">
+                    {#each MOBILE_THEME_OPTIONS as mode (mode.value)}
+                        <button
+                            type="button"
+                            class="segment"
+                            class:active={themeState.theme === mode.value}
+                            aria-pressed={themeState.theme === mode.value}
+                            data-testid={mode.testId}
+                            onclick={() => setTheme(mode.value)}
+                        >{mode.label}</button>
+                    {/each}
+                </div>
+            </div>
             <div class="ios-row toggle-row">
                 <div class="toggle-info">
                     <span class="row-label">Compact density</span>
@@ -878,6 +900,18 @@
         gap: 2px;
         min-width: 0;
         flex: 1;
+    }
+    .theme-row {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 4px;
+    }
+    .theme-segments-row {
+        padding-top: 0;
+        padding-bottom: 10px;
+    }
+    .theme-segments {
+        width: 100%;
     }
     .small { font-size: 13px; }
     .muted { color: var(--text-tertiary); }

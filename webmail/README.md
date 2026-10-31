@@ -133,6 +133,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Mobile conversation stack](docs/assets/outlook-slice20/50-mobile-conversation-stack.png)
 
+- **Mobile theme (dark mode)** — **Settings → Appearance → Theme** picks Auto, Light, or Dark (same `webmail.theme` key as desktop). Message bodies render with a dark iframe background when the app is in dark mode.
+
+![Mobile Settings dark theme](docs/assets/outlook-slice22/52-mobile-settings-dark-theme.png)
+
 ## Keyboard shortcuts (mail)
 
 Global shortcuts are listed under **Settings → General → Keyboard shortcuts** (press **?** in the inbox for the same list). Reading-pane placement:
