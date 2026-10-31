@@ -117,6 +117,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Mail deep link reading pane](docs/assets/outlook-slice16/45-mail-deep-link.png)
 
+- **Landmarks & skip link** — OWA-style regions (**Command bar**, **Mail folders**, **Message list**, **Reading pane**) plus a **Skip to message list** link (visible on keyboard focus). Documented under **Settings → General → Accessibility**.
+
+![Skip link focused](docs/assets/outlook-slice17/46-skip-link-focused.png)
+
 - **Follow-up flags** — right-click **Flag** to set **Today**, **Tomorrow**, **This week**, or **No date**; the list shows a follow-up hint (e.g. “Follow up today”). Due dates stay in this browser; `\Flagged` syncs with IMAP.
 
 ![Follow-up today on message row](docs/assets/outlook-slice18/47-follow-up-today-row.png)

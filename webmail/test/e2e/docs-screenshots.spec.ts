@@ -24,8 +24,9 @@ const ASSET13 = 'docs/assets/outlook-slice13';
 const ASSET14 = 'docs/assets/outlook-slice14';
 const ASSET15 = 'docs/assets/outlook-slice15';
 const ASSET16 = 'docs/assets/outlook-slice16';
+const ASSET17 = 'docs/assets/outlook-slice17';
 const ASSET18 = 'docs/assets/outlook-slice18';
-for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET18]) mkdirSync(d, { recursive: true });
+for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18]) mkdirSync(d, { recursive: true });
 
 const baseSettings = {
     aiFeatures: false,
@@ -416,6 +417,17 @@ test.describe('docs desktop (1440×900 @2x)', () => {
         await expect(page.getByTestId('detail-subject')).toBeVisible();
         await expect(page.getByTestId('copy-message-link-btn')).toBeVisible();
         await shot(page, `${ASSET16}/45-mail-deep-link.png`);
+    });
+
+    test('slice17 skip link focused', async ({ page }) => {
+        await page.addInitScript((blob) => {
+            localStorage.setItem('webmail.theme', 'light');
+            localStorage.setItem('webmail.settings.v1', blob);
+        }, seedSettings());
+        await login(page);
+        await page.getByTestId('mail-skip-link').focus();
+        await expect(page.getByTestId('mail-skip-link')).toBeFocused();
+        await shot(page, `${ASSET17}/46-skip-link-focused.png`);
     });
 
     test('slice18 follow-up flag row label', async ({ page }) => {

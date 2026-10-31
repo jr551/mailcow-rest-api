@@ -24,6 +24,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 | **AI features** | Master switch **`aiFeatures`**; defaults **off** for new profiles; every AI entry point hidden when off | Low — opt-in provider config remains in Settings |
 | **People / VIP** | VIP list in Settings; local address book | Medium vs OWA People app |
 | **Deep links** | `#mail?folder=…&uid=…` hash URLs + **Copy link** in reading pane | Low–medium: no server-side permalink API yet |
+| **Accessibility** | Landmark regions + skip link (slice 17) | Low–medium: mobile focus order polish |
 
 ---
 
@@ -232,6 +233,16 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 17 (done in #104)
+
+- **`webmail/src/lib/mail-landmarks.ts`**: OWA-aligned region labels and skip-link target ids.
+- **`Layout.svelte`**: **Skip to message list** link, `banner` command bar, folder **`navigation`**, message list **`region`**, reading pane **`main`** landmark; flyout reading pane uses the same label.
+- **`Settings.svelte`**: **General → Accessibility** documents landmarks and tab order.
+- Tests: unit (`mail-landmarks.test.mjs`) + Playwright (`outlook-mail-landmarks.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice17/46-skip-link-focused.png`.
+
+---
+
 ## Slice 18 (this PR)
 
 - **`webmail/src/lib/message-follow-up.ts`**: OWA-style follow-up due presets (Today / Tomorrow / This week / No date).
@@ -246,7 +257,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ## Next planned slice
 
-**Accessibility** landmarks (slice 17 in #104), **dark mode / mobile** polish, or opt-in **AI thread summarise**.
+**Dark mode / mobile** polish, or opt-in **AI thread summarise** (thread summary gated on `aiFeatures` + provider).
 
 ---
 

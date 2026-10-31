@@ -83,6 +83,15 @@
     import { looksLikeStructuredMailSearch } from '../lib/natural-language-search';
     import { readingPaneLayoutFromKeyboard } from '../lib/reading-pane-layout';
     import { resolveMailShortcut, type MailShortcutAction } from '../lib/mail-keyboard-shortcuts';
+    import {
+        MAIL_COMMAND_BAR_LABEL,
+        MAIL_FOLDER_NAV_LABEL,
+        MAIL_MESSAGE_LIST_LABEL,
+        MAIL_MESSAGE_LIST_LANDMARK_ID,
+        MAIL_READING_PANE_LABEL,
+        MAIL_READING_PANE_LANDMARK_ID,
+        MAIL_SKIP_LINK_TEXT
+    } from '../lib/mail-landmarks';
     import MailShortcutHelp from './MailShortcutHelp.svelte';
     import { findThreadForUid } from '../lib/conversation-view';
     import { SKINS, skinState } from '../lib/skins.svelte';
@@ -2032,10 +2041,21 @@
         const surface = ui.app === 'calendar' ? 'Calendar' : ui.app === 'ai' ? 'AI' : ui.app === 'drive' ? 'Drive' : 'Inbox';
         document.title = n > 0 ? `(${n}) ${surface} · Webmail` : `${surface} · Webmail`;
     });
+
+    function focusMessageListLandmark(e?: MouseEvent) {
+        e?.preventDefault();
+        document.getElementById(MAIL_MESSAGE_LIST_LANDMARK_ID)?.focus();
+    }
 </script>
 
 <div class="shell" data-density={settings.density} data-testid="shell">
-    <header class="topbar">
+    <a
+        href={`#${MAIL_MESSAGE_LIST_LANDMARK_ID}`}
+        class="skip-link"
+        data-testid="mail-skip-link"
+        onclick={focusMessageListLandmark}
+    >{MAIL_SKIP_LINK_TEXT}</a>
+    <header class="topbar" aria-label={MAIL_COMMAND_BAR_LABEL}>
         <!-- `settings.hideSidebar === true` means the rail is COLLAPSED, so
              the button's ACTION is "show" and its pressed state is false.
              The old markup had aria-pressed inverted: it reported "true"
@@ -2422,7 +2442,7 @@
         {:else if ui.app === 'drive'}
             <DriveApp />
         {:else}
-        <div class="sidebar-wrap" style={`width: ${sidebarWidth}px`}>
+        <nav class="sidebar-wrap" aria-label={MAIL_FOLDER_NAV_LABEL} style={`width: ${sidebarWidth}px`}>
             <Sidebar
                 onSelect={selectMailbox}
                 onCompose={() => openCompose()}
@@ -2436,7 +2456,7 @@
                     showToast('success', `Moved ${uids.length} → ${destPath}`);
                 }}
             />
-        </div>
+        </nav>
         <div class="mail-workspace" class:ai-panel-open={ui.aiPanelOpen && settings.aiFeatures}>
         <!-- Focusable `role="separator"` is the WAI-ARIA window-splitter
              pattern: tabindex + keyboard resize (splitterKeys below) are the
@@ -2460,7 +2480,7 @@
             ondblclick={() => (sidebarWidth = SIDEBAR_DEFAULT)}
             onkeydown={(e) => splitterKeys(e, () => sidebarWidth, (n) => (sidebarWidth = n), SIDEBAR_MIN, SIDEBAR_MAX, SIDEBAR_DEFAULT)}
         ></div>
-        <main
+        <div
             class="content"
             class:no-selection={!ui.detail}
             class:layout-right={settings.readingPaneLayout === 'right'}
@@ -2478,6 +2498,13 @@
                     onClose={() => embeddedShortcut.set(null)}
                 />
             {:else}
+            <section
+                id={MAIL_MESSAGE_LIST_LANDMARK_ID}
+                class="mail-landmark-list"
+                aria-label={MAIL_MESSAGE_LIST_LABEL}
+                tabindex="-1"
+                data-testid="mail-landmark-message-list"
+            >
             <MessageList
                 onSelect={selectMessage}
                 onStar={toggleStar}
@@ -2496,6 +2523,7 @@
                 onMove={moveTo}
                 onBlockSender={blockSenderForUid}
             />
+            </section>
             {#if dockedReadingPane}
             <!-- svelte-ignore a11y_no_noninteractive_tabindex,a11y_no_noninteractive_element_interactions -->
             <!-- Focusable `role="separator"` — the WAI-ARIA window-splitter
@@ -2531,6 +2559,13 @@
                 }}
                 data-testid="pane-resizer"
             ></div>
+            <main
+                id={MAIL_READING_PANE_LANDMARK_ID}
+                class="mail-landmark-reading docked-reading-landmark"
+                aria-label={MAIL_READING_PANE_LABEL}
+                tabindex="-1"
+                data-testid="mail-landmark-reading-pane"
+            >
             <MessageDetail
                 onReply={(m) => openCompose(m, 'reply')}
                 onReplyAll={(m) => openCompose(m, 'replyAll')}
@@ -2540,9 +2575,10 @@
                 onMove={moveTo}
                 onAi={() => (ui.aiPanelOpen = true)}
             />
+            </main>
             {/if}
             {/if}
-        </main>
+        </div>
         {#if readingFlyoutOpen}
             <!-- svelte-ignore a11y_click_events_have_key_events,a11y_no_static_element_interactions -->
             <div
@@ -2551,7 +2587,13 @@
                 onclick={closeReadingFlyout}
                 data-testid="reading-pane-flyout-backdrop"
             ></div>
-            <aside class="reading-flyout" aria-label="Message" data-testid="reading-pane-flyout">
+            <main
+                class="reading-flyout"
+                id={MAIL_READING_PANE_LANDMARK_ID}
+                aria-label={MAIL_READING_PANE_LABEL}
+                tabindex="-1"
+                data-testid="reading-pane-flyout"
+            >
                 <div class="reading-flyout-bar">
                     <button
                         type="button"
@@ -2572,7 +2614,7 @@
                     onMove={moveTo}
                     onAi={() => (ui.aiPanelOpen = true)}
                 />
-            </aside>
+            </main>
         {/if}
         {#if ui.aiPanelOpen && settings.aiFeatures}
             <AiPanel onClose={() => (ui.aiPanelOpen = false)} />
@@ -2871,6 +2913,58 @@
         min-height: 100vh;
         min-height: 100dvh;
         background: var(--bg-base);
+        position: relative;
+    }
+    .skip-link {
+        position: absolute;
+        left: 8px;
+        top: 8px;
+        z-index: 10000;
+        padding: 8px 12px;
+        border-radius: var(--radius-sm);
+        background: var(--bg-elevated);
+        color: var(--text-primary);
+        border: 1px solid var(--border-strong);
+        font-size: 13px;
+        font-weight: 600;
+        text-decoration: none;
+        transform: translateY(-160%);
+        transition: transform 0.15s ease;
+    }
+    .skip-link:focus {
+        transform: translateY(0);
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+    }
+    .mail-landmark-list {
+        grid-column: 1;
+        grid-row: 1;
+        min-width: 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+    }
+    .content.layout-bottom .mail-landmark-list {
+        grid-column: 1;
+        grid-row: 1;
+    }
+    .content.layout-hidden .mail-landmark-list {
+        grid-column: 1;
+    }
+    .docked-reading-landmark {
+        grid-column: 3;
+        grid-row: 1;
+        min-width: 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+    }
+    .content.layout-bottom .docked-reading-landmark {
+        grid-column: 1;
+        grid-row: 3;
+    }
+    .content.layout-hidden .docked-reading-landmark {
+        display: none;
     }
     /* Outlook command bar geometry.
      *
