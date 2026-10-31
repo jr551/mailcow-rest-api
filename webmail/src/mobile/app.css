@@ -257,6 +257,115 @@ body {
     color: var(--text-on-accent);
     border-color: var(--accent);
 }
+
+.msearch-wrap {
+    flex: 0 0 auto;
+    background: var(--bg-surface);
+    border-bottom: 0.5px solid var(--border-subtle);
+}
+.msearch-wrap .msearch {
+    border-bottom: none;
+}
+.msearch-panel {
+    max-height: min(40vh, 280px);
+    padding: 4px 12px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.msearch-panel-hint {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-tertiary);
+    padding: 4px 4px 0;
+}
+.msearch-saved-row {
+    display: flex;
+    align-items: stretch;
+    gap: 4px;
+}
+.msearch-saved-chip {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: none;
+    background: var(--bg-hover);
+    text-align: left;
+    cursor: pointer;
+}
+.msearch-saved-name {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+.msearch-saved-query {
+    font-size: 13px;
+    color: var(--text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+}
+.msearch-saved-scope {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent);
+}
+.msearch-saved-remove {
+    flex-shrink: 0;
+    width: 40px;
+    border: none;
+    border-radius: 10px;
+    background: var(--bg-hover);
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+}
+.msearch-save-trigger {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 10px 12px;
+    border: none;
+    border-radius: 10px;
+    background: var(--bg-hover);
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+    cursor: pointer;
+}
+.msearch-save-form {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 4px 0;
+}
+.msearch-save-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+.msearch-save-input {
+    width: 100%;
+    padding: 8px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-base);
+    font-size: 16px;
+}
+.msearch-save-actions {
+    display: flex;
+    gap: 8px;
+}
+
 .global-scan {
     display: flex;
     flex-direction: column;

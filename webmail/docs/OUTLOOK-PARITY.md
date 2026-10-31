@@ -19,7 +19,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 | **Reading pane** | `MessageDetail.svelte`, reply/forward, conversation stack when grouped | Low–medium: richer HTML parity; pane position done (slice 3) |
 | **Conversation view** | List grouping via `threads.ts`; reading-pane stack via `conversation-view.ts` + `ConversationStack.svelte` | Medium: attachments per message in stack; richer HTML parity |
 | **Compose** | `Compose.svelte` + `FloatingPanel.svelte`, TipTap | Medium: sensitivity labels; **undo send** (slice 12), **scheduled send** (#100), **Save draft** (slice 14) |
-| **Search** | Header search + tag syntax; **saved searches** (local); optional **natural-language** translation when AI + provider configured | Medium: no unified People/Files search |
+| **Search** | Header search + tag syntax; **saved searches** (local) on desktop and mobile; optional **natural-language** translation when AI + provider configured | Medium: no unified People/Files search |
 | **Settings shell** | `Settings.svelte` 3-column Outlook-like modal, 19 sections | Low–medium: content differs |
 | **AI features** | Master switch **`aiFeatures`**; defaults **off** for new profiles; every AI entry point hidden when off | Low — opt-in provider config remains in Settings |
 | **People / VIP** | VIP list in Settings; local address book | Medium vs OWA People app |
@@ -353,7 +353,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 29 (this PR)
+## Slice 29 (done in #116)
 
 - **`saved-mail-searches.ts`** / **`saved-mail-searches.svelte.ts`**: named queries in `webmail.saved-searches.v1` (folder or all-folders scope).
 - **`Layout.svelte`**: search dropdown lists saved searches, **Save this search**, remove control; reapplies scope when run.
@@ -362,9 +362,18 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 31 (this PR)
+
+- **`mobile-saved-search-panel.ts`**: panel visibility rules shared with unit tests.
+- **`InboxView.svelte`**: mobile search panel lists saved searches, **Save this search**, and remove controls (shared `webmail.saved-searches.v1` with desktop).
+- Tests: unit (`mobile-saved-search-panel.test.mjs`) + Playwright (`outlook-mobile-saved-searches.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice31/61-mobile-saved-searches-panel.png`.
+
+---
+
 ## Next planned slice
 
-**Smart triage / categorise**, **mobile saved-search parity**, or **conversation attachment chrome**.
+**Smart triage / categorise**, **conversation attachment chrome** (slice 30), or richer conversation HTML parity.
 
 ---
 
