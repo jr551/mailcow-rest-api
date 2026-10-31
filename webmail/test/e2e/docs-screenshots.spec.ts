@@ -43,7 +43,8 @@ const ASSET33 = 'docs/assets/outlook-slice33';
 const ASSET34 = 'docs/assets/outlook-slice34';
 const ASSET35 = 'docs/assets/outlook-slice35';
 const ASSET36 = 'docs/assets/outlook-slice36';
-for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET20, ASSET22, ASSET23, ASSET24, ASSET25, ASSET26, ASSET27, ASSET28, ASSET29, ASSET30, ASSET31, ASSET32, ASSET33, ASSET34, ASSET35, ASSET36]) mkdirSync(d, { recursive: true });
+const ASSET37 = 'docs/assets/outlook-slice37';
+for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET20, ASSET22, ASSET23, ASSET24, ASSET25, ASSET26, ASSET27, ASSET28, ASSET29, ASSET30, ASSET31, ASSET32, ASSET33, ASSET34, ASSET35, ASSET36, ASSET37]) mkdirSync(d, { recursive: true });
 
 const baseSettings = {
     aiFeatures: false,
@@ -840,6 +841,32 @@ test.describe('docs mobile (390×844 @2x)', () => {
         await page.getByTestId('schedule-preset-in-one-hour').click();
         await settleForScreenshot(page);
         await shot(page, `${ASSET36}/66-mobile-schedule-send-dialog.png`);
+    });
+
+    test('slice37 mobile save draft compose', async ({ page }) => {
+        await page.route('**/v1/mailboxes/Drafts/messages**', async (route) => {
+            if (route.request().method() !== 'POST') return route.continue();
+            await route.fulfill({
+                status: 201,
+                contentType: 'application/json',
+                body: JSON.stringify({ path: 'Drafts', uid: 9201, uidValidity: 1 })
+            });
+        });
+        await page.addInitScript((blob) => {
+            localStorage.setItem('webmail.theme', 'light');
+            localStorage.setItem('webmail.settings.v1', blob);
+        }, seedSettings({ undoSendSeconds: 0, preSendCheck: false }));
+        await page.goto('/webmail/mobile/');
+        await page.fill('input[type="email"]', MOCK_USER);
+        await page.fill('input[type="password"]', 'hunter2');
+        await page.click('button:has-text("Sign in")');
+        await page.getByTestId('compose-btn').click();
+        await page.fill('[data-testid=compose-to]', 'draft@example.com');
+        await page.fill('[data-testid=compose-subject]', 'Mobile save draft');
+        await page.fill('[data-testid=compose-body]', 'Stored in Drafts folder.');
+        await expect(page.getByTestId('compose-save-draft')).toBeEnabled();
+        await settleForScreenshot(page);
+        await shot(page, `${ASSET37}/67-mobile-save-draft-compose.png`);
     });
 });
 
