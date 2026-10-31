@@ -18,10 +18,7 @@
     import { sortInboxClient, type InboxSortRanking } from '../../lib/sort-inbox-client';
     import { settings, setInboxTab, setListFilter, isVipAddress } from '../../lib/settings.svelte';
     import { authState } from '../../lib/auth.svelte';
-    import {
-        filterMessagesByOutlookFilter,
-        sortMessageList,
-    } from '../../lib/list-quick-filters';
+    import { filterMessagesByOutlookFilter } from '../../lib/list-quick-filters';
     import { filterMessagesByInboxTab } from '../../lib/focused-inbox';
     import {
         followUpDueLabel,
@@ -34,6 +31,25 @@
         setFollowUpDue,
         clearFollowUpDue,
     } from '../../lib/message-follow-up.svelte';
+    import {
+        filterOutSnoozedMessages,
+        sortWithPinnedFirst,
+        type SnoozePresetId,
+    } from '../../lib/message-pin-snooze';
+    import {
+        hydrateMessagePinSnooze,
+        pinSnoozeOverlay,
+        snoozeMessage,
+        tickPinSnoozeOverlay,
+    } from '../../lib/message-pin-snooze.svelte';
+    import {
+        senderAddressFromMessage,
+        senderDisplayLabel,
+        senderSweepConfirmText,
+        type SenderSweepAction,
+    } from '../../lib/message-sender-sweep';
+    import { resolveSenderSweepTargets } from '../../lib/message-sender-sweep-fetch';
+    import { bulkMove, findArchiveFolder, findTrashFolder } from '../../lib/spam-sweep';
     import Icon from '../../components/Icon.svelte';
     import Avatar from '../../components/Avatar.svelte';
     import SwipeableRow from './SwipeableRow.svelte';
@@ -481,9 +497,13 @@
         if (showInboxTabs) {
             base = filterMessagesByInboxTab(base, settings.inboxTab, { isVip: isVipAddress });
         }
+        void pinSnoozeOverlay();
+        void pinSnoozeNow;
+        const mailboxPath = mobileState.selectedPath;
+        base = filterOutSnoozedMessages(base, mailboxPath, pinSnoozeOverlay(), pinSnoozeNow);
         const sort = f === 'ai-sorted' ? 'date-desc' : settings.listSort;
         if (f !== 'ai-sorted' || aiRankings.length === 0) {
-            return sortMessageList(base, sort);
+            return sortWithPinnedFirst(base, mailboxPath, pinSnoozeOverlay(), sort);
         }
         const indexFor = new Map<number, number>();
         aiRankings.forEach((r, i) => indexFor.set(r.uid, i));
@@ -556,6 +576,8 @@
     }
 
     let followUpNow = $state(Date.now());
+    let pinSnoozeNow = $state(Date.now());
+    let mobileSweepBusy = $state(false);
 
     function rowFollowUpHint(uid: number, isFlagged: boolean): string | null {
         if (!isFlagged) return null;
@@ -607,6 +629,71 @@
             showToast('success', seen ? 'Marked unread' : 'Marked read');
         } catch {
             showToast('error', 'Failed to update read state');
+        }
+    }
+
+    function applySnooze(msg: MessageListItem, preset: SnoozePresetId) {
+        const path = rowPath(msg);
+        snoozeMessage(path, msg.uid, preset);
+        pinSnoozeNow = Date.now();
+        showToast('success', 'Message snoozed — it will return when the reminder is due.');
+    }
+
+    async function runMobileSenderSweep(msg: MessageListItem, action: SenderSweepAction) {
+        if (mobileSweepBusy) return;
+        const sender = senderAddressFromMessage(msg);
+        if (!sender) {
+            showToast('error', 'No sender address on this message.');
+            return;
+        }
+        const label = senderDisplayLabel(msg);
+        const path = rowPath(msg);
+        mobileSweepBusy = true;
+        let targets: MessageListItem[] = [];
+        try {
+            targets = await resolveSenderSweepTargets(path, sender, action);
+        } catch (err) {
+            showToast('error', `Sweep failed: ${err instanceof Error ? err.message : 'unknown error'}`);
+            mobileSweepBusy = false;
+            return;
+        }
+        if (targets.length === 0) {
+            showToast('info', action === 'keep-latest'
+                ? `Only one message from ${label} is in this folder.`
+                : `No messages from ${label} to sweep.`);
+            mobileSweepBusy = false;
+            return;
+        }
+        if (!window.confirm(senderSweepConfirmText(action, targets.length, label))) {
+            mobileSweepBusy = false;
+            return;
+        }
+        let dest: string | null = null;
+        try {
+            dest = action === 'archive-all'
+                ? findArchiveFolder(mobileState.mailboxes)
+                : findTrashFolder(mobileState.mailboxes);
+        } catch { /* handled below */ }
+        if (!dest) {
+            showToast('error', action === 'archive-all'
+                ? 'No Archive folder found.'
+                : 'No Trash folder found.');
+            mobileSweepBusy = false;
+            return;
+        }
+        const items = targets.map((t) => ({ path, uid: t.uid }));
+        try {
+            const r = await bulkMove(items, dest);
+            const verb = action === 'archive-all' ? 'Archived' : 'Moved to Trash';
+            showToast(r.failed ? 'error' : 'success',
+                `${verb} ${r.moved} message${r.moved === 1 ? '' : 's'}${r.failed ? ` (${r.failed} failed)` : ''}.`);
+            const movedUids = new Set(r.movedItems.map((i) => i.uid));
+            mobileState.messages = mobileState.messages.filter((m) => !movedUids.has(m.uid));
+            mobileState.messagesTotal = Math.max(0, mobileState.messagesTotal - r.moved);
+        } catch {
+            showToast('error', 'Sweep failed');
+        } finally {
+            mobileSweepBusy = false;
         }
     }
 
@@ -689,8 +776,14 @@
 
     onMount(() => {
         hydrateMessageFollowUp();
+        hydrateMessagePinSnooze();
         followUpNow = Date.now();
+        pinSnoozeNow = Date.now();
         const followUpTick = setInterval(() => { followUpNow = Date.now(); }, 60_000);
+        const pinSnoozeTick = setInterval(() => {
+            pinSnoozeNow = Date.now();
+            tickPinSnoozeOverlay(pinSnoozeNow);
+        }, 30_000);
         refreshMailboxes();
         // Coming back from a message keeps an all-folders result set as is.
         if (!(mobileState.searchScope === 'all' && mobileState.messages.length > 0)) refreshMessages();
@@ -699,6 +792,7 @@
         return () => {
             clearInterval(interval);
             clearInterval(followUpTick);
+            clearInterval(pinSnoozeTick);
             window.removeEventListener('webmail:client-rule', onRule);
             if (searchDebounce) clearTimeout(searchDebounce);
             cancelGlobalSearch();
@@ -950,6 +1044,9 @@
         onToggleRead={() => actionToggleRead(sheetMsg)}
         onArchive={() => archiveMessage(sheetMsg)}
         onTrash={() => trashMessage(sheetMsg)}
+        onSnooze={(preset) => applySnooze(sheetMsg, preset)}
+        onSweep={(action) => runMobileSenderSweep(sheetMsg, action)}
+        sweepBusy={mobileSweepBusy}
     />
 {/if}
 

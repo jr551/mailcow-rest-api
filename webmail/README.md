@@ -146,6 +146,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Mobile keyboard shortcuts help](docs/assets/outlook-slice25/55-mobile-keyboard-shortcuts-help.png)
 
+- **Mobile Snooze & Sweep** — long-press a message for **Snooze** presets (same local overlay as desktop) or **Sweep** bulk actions for the sender (delete all / keep latest / archive all).
+
+![Mobile snooze menu](docs/assets/outlook-slice26/56-mobile-snooze-menu.png)
+
 - **Mobile Filter / Sort bar** — Outlook-style **Filter** and **Sort** menus on `/webmail/mobile/` share **`settings.listFilter`** and **`settings.listSort`** with desktop (All, Unread, Flagged, To me, Has files, Mentions me; full sort list). Optional **AI sort** chip when AI features are on.
 
 ![Mobile quick filter menu](docs/assets/outlook-slice27/57-mobile-quick-filter-menu.png)
