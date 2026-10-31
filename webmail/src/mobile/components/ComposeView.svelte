@@ -19,6 +19,13 @@
     import { ReplySuggest, DraftSparkle, htmlToPlainText } from '../../lib/reply-suggest.svelte';
     import { addressBook } from '../../lib/address-book.svelte';
     import Icon from '../../components/Icon.svelte';
+    import {
+        MOBILE_COMPOSE_ACTIONS_LABEL,
+        MOBILE_COMPOSE_FIELDS_LABEL,
+        MOBILE_COMPOSE_LABEL,
+        MOBILE_COMPOSE_LANDMARK_ID,
+        focusMobileComposeToField
+    } from '../../lib/mobile-compose-landmarks';
 
     let to = $state('');
     let cc = $state('');
@@ -383,10 +390,35 @@
             replySuggest.abort();
         };
     });
+
+    onMount(() => {
+        const t = requestAnimationFrame(() => focusMobileComposeToField());
+        return () => cancelAnimationFrame(t);
+    });
+
+    $effect(() => {
+        if (!sendMenuOpen) return;
+        queueMicrotask(() => {
+            document.querySelector<HTMLElement>('[data-testid="compose-schedule-send"]')?.focus();
+        });
+    });
+
+    $effect(() => {
+        if (!scheduleSheetOpen) return;
+        queueMicrotask(() => {
+            document.querySelector<HTMLElement>('[data-testid="schedule-preset-in-one-hour"]')?.focus();
+        });
+    });
 </script>
 
-<div class="compose-view">
-    <header class="mheader">
+<main
+    class="compose-view"
+    id={MOBILE_COMPOSE_LANDMARK_ID}
+    tabindex="-1"
+    aria-label={MOBILE_COMPOSE_LABEL}
+    data-testid="mobile-compose-landmark"
+>
+    <header class="mheader" role="banner" aria-label={MOBILE_COMPOSE_LABEL}>
         <button type="button" class="mbtn mbtn-ghost close-btn" data-testid="compose-close" aria-label="Close" onclick={handleClose}>
             <Icon name="close" size={20} />
         </button>
@@ -411,7 +443,7 @@
         </div>
     </header>
 
-    <div class="compose-fields scroll-y">
+    <div class="compose-fields scroll-y" role="region" aria-label={MOBILE_COMPOSE_FIELDS_LABEL}>
         <div class="field-group">
             <div class="field">
                 <span class="field-label">From</span>
@@ -547,7 +579,7 @@
             </div>
         {/if}
 
-        <div class="compose-actions">
+        <div class="compose-actions" role="region" aria-label={MOBILE_COMPOSE_ACTIONS_LABEL}>
             <button type="button" class="action-btn" onclick={() => pickImage('camera')} title="Take photo" aria-label="Take photo">
                 <Icon name="camera" size={18} />
             </button>
@@ -568,7 +600,7 @@
             </button>
         </div>
     </div>
-</div>
+</main>
 
 {#if showFromPicker}
     <!-- Tap-outside-to-close is a pointer convenience; the sheet's close
