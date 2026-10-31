@@ -24,7 +24,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 | **AI features** | Master switch **`aiFeatures`**; defaults **off** for new profiles; every AI entry point hidden when off | Low — opt-in provider config remains in Settings |
 | **People / VIP** | VIP list in Settings; local address book | Medium vs OWA People app |
 | **Deep links** | `#mail?folder=…&uid=…` hash URLs + **Copy link** in reading pane | Low–medium: no server-side permalink API yet |
-| **Accessibility** | Landmark regions + skip link (slice 17) | Low–medium: mobile focus order polish |
+| **Accessibility** | Landmark regions + skip link (slice 17); mobile landmarks + skip link (slice 33) | Low–medium: deeper mobile focus-order polish |
 
 ---
 
@@ -380,13 +380,24 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 32 (this PR)
+## Slice 32 (done in #119)
 
 - **`mobile-message-category.ts`**: row category resolution for all-folder search rows (shared with desktop overlay).
 - **`MessageActionSheet.svelte`**: **Categorize** submenu (same colour categories as desktop slice 7).
 - **`InboxView.svelte`**: list colour stripe + `modifyFlags` / local overlay when assigning categories on mobile.
 - Tests: unit (`mobile-message-category.test.mjs`) + Playwright (`outlook-mobile-message-categories.spec.ts`) against API mocks.
 - Screenshot: `webmail/docs/assets/outlook-slice32/62-mobile-category-green-row.png`.
+
+---
+
+## Slice 33 (this PR)
+
+- **`mobile-mail-landmarks.ts`**: mobile region labels, shared list landmark id, skip-link focus helper.
+- **`InboxView.svelte`**: **Skip to message list** link, command bar + message list landmarks.
+- **`MessageView.svelte`**: reading pane **`main`** landmark; **`BottomNav.svelte`**: **App navigation** label.
+- **`SettingsView.svelte`**: **Accessibility** section documents landmarks and tab order.
+- Tests: unit (`mobile-mail-landmarks.test.mjs`) + Playwright (`outlook-mobile-mail-landmarks.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice33/63-mobile-skip-link-focused.png`.
 
 ---
 

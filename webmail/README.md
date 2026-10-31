@@ -170,6 +170,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Mobile category stripe](docs/assets/outlook-slice32/62-mobile-category-green-row.png)
 
+- **Mobile landmarks & skip link** — OWA-style **Command bar**, **App navigation**, **Message list**, and **Reading pane** regions on `/webmail/mobile/`, plus **Skip to message list** (keyboard focus). Documented under mobile **Settings → Accessibility**.
+
+![Mobile skip link focused](docs/assets/outlook-slice33/63-mobile-skip-link-focused.png)
+
 ## Keyboard shortcuts (mail)
 
 Global shortcuts are listed under **Settings → General → Keyboard shortcuts** (press **?** in the inbox for the same list). Reading-pane placement:
