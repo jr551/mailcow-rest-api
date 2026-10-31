@@ -114,6 +114,7 @@
     import type { TakeoverSettings, TakeoverSender } from '../lib/api';
     import type { IconName } from '../lib/icons';
     import { MAIL_KEYBOARD_SHORTCUT_ROWS } from '../lib/mail-keyboard-shortcuts';
+    import { MAIL_LANDMARK_ROWS, MAIL_SKIP_LINK_TEXT } from '../lib/mail-landmarks';
 
     // Outlook's Settings is a three-column overlay: a category rail on the
     // left, a sub-section list in the middle, one content pane on the right.
@@ -122,7 +123,7 @@
     // every spec that clicks `settings-tab-privacy` still lands correctly.
     type SectionId =
         | 'account' | 'security'
-        | 'notifications' | 'ai' | 'sounds' | 'keyboard-shortcuts' | 'appearance' | 'calendar' | 'people'
+        | 'notifications' | 'ai' | 'sounds' | 'keyboard-shortcuts' | 'accessibility' | 'appearance' | 'calendar' | 'people'
         | 'message-list' | 'reading-pane' | 'privacy' | 'compose' | 'smart-suggestions'
         | 'mail-rules' | 'ai-cloud-replies' | 'sweep' | 'junk'
         | 'filters' | 'forwarding' | 'outbound-hooks';
@@ -158,6 +159,7 @@
                 { id: 'ai', label: 'AI', icon: 'sparkles', keywords: 'llm openai anthropic model provider prompt voice chat' },
                 { id: 'sounds', label: 'Sounds', icon: 'bell', keywords: 'audio chime event pack mute' },
                 { id: 'keyboard-shortcuts', label: 'Keyboard shortcuts', icon: 'monitor', keywords: 'hotkey chord reply archive delete flag search help' },
+                { id: 'accessibility', label: 'Accessibility', icon: 'monitor', keywords: 'landmark screen reader skip link region navigation' },
                 { id: 'appearance', label: 'Appearance', icon: 'palette', keywords: 'skin accent colour theme density layout sidebar' }
             ]
         },
@@ -3154,6 +3156,30 @@
                             {#each MAIL_KEYBOARD_SHORTCUT_ROWS as row}
                                 <tr>
                                     <td><kbd>{row.keys}</kbd></td>
+                                    <td>{row.description}</td>
+                                </tr>
+                            {/each}
+                        </tbody>
+                    </table>
+                </section>
+
+            {:else if activeSection === 'accessibility'}
+                <section class="tab-section" data-testid="settings-accessibility">
+                    <h3>Accessibility</h3>
+                    <p class="muted small">
+                        The mail layout exposes Outlook-style landmarks for screen readers. Tab order
+                        follows the panes left to right: command bar, folders, message list, then reading
+                        pane when a message is open. Press <kbd>Tab</kbd> once after load to reach the
+                        <strong>{MAIL_SKIP_LINK_TEXT}</strong> link and jump straight to the list.
+                    </p>
+                    <table class="shortcut-table">
+                        <thead>
+                            <tr><th scope="col">Region</th><th scope="col">Contents</th></tr>
+                        </thead>
+                        <tbody>
+                            {#each MAIL_LANDMARK_ROWS as row}
+                                <tr>
+                                    <td>{row.region}</td>
                                     <td>{row.description}</td>
                                 </tr>
                             {/each}

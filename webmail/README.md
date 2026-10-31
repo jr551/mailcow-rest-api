@@ -117,6 +117,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Mail deep link reading pane](docs/assets/outlook-slice16/45-mail-deep-link.png)
 
+- **Landmarks & skip link** — OWA-style regions (**Command bar**, **Mail folders**, **Message list**, **Reading pane**) plus a **Skip to message list** link (visible on keyboard focus). Documented under **Settings → General → Accessibility**.
+
+![Skip link focused](docs/assets/outlook-slice17/46-skip-link-focused.png)
+
 ## Keyboard shortcuts (mail)
 
 Global shortcuts are listed under **Settings → General → Keyboard shortcuts** (press **?** in the inbox for the same list). Reading-pane placement:
