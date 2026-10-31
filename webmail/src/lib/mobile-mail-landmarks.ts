@@ -1,25 +1,16 @@
 /**
  * Outlook.com-style landmarks for `/webmail/mobile/` (parity slice 33).
- * Reuses desktop region ids where the skip link target matches OWA behavior.
+ * Region ids and OWA labels match `mail-landmarks.ts` (desktop slice 17).
  */
 
-import {
-    MAIL_COMMAND_BAR_LABEL,
-    MAIL_MESSAGE_LIST_LABEL,
-    MAIL_MESSAGE_LIST_LANDMARK_ID,
-    MAIL_READING_PANE_LABEL,
-    MAIL_READING_PANE_LANDMARK_ID,
-    MAIL_SKIP_LINK_TEXT
-} from './mail-landmarks';
+export const MAIL_SKIP_LINK_TEXT = 'Skip to message list';
 
-export {
-    MAIL_MESSAGE_LIST_LANDMARK_ID,
-    MAIL_READING_PANE_LANDMARK_ID,
-    MAIL_SKIP_LINK_TEXT,
-    MAIL_COMMAND_BAR_LABEL,
-    MAIL_MESSAGE_LIST_LABEL,
-    MAIL_READING_PANE_LABEL
-};
+export const MAIL_MESSAGE_LIST_LANDMARK_ID = 'mail-message-list-landmark';
+export const MAIL_READING_PANE_LANDMARK_ID = 'mail-reading-pane-landmark';
+
+export const MAIL_COMMAND_BAR_LABEL = 'Command bar';
+export const MAIL_MESSAGE_LIST_LABEL = 'Message list';
+export const MAIL_READING_PANE_LABEL = 'Reading pane';
 
 export const MOBILE_APP_NAV_LABEL = 'App navigation';
 
