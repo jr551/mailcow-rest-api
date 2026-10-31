@@ -24,6 +24,8 @@
     import Avatar from '../../components/Avatar.svelte';
     import ConversationStack from '../../components/ConversationStack.svelte';
     import { shouldShowConversationStack } from '../../lib/conversation-view';
+    import { effectiveTheme } from '../../lib/theme.svelte';
+    import { messageIframeTheme } from '../../lib/mobile-appearance';
 
     const msg = $derived(mobileState.detail);
     const loading = $derived(mobileState.detailLoading);
@@ -154,8 +156,7 @@
 
         // Sanitize
         const safe = sanitizeHtml(html || '', { allowRemoteImages: true });
-        const theme: 'light' | 'dark' = document.documentElement.classList.contains('dark') ? 'dark' : 'light';
-        const baseDoc = buildIframeSrcDoc(safe, theme);
+        const baseDoc = buildIframeSrcDoc(safe, messageIframeTheme(effectiveTheme()));
         iframeSrc = baseDoc;
         proxiedSrcDoc = null;
 
