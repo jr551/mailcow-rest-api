@@ -72,7 +72,6 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 - **Folder Favorites** — pin common folders above the tree (Inbox / Sent / Drafts by default); reorder and edit via the sidebar context menu.
 - **Natural-language search (opt-in)** — with **AI features** on and a configured provider, enable **Settings → AI → Natural-language search** to translate plain-language header queries into tag syntax (`from:`, `has:attachment`, …). Tag syntax is always available without AI.
 - **Thread summary in AI panel (opt-in)** — enable **Settings → AI → Summarize conversation in AI panel** to send the full grouped thread (not just the selected message) when you click Summarize in the reading-pane AI tools. Off by default.
-- **Compose rewrite (opt-in)** — enable **Settings → AI → Rewrite selected text in Compose** to show tone presets (Professional, Casual, Concise, Friendly) when you highlight text in the message body. Uses your configured provider; off by default.
 - **Quick filter bar** — Outlook-style **Filter** menu (All, Unread, Flagged, To me, Has files, Mentions me) and **Sort** menu on the message list; IMAP tag tokens for supported filters when paging server-side.
 - **Colour categories** — right-click **Categorize** on a message row to assign Outlook-style colour categories (IMAP `$Category*` keywords when the server keeps them; local overlay fallback otherwise). A colour stripe appears on the row.
 - **AI features off by default** — new profiles load with **Settings → AI → AI features** off. Turn it on when you want the assistant, AI sort, link safety, compose helpers, and related surfaces. The mail UI is fully usable with AI disabled.
@@ -151,7 +150,9 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Mobile snooze menu](docs/assets/outlook-slice26/56-mobile-snooze-menu.png)
 
-![Compose AI rewrite bar](docs/assets/outlook-slice28/58-compose-rewrite-bar.png)
+- **Mobile Filter / Sort bar** — Outlook-style **Filter** and **Sort** menus on `/webmail/mobile/` share **`settings.listFilter`** and **`settings.listSort`** with desktop (All, Unread, Flagged, To me, Has files, Mentions me; full sort list). Optional **AI sort** chip when AI features are on.
+
+![Mobile quick filter menu](docs/assets/outlook-slice27/57-mobile-quick-filter-menu.png)
 
 ## Keyboard shortcuts (mail)
 

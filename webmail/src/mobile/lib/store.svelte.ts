@@ -29,7 +29,6 @@ export interface MobileState {
     composePrefillSubject: string;
     composePrefillBody: string;
     toast: { kind: 'info' | 'error' | 'success'; message: string; ts: number } | null;
-    filter: 'all' | 'unread' | 'starred' | 'ai-sorted';
     /** Mobile reading-pane conversation stack (Outlook parity slice 20). */
     conversationStack: { threadId: string; uids: number[] } | null;
     conversationDetails: Record<number, MessageDetail>;
@@ -74,7 +73,6 @@ const createInitial = (): MobileState => ({
     composePrefillSubject: '',
     composePrefillBody: '',
     toast: null,
-    filter: 'all',
     conversationStack: null,
     conversationDetails: {},
     conversationLoading: false,

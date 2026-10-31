@@ -126,21 +126,24 @@ test.describe('mobile webmail', () => {
         await expect(page.locator('.inbox-view')).toBeVisible();
     });
 
-    test('segmented filter switches', async ({ page }) => {
+    test('Outlook-style filter and sort menus', async ({ page }) => {
         await page.goto('/webmail/mobile/');
         await page.fill('input[type="email"]', MOCK_USER);
         await page.fill('input[type="password"]', 'hunter2');
         await page.click('button:has-text("Sign in")');
         await expect(page.locator('.msg-row')).toHaveCount(15);
 
-        await page.locator('.segment:has-text("Unread")').click();
+        await page.getByTestId('mobile-quick-filter-trigger').click();
+        await page.getByTestId('mobile-filter-unread').click();
         await expect(page.getByTestId('msg-row-1001')).toBeVisible();
         await expect(page.locator('.msg-row')).toHaveCount(6);
 
-        await page.locator('.segment:has-text("Starred")').click();
+        await page.getByTestId('mobile-quick-filter-trigger').click();
+        await page.getByTestId('mobile-filter-starred').click();
         await expect(page.locator('.msg-row')).toHaveCount(2);
 
-        await page.locator('.segment:has-text("All")').click();
+        await page.getByTestId('mobile-quick-filter-trigger').click();
+        await page.getByTestId('mobile-filter-all').click();
         await expect(page.locator('.msg-row')).toHaveCount(15);
     });
 

@@ -333,6 +333,15 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 27 (done in #114)
+
+- **`MobileQuickFilterBar.svelte`**: mobile **Filter** / **Sort** menus (same `list-quick-filters.ts` options as desktop).
+- **`InboxView.svelte`**: uses **`settings.listFilter`** / **`settings.listSort`** via `filterMessagesByOutlookFilter` and `sortWithPinnedFirst`; removes legacy segment chips.
+- Tests: unit (`list-quick-filters.test.mjs` menu parity) + Playwright (`outlook-mobile-quick-filter-bar.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice27/57-mobile-quick-filter-menu.png`.
+
+---
+
 ## Slice 28 (this PR)
 
 - **`webmail/src/lib/compose-ai-rewrite.ts`**: tone presets, prompt builder, selection eligibility.
@@ -346,7 +355,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ## Next planned slice
 
-**Saved searches**, **mobile quick filter bar** (slice 27, PR #114), or **smart triage polish**.
+**Saved searches**, **smart triage / categorise**, or **mobile search scope parity**.
 
 ---
 
