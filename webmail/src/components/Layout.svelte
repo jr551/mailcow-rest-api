@@ -81,6 +81,13 @@
     import { cancelPendingSend } from '../lib/undo-send.svelte';
     import { translateNaturalLanguageSearch } from '../lib/natural-language-search.client';
     import { looksLikeStructuredMailSearch } from '../lib/natural-language-search';
+    import type { SavedMailSearch } from '../lib/saved-mail-searches';
+    import {
+        savedMailSearches,
+        addSavedMailSearch,
+        deleteSavedMailSearch,
+        recordSavedMailSearchUse
+    } from '../lib/saved-mail-searches.svelte';
     import { readingPaneLayoutFromKeyboard } from '../lib/reading-pane-layout';
     import { resolveMailShortcut, type MailShortcutAction } from '../lib/mail-keyboard-shortcuts';
     import {
@@ -134,6 +141,13 @@
     let searchInput = $state('');
     let searchSuggestOpen = $state(false);
     let searchInputEl: HTMLInputElement | null = $state(null);
+    let saveSearchDraftName = $state('');
+    let saveSearchFormOpen = $state(false);
+
+    const canSaveCurrentSearch = $derived.by(() => {
+        const q = (searchInput || ui.search || '').trim();
+        return q.length > 0;
+    });
 
     // Available search tag tokens. Each one inserts as `key:` into the
     // input and re-focuses so the user can type the value next.
@@ -162,6 +176,16 @@
         if (!partial) return SEARCH_TAGS;
         return SEARCH_TAGS.filter((t) => t.key.startsWith(partial));
     });
+
+    const showSearchDropdown = $derived(
+        searchSuggestOpen
+        && (
+            visibleTags.length > 0
+            || savedMailSearches.items.length > 0
+            || canSaveCurrentSearch
+            || saveSearchFormOpen
+        )
+    );
 
     function insertTag(key: string) {
         const v = searchInput;
@@ -1038,6 +1062,47 @@
             ui.searchScope = 'folder';
         }
         refreshMessages({ resetPage: true });
+    }
+
+    function startSaveCurrentSearch() {
+        const q = (searchInput || ui.search || '').trim();
+        if (!q) return;
+        saveSearchFormOpen = true;
+        saveSearchDraftName = q.slice(0, 40);
+        searchSuggestOpen = true;
+    }
+
+    function confirmSaveCurrentSearch() {
+        const q = (searchInput || ui.search || '').trim();
+        if (!q) return;
+        const scope = ui.searchScope === 'all' ? 'all' : 'folder';
+        const name = saveSearchDraftName.trim() || q;
+        const entry = addSavedMailSearch(name, q, scope);
+        if (!entry) return;
+        saveSearchFormOpen = false;
+        saveSearchDraftName = '';
+        showToast('success', 'Search saved');
+    }
+
+    function cancelSaveSearchForm() {
+        saveSearchFormOpen = false;
+        saveSearchDraftName = '';
+    }
+
+    async function applySavedMailSearch(entry: SavedMailSearch) {
+        recordSavedMailSearchUse(entry.id);
+        searchInput = entry.query;
+        searchSuggestOpen = false;
+        saveSearchFormOpen = false;
+        lastNlSearchTranslation = null;
+        if (entry.scope === 'all') {
+            ui.search = entry.query;
+            await searchAllFolders();
+            return;
+        }
+        cancelGlobalSearch();
+        ui.searchScope = 'folder';
+        await applySearchFromInput();
     }
 
     // ----- Global search (across every folder) ---------------------------
@@ -2154,32 +2219,92 @@
                     </button>
                 {/if}
             {/if}
-            {#if searchSuggestOpen && visibleTags.length > 0}
+            {#if showSearchDropdown}
                 <div
                     class="search-suggest"
                     role="group"
-                    aria-label="Search filter tags"
+                    aria-label="Search suggestions"
                     onfocusout={(e) => {
                         const next = e.relatedTarget as Node | null;
                         if (!next || !e.currentTarget.parentElement?.contains(next)) searchSuggestOpen = false;
                     }}
                     data-testid="search-suggest"
                 >
-                    <div class="search-suggest-hint">Filter with tags:</div>
-                    {#each visibleTags as tag (tag.key)}
+                    {#if savedMailSearches.items.length > 0}
+                        <div class="search-suggest-hint">Saved searches</div>
+                        {#each savedMailSearches.items as saved (saved.id)}
+                            <div class="search-saved-row">
+                                <button
+                                    type="button"
+                                    class="search-suggest-chip search-saved-chip"
+                                    onmousedown={(e) => e.preventDefault()}
+                                    onclick={() => void applySavedMailSearch(saved)}
+                                    data-testid={`saved-search-${saved.id}`}
+                                >
+                                    <span class="search-saved-name">{saved.name}</span>
+                                    <span class="search-suggest-sample">{saved.query}</span>
+                                    {#if saved.scope === 'all'}
+                                        <span class="search-saved-scope">All folders</span>
+                                    {/if}
+                                </button>
+                                <button
+                                    type="button"
+                                    class="search-saved-remove"
+                                    title="Remove saved search"
+                                    aria-label={`Remove saved search ${saved.name}`}
+                                    onmousedown={(e) => e.preventDefault()}
+                                    onclick={() => deleteSavedMailSearch(saved.id)}
+                                    data-testid={`saved-search-remove-${saved.id}`}
+                                >
+                                    <Icon name="close" size={12} />
+                                </button>
+                            </div>
+                        {/each}
+                    {/if}
+                    {#if saveSearchFormOpen}
+                        <div class="search-save-form" data-testid="search-save-form">
+                            <label class="search-save-label" for="search-save-name">Name this search</label>
+                            <input
+                                id="search-save-name"
+                                type="text"
+                                class="search-save-input"
+                                bind:value={saveSearchDraftName}
+                                data-testid="search-save-name"
+                            />
+                            <div class="search-save-actions">
+                                <button type="button" class="btn small" onclick={confirmSaveCurrentSearch} data-testid="search-save-confirm">Save</button>
+                                <button type="button" class="btn small ghost" onclick={cancelSaveSearchForm} data-testid="search-save-cancel">Cancel</button>
+                            </div>
+                        </div>
+                    {:else if canSaveCurrentSearch}
                         <button
                             type="button"
-                            class="search-suggest-chip"
+                            class="search-suggest-chip search-save-trigger"
                             onmousedown={(e) => e.preventDefault()}
-                            onclick={() => insertTag(tag.key)}
-                            onkeydown={onSuggestKey}
-                            data-testid={`search-tag-${tag.key}`}
+                            onclick={startSaveCurrentSearch}
+                            data-testid="search-save-trigger"
                         >
-                            <span class="search-suggest-key">{tag.key}:</span>
-                            <span class="search-suggest-label">{tag.label}</span>
-                            <span class="search-suggest-sample">{tag.sample}</span>
+                            <Icon name="star" size={14} />
+                            <span class="search-suggest-label">Save this search</span>
                         </button>
-                    {/each}
+                    {/if}
+                    {#if visibleTags.length > 0}
+                        <div class="search-suggest-hint">Filter with tags:</div>
+                        {#each visibleTags as tag (tag.key)}
+                            <button
+                                type="button"
+                                class="search-suggest-chip"
+                                onmousedown={(e) => e.preventDefault()}
+                                onclick={() => insertTag(tag.key)}
+                                onkeydown={onSuggestKey}
+                                data-testid={`search-tag-${tag.key}`}
+                            >
+                                <span class="search-suggest-key">{tag.key}:</span>
+                                <span class="search-suggest-label">{tag.label}</span>
+                                <span class="search-suggest-sample">{tag.sample}</span>
+                            </button>
+                        {/each}
+                    {/if}
                 </div>
             {/if}
         </div>
@@ -3131,6 +3256,73 @@
         font-family: var(--mono, ui-monospace, monospace);
         font-size: 11px;
         color: var(--text-tertiary);
+    }
+    .search-saved-row {
+        display: flex;
+        align-items: stretch;
+        gap: 2px;
+    }
+    .search-saved-chip {
+        flex: 1;
+        min-width: 0;
+    }
+    .search-saved-name {
+        font-weight: 600;
+        color: var(--text-primary);
+    }
+    .search-saved-scope {
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        color: var(--text-tertiary);
+    }
+    .search-saved-remove {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 32px;
+        border: none;
+        border-radius: var(--radius-sm);
+        background: transparent;
+        color: var(--text-tertiary);
+        cursor: pointer;
+    }
+    .search-saved-remove:hover {
+        background: var(--bg-hover);
+        color: var(--text-primary);
+    }
+    .search-save-trigger {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        grid-template-columns: none;
+    }
+    .search-save-form {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        padding: 6px;
+        border-top: 1px solid var(--border-subtle);
+        margin-top: 4px;
+    }
+    .search-save-label {
+        font-size: 12px;
+        color: var(--text-secondary);
+    }
+    .search-save-input {
+        width: 100%;
+        padding: 6px 8px;
+        border-radius: var(--radius-sm);
+        border: 1px solid var(--border-subtle);
+        background: var(--bg-base);
+        color: var(--text-primary);
+        font: inherit;
+        font-size: 13px;
+    }
+    .search-save-actions {
+        display: flex;
+        gap: 6px;
     }
     .search-wrap:focus-within {
         border-color: var(--border-focus);
