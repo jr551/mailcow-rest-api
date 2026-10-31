@@ -14,6 +14,11 @@
         senderSweepMenuItems,
         type SenderSweepAction
     } from '../../lib/message-sender-sweep';
+    import {
+        categoryMenuItems,
+        MESSAGE_CATEGORY_BY_ID,
+        type MessageCategoryId
+    } from '../../lib/message-categories';
 
     interface Props {
         msg: MessageListItem;
@@ -29,6 +34,8 @@
         onTrash: () => void;
         onSnooze: (preset: SnoozePresetId) => void | Promise<void>;
         onSweep: (action: SenderSweepAction) => void | Promise<void>;
+        onCategory: (category: MessageCategoryId | 'clear') => void | Promise<void>;
+        currentCategory?: MessageCategoryId | null;
         sweepBusy?: boolean;
     }
 
@@ -46,6 +53,8 @@
         onTrash,
         onSnooze,
         onSweep,
+        onCategory,
+        currentCategory = null,
         sweepBusy = false
     }: Props = $props();
 
@@ -55,8 +64,10 @@
     let followUpMenuOpen = $state(false);
     let snoozeMenuOpen = $state(false);
     let sweepMenuOpen = $state(false);
+    let categoryMenuOpen = $state(false);
 
     const followUpItems = followUpSubmenuItems();
+    const categoryItems = categoryMenuItems();
     const snoozeItems = snoozeSubmenuItems();
     const sweepSender = $derived(senderAddressFromMessage(msg));
     const sweepItems = $derived(senderSweepMenuItems(senderDisplayLabel(msg)));
@@ -107,6 +118,7 @@
         followUpMenuOpen = false;
         snoozeMenuOpen = false;
         sweepMenuOpen = false;
+        categoryMenuOpen = false;
         onClose();
     }
 
@@ -126,6 +138,12 @@
         if (sweepBusy) return;
         await onSweep(key as SenderSweepAction);
         sweepMenuOpen = false;
+        onClose();
+    }
+
+    async function pickCategory(key: string) {
+        await onCategory(key as MessageCategoryId | 'clear');
+        categoryMenuOpen = false;
         onClose();
     }
 </script>
@@ -202,6 +220,38 @@
                     </button>
                 {/each}
             </div>
+        {:else if categoryMenuOpen}
+            <div class="sheet-header">
+                <button type="button" class="back-btn" aria-label="Back" onclick={() => { categoryMenuOpen = false; }}>
+                    <Icon name="chevronLeft" size={18} />
+                </button>
+                <h3>Categorize</h3>
+                <button type="button" class="close-btn" aria-label="Close" onclick={onClose}>
+                    <Icon name="close" size={18} />
+                </button>
+            </div>
+            <div class="actions">
+                {#each categoryItems as item (item.value)}
+                    <button
+                        type="button"
+                        class="action-row"
+                        class:active={item.value !== 'clear' && item.value === currentCategory}
+                        data-testid={`mobile-category-item-${item.value}`}
+                        onclick={() => pickCategory(item.value)}
+                    >
+                        {#if item.value === 'clear'}
+                            <Icon name="close" size={20} />
+                        {:else}
+                            <span
+                                class="category-swatch"
+                                style={`background: ${MESSAGE_CATEGORY_BY_ID[item.value].color}`}
+                                aria-hidden="true"
+                            ></span>
+                        {/if}
+                        <span>{item.label}</span>
+                    </button>
+                {/each}
+            </div>
         {:else if followUpMenuOpen}
             <div class="sheet-header">
                 <button type="button" class="back-btn" aria-label="Back" onclick={() => { followUpMenuOpen = false; }}>
@@ -259,6 +309,15 @@
                 >
                     <Icon name="starFilled" size={20} />
                     <span>{isStarred ? 'Follow-up date…' : 'Flag for follow-up'}</span>
+                </button>
+                <button
+                    type="button"
+                    class="action-row"
+                    data-testid="mobile-category-trigger"
+                    onclick={() => { categoryMenuOpen = true; }}
+                >
+                    <Icon name="palette" size={20} />
+                    <span>Categorize</span>
                 </button>
                 <button
                     type="button"
@@ -387,6 +446,7 @@
         -webkit-user-select: none;
     }
     .action-row:active { background: var(--bg-hover); }
+    .action-row.active { background: color-mix(in srgb, var(--accent) 10%, transparent); }
     .action-row.accent { color: var(--accent); font-weight: 500; }
     .action-row.danger { color: var(--danger); }
     .sheet-body {
@@ -420,6 +480,13 @@
         font-size: 14px;
     }
     .muted { color: var(--text-tertiary); font-size: 14px; }
+    .category-swatch {
+        width: 20px;
+        height: 20px;
+        border-radius: 4px;
+        flex-shrink: 0;
+        box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-primary) 12%, transparent);
+    }
     @keyframes fade-in {
         from { opacity: 0; }
         to { opacity: 1; }
