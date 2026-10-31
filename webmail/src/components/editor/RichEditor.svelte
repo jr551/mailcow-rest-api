@@ -30,9 +30,14 @@
          *  looks like it worked — the state changed — while the editor
          *  the user is typing in still shows the old body, and their next
          *  keystroke overwrites the change. */
-        api?: { insertHtml?: (html: string) => void };
+        api?: {
+            insertHtml?: (html: string) => void;
+            getSelectedPlainText?: () => string;
+            replaceSelectionWithHtml?: (html: string) => void;
+        };
+        onSelectionChange?: (plain: string) => void;
     }
-    let { html = $bindable(''), placeholder = 'Write your message…', ghostPlaceholder = false, onChange, api }: Props = $props();
+    let { html = $bindable(''), placeholder = 'Write your message…', ghostPlaceholder = false, onChange, api, onSelectionChange }: Props = $props();
 
     let mountEl: HTMLDivElement | undefined = $state();
     let editor: Editor | null = null;
@@ -81,7 +86,14 @@
                 editorTick++;
                 if (next !== initialHtml) ghostInteracted = true;
             },
-            onSelectionUpdate: () => { editorTick++; },
+            onSelectionUpdate: () => {
+                editorTick++;
+                if (editor && onSelectionChange) {
+                    const { from, to } = editor.state.selection;
+                    const plain = from === to ? '' : editor.state.doc.textBetween(from, to, '\n');
+                    onSelectionChange(plain);
+                }
+            },
             onFocus: () => { ghostFocused = true; },
             onBlur: () => { ghostFocused = false; }
         });
@@ -149,10 +161,26 @@
         // arrives (it appends after what has been typed).
         editor.chain().insertContent(fragment).run();
     }
+    function getSelectedPlainText(): string {
+        if (!editor) return '';
+        const { from, to } = editor.state.selection;
+        if (from === to) return '';
+        return editor.state.doc.textBetween(from, to, '\n');
+    }
+    function replaceSelectionWithHtml(fragment: string) {
+        if (!editor || !fragment) return;
+        editor.chain().focus().deleteSelection().insertContent(fragment).run();
+    }
     $effect(() => {
         if (!api) return;
         api.insertHtml = insertHtml;
-        return () => { delete api.insertHtml; };
+        api.getSelectedPlainText = getSelectedPlainText;
+        api.replaceSelectionWithHtml = replaceSelectionWithHtml;
+        return () => {
+            delete api.insertHtml;
+            delete api.getSelectedPlainText;
+            delete api.replaceSelectionWithHtml;
+        };
     });
     function alignLeft()   { editor?.chain().focus().setTextAlign('left').run(); }
     function alignCenter() { editor?.chain().focus().setTextAlign('center').run(); }

@@ -217,6 +217,9 @@ export interface Settings {
     /** When true (and AI + provider configured), the reading-pane AI panel
      *  summarizes the whole conversation thread when thread grouping is on. */
     aiThreadSummary: boolean;
+    /** When true (and AI + provider configured), selected text in Compose
+     *  can be rewritten with tone presets (Professional / Casual / etc.). */
+    aiRewriteCompose: boolean;
 }
 
 
@@ -323,7 +326,8 @@ export function sanitizeSettings(raw: unknown): Settings {
         // it off is preserved.
         linkSafetyCheck: parsed.linkSafetyCheck !== false,
         naturalLanguageSearch: parsed.naturalLanguageSearch === true,
-        aiThreadSummary: parsed.aiThreadSummary === true
+        aiThreadSummary: parsed.aiThreadSummary === true,
+        aiRewriteCompose: parsed.aiRewriteCompose === true
     };
 }
 
@@ -710,6 +714,11 @@ export function setNaturalLanguageSearch(on: boolean) {
 
 export function setAiThreadSummary(on: boolean) {
     state.aiThreadSummary = on;
+    persist(state);
+}
+
+export function setAiRewriteCompose(on: boolean) {
+    state.aiRewriteCompose = on;
     persist(state);
 }
 

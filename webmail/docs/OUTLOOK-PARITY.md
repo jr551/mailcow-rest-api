@@ -324,7 +324,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 26 (this PR)
+## Slice 26 (done in #113)
 
 - **`MessageActionSheet.svelte`**: **Snooze** and **Sweep** submenus on the mobile long-press sheet (same presets and sender sweep actions as desktop).
 - **`InboxView.svelte`**: snooze overlay filtering + sender sweep via `resolveSenderSweepTargets` / `bulkMove`.
@@ -333,9 +333,20 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 28 (this PR)
+
+- **`webmail/src/lib/compose-ai-rewrite.ts`**: tone presets, prompt builder, selection eligibility.
+- **`compose-ai-rewrite.client.ts`**: opt-in rewrite via configured provider (`cachedChatCompletion`, scope `compose-rewrite`).
+- **`settings.aiRewriteCompose`**: default **off**; toggle in Settings → AI (requires `aiFeatures` + configured provider).
+- **`RichEditor.svelte`** / **`Compose.svelte`**: selection handle + rewrite bar above the editor.
+- Tests: unit (`compose-ai-rewrite.test.mjs`) + Playwright (`outlook-ai-compose-rewrite.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice28/58-compose-rewrite-bar.png`.
+
+---
+
 ## Next planned slice
 
-**Opt-in AI draft/rewrite reply**, **saved searches**, or **mobile quick filter bar**.
+**Saved searches**, **mobile quick filter bar** (slice 27, PR #114), or **smart triage polish**.
 
 ---
 
