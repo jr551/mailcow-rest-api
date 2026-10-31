@@ -61,6 +61,19 @@
     import { setMobileMailShortcutHandler } from '../lib/mail-shortcut-handlers.svelte';
     import { shouldUseMobileTabletSplit } from '../../lib/mobile-tablet-reading-pane';
     import { getMobileViewportWidth } from '../lib/viewport.svelte';
+    import {
+        buildCategoryFlagUpdate,
+        applyCategoryToFlags,
+        categoryFromFlags,
+        MESSAGE_CATEGORY_BY_ID,
+        type MessageCategoryId
+    } from '../../lib/message-categories';
+    import { mobileRowCategory } from '../../lib/mobile-message-category';
+    import {
+        hydrateMessageCategories,
+        messageCategoryOverlay,
+        setMessageCategoryOverlay
+    } from '../../lib/message-categories.svelte';
     import type { SavedMailSearch } from '../../lib/saved-mail-searches';
     import {
         savedMailSearches,
@@ -660,6 +673,39 @@
         return followUpDueLabel(due, followUpNow);
     }
 
+    function rowMessageCategory(msg: MessageListItem): MessageCategoryId | null {
+        void messageCategoryOverlay();
+        return mobileRowCategory(mobileState.selectedPath, msg, messageCategoryOverlay());
+    }
+
+    async function applyMessageCategory(msg: MessageListItem, category: MessageCategoryId | null) {
+        const li = findRow(msg);
+        if (!li) return;
+        const path = rowPath(li);
+        const op = buildCategoryFlagUpdate(li.flags, category);
+        let flags = li.flags;
+        try {
+            if (Object.keys(op).length) {
+                const r = await modifyFlags(path, li.uid, op);
+                flags = r.flags;
+            } else {
+                flags = applyCategoryToFlags(li.flags, category);
+            }
+        } catch {
+            flags = applyCategoryToFlags(li.flags, category);
+            setMessageCategoryOverlay(path, li.uid, category);
+            showToast('error', 'Category saved locally only');
+        }
+        li.flags = flags;
+        if (mobileState.detail && detailIsRow(li)) mobileState.detail.flags = flags;
+        if (categoryFromFlags(flags)) {
+            setMessageCategoryOverlay(path, li.uid, null);
+        } else {
+            setMessageCategoryOverlay(path, li.uid, category);
+        }
+        showToast('success', category ? 'Category updated' : 'Category cleared');
+    }
+
     async function applyFollowUpFlag(msg: MessageListItem, preset: FollowUpPresetId | 'clear') {
         const li = findRow(msg);
         if (!li) return;
@@ -851,6 +897,7 @@
     onMount(() => {
         hydrateMessageFollowUp();
         hydrateMessagePinSnooze();
+        hydrateMessageCategories();
         followUpNow = Date.now();
         pinSnoozeNow = Date.now();
         const followUpTick = setInterval(() => { followUpNow = Date.now(); }, 60_000);
@@ -1128,6 +1175,7 @@
                 {@const isTracked = isTrackingEmail(msg.envelope.subject)}
                 {@const dlevel = settings.listFilter === 'ai-sorted' ? dangerLevel(msg.uid) : 0}
                 {@const followUpHint = rowFollowUpHint(msg.uid, isStarred)}
+                {@const rowCategory = rowMessageCategory(msg)}
                 <SwipeableRow
                     onOpen={() => selectMessage(msg)}
                     onSwipeRight={() => toggleStar(msg)}
@@ -1143,6 +1191,7 @@
                     <div
                         class="msg-row"
                         data-testid={`msg-row-${msg.uid}`}
+                        data-category={rowCategory ?? ''}
                         data-follow-up={followUpHint ?? ''}
                         class:unread={isUnread}
                         class:fresh={isFresh}
@@ -1156,6 +1205,15 @@
                         class:rule-popping={ruleDoneUids.has(msg.uid)}
                         class:keyboard-focus={mobileState.listKeyboardUid === msg.uid}
                     >
+                        {#if rowCategory}
+                            <span
+                                class="category-stripe"
+                                style={`background: ${MESSAGE_CATEGORY_BY_ID[rowCategory].color}`}
+                                title={MESSAGE_CATEGORY_BY_ID[rowCategory].label}
+                                aria-hidden="true"
+                                data-testid={`msg-category-${msg.uid}`}
+                            ></span>
+                        {/if}
                         <Avatar {email} {name} size={40} />
                         <div class="msg-body">
                             <div class="msg-top">
@@ -1212,6 +1270,8 @@
         onTrash={() => trashMessage(sheetMsg)}
         onSnooze={(preset) => applySnooze(sheetMsg, preset)}
         onSweep={(action) => runMobileSenderSweep(sheetMsg, action)}
+        onCategory={(cat) => applyMessageCategory(sheetMsg, cat === 'clear' ? null : cat)}
+        currentCategory={rowMessageCategory(sheetMsg)}
         sweepBusy={mobileSweepBusy}
     />
 {/if}
@@ -1364,6 +1424,7 @@
         .msg-row.fresh, .msg-row.fresh::after { animation: none; }
     }
     .msg-row {
+        position: relative;
         display: flex;
         align-items: center;
         gap: 10px;
@@ -1376,6 +1437,14 @@
     .msg-row.selected {
         background: color-mix(in srgb, var(--accent) 12%, var(--bg-surface));
         box-shadow: inset 3px 0 0 var(--accent);
+    }
+    .category-stripe {
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 4px;
+        pointer-events: none;
     }
     .msg-row.danger-4 { animation: danger-pulse-4 2.2s ease-in-out infinite; }
     .msg-row.danger-3 { animation: danger-pulse-3 2.6s ease-in-out infinite; }

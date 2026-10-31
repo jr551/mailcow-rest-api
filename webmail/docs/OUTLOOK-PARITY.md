@@ -380,6 +380,16 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 32 (done in #119)
+
+- **`mobile-message-category.ts`**: row category resolution for all-folder search rows (shared with desktop overlay).
+- **`MessageActionSheet.svelte`**: **Categorize** submenu (same colour categories as desktop slice 7).
+- **`InboxView.svelte`**: list colour stripe + `modifyFlags` / local overlay when assigning categories on mobile.
+- Tests: unit (`mobile-message-category.test.mjs`) + Playwright (`outlook-mobile-message-categories.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice32/62-mobile-category-green-row.png`.
+
+---
+
 ## Slice 33 (this PR)
 
 - **`mobile-mail-landmarks.ts`**: mobile region labels, shared list landmark id, skip-link focus helper.

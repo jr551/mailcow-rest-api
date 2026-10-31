@@ -166,6 +166,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Mobile saved searches panel](docs/assets/outlook-slice31/61-mobile-saved-searches-panel.png)
 
+- **Mobile colour categories** — long-press a message for **Categorize** (same OWA colour categories and `webmail.message-categories.v1` overlay as desktop). Rows show a left colour stripe when categorized.
+
+![Mobile category stripe](docs/assets/outlook-slice32/62-mobile-category-green-row.png)
+
 - **Mobile landmarks & skip link** — OWA-style **Command bar**, **App navigation**, **Message list**, and **Reading pane** regions on `/webmail/mobile/`, plus **Skip to message list** (keyboard focus). Documented under mobile **Settings → Accessibility**.
 
 ![Mobile skip link focused](docs/assets/outlook-slice33/63-mobile-skip-link-focused.png)
