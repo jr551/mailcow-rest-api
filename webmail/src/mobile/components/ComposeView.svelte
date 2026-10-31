@@ -10,9 +10,10 @@
         computePresetSendAt,
         minScheduledSendAt,
         sanitizeSendAtMs,
+        formatScheduledSendWhen,
         type ScheduledSendPresetId
     } from '../../lib/scheduled-send';
-    import { queueMobileScheduledSend, formatScheduledSendWhen } from '../lib/compose-schedule-send.svelte';
+    import { queueMobileScheduledSend } from '../lib/compose-schedule-send.svelte';
     import { ReplySuggest, DraftSparkle, htmlToPlainText } from '../../lib/reply-suggest.svelte';
     import { addressBook } from '../../lib/address-book.svelte';
     import Icon from '../../components/Icon.svelte';

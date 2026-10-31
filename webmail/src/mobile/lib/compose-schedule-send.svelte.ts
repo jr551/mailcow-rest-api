@@ -1,10 +1,9 @@
-import { formatScheduledSendWhen } from '../../lib/scheduled-send';
+import { formatScheduledSendWhen, type ScheduledSendPayload } from '../../lib/scheduled-send';
 import {
     enqueueScheduledSend,
     hydrateScheduledSends,
     processDueScheduledSends,
-    type ScheduledSendNotify,
-    type ScheduledSendPayload
+    type ScheduledSendNotify
 } from '../../lib/scheduled-send.svelte';
 import { mobileScheduledSendQueuedMessage } from '../../lib/mobile-compose-schedule';
 import { showToast } from './store.svelte';
@@ -34,5 +33,3 @@ export function startMobileScheduledSendFlusher(): () => void {
     }, 30_000);
     return () => clearInterval(timer);
 }
-
-export { formatScheduledSendWhen };
