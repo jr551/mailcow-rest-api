@@ -304,7 +304,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 24 (this PR)
+## Slice 24 (done in #111)
 
 - **`webmail/src/lib/mobile-tablet-reading-pane.ts`**: tablet split breakpoint (768px+) and **`settings.readingPaneLayout`** axis (right = horizontal, bottom = vertical, hidden = phone full-screen).
 - **`TabletMailShell.svelte`**: list + reading pane on tablet widths; **`MessageView`** **`embedded`** mode hides back navigation.
@@ -314,9 +314,19 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 25 (this PR)
+
+- **`webmail/src/lib/mobile-mail-keyboard-shortcuts.ts`**: OWA-style chords for `/webmail/mobile/` with an external keyboard; **`Enter`** opens the highlighted row.
+- **`MobileMailShortcutHelp.svelte`**: bottom-sheet help (**?** or **Settings → Keyboard shortcuts**).
+- **`InboxView.svelte`** / **`MessageView.svelte`**: handler bridge for list navigation, search focus, archive, reply, and related actions.
+- Tests: unit (`mobile-mail-keyboard-shortcuts.test.mjs`) + Playwright (`outlook-mobile-keyboard-shortcuts.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice25/55-mobile-keyboard-shortcuts-help.png`.
+
+---
+
 ## Next planned slice
 
-**Mobile keyboard shortcuts** help sheet, **opt-in AI draft/rewrite reply**, or **mobile snooze / sweep** parity on the action sheet.
+**Opt-in AI draft/rewrite reply**, **mobile snooze / sweep** on the action sheet, or **saved searches**.
 
 ---
 

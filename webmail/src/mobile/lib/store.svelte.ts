@@ -34,6 +34,8 @@ export interface MobileState {
     conversationStack: { threadId: string; uids: number[] } | null;
     conversationDetails: Record<number, MessageDetail>;
     conversationLoading: boolean;
+    /** Message row highlighted by external-keyboard navigation (slice 25). */
+    listKeyboardUid: number | null;
     /** Increments every time the document goes hidden→visible. Views
      *  that need to revalidate stale state on app-resume can mirror
      *  this in an $effect. */
@@ -76,6 +78,7 @@ const createInitial = (): MobileState => ({
     conversationStack: null,
     conversationDetails: {},
     conversationLoading: false,
+    listKeyboardUid: null,
     resumeTick: 0,
 });
 
