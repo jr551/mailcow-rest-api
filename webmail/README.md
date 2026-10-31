@@ -166,6 +166,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Mobile saved searches panel](docs/assets/outlook-slice31/61-mobile-saved-searches-panel.png)
 
+- **Mobile colour categories** — long-press a message for **Categorize** (same OWA colour categories and `webmail.message-categories.v1` overlay as desktop). Rows show a left colour stripe when categorized.
+
+![Mobile category stripe](docs/assets/outlook-slice32/62-mobile-category-green-row.png)
+
 ## Keyboard shortcuts (mail)
 
 Global shortcuts are listed under **Settings → General → Keyboard shortcuts** (press **?** in the inbox for the same list). Reading-pane placement:

@@ -371,7 +371,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 31 (this PR)
+## Slice 31 (done in #118)
 
 - **`mobile-saved-search-panel.ts`**: panel visibility rules shared with unit tests.
 - **`InboxView.svelte`**: mobile search panel lists saved searches, **Save this search**, and remove controls (shared `webmail.saved-searches.v1` with desktop).
@@ -380,9 +380,19 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 32 (this PR)
+
+- **`mobile-message-category.ts`**: row category resolution for all-folder search rows (shared with desktop overlay).
+- **`MessageActionSheet.svelte`**: **Categorize** submenu (same colour categories as desktop slice 7).
+- **`InboxView.svelte`**: list colour stripe + `modifyFlags` / local overlay when assigning categories on mobile.
+- Tests: unit (`mobile-message-category.test.mjs`) + Playwright (`outlook-mobile-message-categories.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice32/62-mobile-category-green-row.png`.
+
+---
+
 ## Next planned slice
 
-**Smart triage / categorise**, richer conversation HTML parity, or mobile compose parity.
+**Smart triage / categorise** (opt-in AI), richer conversation HTML parity, or mobile compose parity.
 
 ---
 
