@@ -275,6 +275,15 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 21 (done in #108)
+
+- **`webmail/src/mobile/components/MessageActionSheet.svelte`**: **Flag for follow-up** submenu (Today / Tomorrow / This week / No date), same presets as desktop.
+- **`webmail/src/mobile/components/InboxView.svelte`**: follow-up due hints on rows (shared `message-follow-up` overlay).
+- Tests: Playwright (`outlook-mobile-follow-up-flag.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice21/51-mobile-follow-up-today-row.png`.
+
+---
+
 ## Slice 22 (this PR)
 
 - **`webmail/src/lib/mobile-appearance.ts`**: mobile theme mode list + **`messageIframeTheme`** helper (uses `effectiveTheme()`, not `html.dark`).
@@ -287,7 +296,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ## Next planned slice
 
-**Mobile follow-up flags** (PR #108), **opt-in AI thread summarise**, or **mobile reading-pane layout** notes for tablet widths.
+**Opt-in AI thread summarise** (gated on `aiFeatures` + provider), **mobile reading-pane layout** for tablet widths, or **mobile keyboard shortcuts** help sheet.
 
 ---
 
