@@ -277,7 +277,17 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ## Next planned slice
 
-**Follow-up flags** on mobile, **dark mode** polish, or opt-in **AI thread summarise** (thread summary gated on `aiFeatures` + provider).
+**Mobile dark mode theme picker** (PR #109), **mobile reading-pane layout** for tablet widths, or **mobile keyboard shortcuts** help sheet.
+
+---
+
+## Slice 23 (this PR)
+
+- **`webmail/src/lib/thread-ai-summarize.ts`**: build single-message or full-thread text for `/v1/ai/summarize`.
+- **`settings.aiThreadSummary`**: default **off**; toggle in Settings → AI (requires `aiFeatures` + configured provider).
+- **`AiPanel.svelte`**: **Summarize thread** when grouping + toggle are on and the reading pane shows a multi-message stack.
+- Tests: unit (`thread-ai-summarize.test.mjs`) + Playwright (`outlook-ai-thread-summary.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice23/53-ai-thread-summary-panel.png`.
 
 ---
 

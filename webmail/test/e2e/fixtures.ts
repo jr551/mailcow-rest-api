@@ -747,12 +747,22 @@ export async function applyMocks(page: Page) {
         });
     });
 
-    await page.route('**/v1/ai/summarize', (route) => {
-        route.fulfill({
+    await page.route('**/v1/ai/summarize', async (route) => {
+        let text = '';
+        try {
+            const body = route.request().postDataJSON() as { text?: string };
+            text = body?.text ?? '';
+        } catch {
+            text = '';
+        }
+        const content = text.includes('\n\n---\n\n')
+            ? '- Lunch thread: Sam proposes Friday lunch\n- Reply confirms noon at the usual place\n- Two-message conversation'
+            : '- Welcome message from the Concierge\n- Demonstrates the layout\n- Try the AI panel to summarize or draft replies';
+        await route.fulfill({
             status: 200,
             contentType: 'application/json',
             body: JSON.stringify({
-                content: '- Welcome message from the Concierge\n- Demonstrates the layout\n- Try the AI panel to summarize or draft replies',
+                content,
                 model: 'mistral-small-latest'
             })
         });

@@ -1,6 +1,8 @@
 <script lang="ts">
     import { ui, showToast } from '../lib/store.svelte';
+    import { settings } from '../lib/settings.svelte';
     import { summarizeMessage, draftReply, extractActions, translateMessage, ApiError } from '../lib/api';
+    import { buildThreadSummarizePayload } from '../lib/thread-ai-summarize';
     import Icon from './Icon.svelte';
 
     interface Props {
@@ -12,14 +14,25 @@
 
     function bodyForAi(): string {
         if (!ui.detail) return '';
-        const env = ui.detail.envelope;
-        const headers = [
-            `From: ${env.from?.[0]?.name || ''} <${env.from?.[0]?.address || ''}>`,
-            env.subject ? `Subject: ${env.subject}` : '',
-            env.date ? `Date: ${env.date}` : ''
-        ].filter(Boolean).join('\n');
-        const body = ui.detail.text || (ui.detail.html || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
-        return `${headers}\n\n${body}`;
+        const built = buildThreadSummarizePayload({
+            messages: ui.messages,
+            focusUid: ui.detail.uid,
+            primaryDetail: ui.detail,
+            conversationDetails: ui.conversationDetails,
+            groupThreads: settings.groupThreads && settings.aiThreadSummary
+        });
+        return built.text;
+    }
+
+    function summarizeUsesThread(): boolean {
+        if (!ui.detail || !settings.aiThreadSummary || !settings.groupThreads) return false;
+        return buildThreadSummarizePayload({
+            messages: ui.messages,
+            focusUid: ui.detail.uid,
+            primaryDetail: ui.detail,
+            conversationDetails: ui.conversationDetails,
+            groupThreads: true
+        }).mode === 'thread';
     }
 
     async function runSummarize() {
@@ -125,7 +138,7 @@
                     data-testid="ai-summarize-btn"
                 >
                     {#if ui.aiSummaryLoading}<span class="spinner"></span>{/if}
-                    {ui.aiSummary ? 'Re-run' : 'Summarize'}
+                    {ui.aiSummary ? 'Re-run' : summarizeUsesThread() ? 'Summarize thread' : 'Summarize'}
                 </button>
             </div>
             {#if ui.aiSummaryError}
@@ -138,7 +151,13 @@
                     </button>
                 </div>
             {:else if !ui.aiSummaryLoading}
-                <p class="muted hint">Summarize the open message into 3–5 bullets.</p>
+                <p class="muted hint">
+                    {#if summarizeUsesThread()}
+                        Summarize the whole conversation into 3–5 bullets.
+                    {:else}
+                        Summarize the open message into 3–5 bullets.
+                    {/if}
+                </p>
             {/if}
         </section>
 
