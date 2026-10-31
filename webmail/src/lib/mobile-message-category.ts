@@ -1,6 +1,6 @@
 /** Mobile list row category resolution (Outlook parity slice 32). */
 
-import { resolveMessageCategory, type MessageCategoryId } from './message-categories.ts';
+import { resolveMessageCategory, type MessageCategoryId } from './message-categories';
 
 export interface MobileCategoryRow {
     uid: number;

@@ -1,7 +1,12 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { categoryStorageKey } from '../../src/lib/message-categories.ts';
-import { mobileRowCategory } from '../../src/lib/mobile-message-category.ts';
+import { categoryStorageKey, resolveMessageCategory } from '../../src/lib/message-categories.ts';
+
+/** Mirrors `mobileRowCategory` in mobile-message-category.ts for unit tests. */
+function mobileRowCategory(selectedPath, msg, overlay) {
+    const path = msg.mailbox ?? selectedPath;
+    return resolveMessageCategory(path, msg.uid, msg.flags, overlay);
+}
 
 describe('mobile message category (slice 32)', () => {
     it('uses the row mailbox when present (all-folder search)', () => {
