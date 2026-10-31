@@ -233,7 +233,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 17 (this PR)
+## Slice 17 (done in #104)
 
 - **`webmail/src/lib/mail-landmarks.ts`**: OWA-aligned region labels and skip-link target ids.
 - **`Layout.svelte`**: **Skip to message list** link, `banner` command bar, folder **`navigation`**, message list **`region`**, reading pane **`main`** landmark; flyout reading pane uses the same label.
@@ -243,9 +243,24 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 18 (in #105)
+
+Follow-up flag due dates on desktop — see PR #105.
+
+---
+
+## Slice 19 (this PR)
+
+- **`webmail/src/mobile/components/InboxView.svelte`**: **Focused | Other** tabs on mobile INBOX (same rules as desktop via `focused-inbox.ts`); `data-testid` row ids for e2e.
+- **`settings.inboxTab`**: shared with desktop; persists across form factors.
+- Tests: Playwright (`outlook-mobile-focused-inbox.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice19/48-mobile-inbox-focused-tab.png`.
+
+---
+
 ## Next planned slice
 
-**Dark mode / mobile** polish, **flags / follow-up** UX, or opt-in **AI thread summarise**.
+**Mobile conversation reader** stack, **follow-up flags** on mobile, **dark mode** polish, or opt-in **AI thread summarise**.
 
 ---
 

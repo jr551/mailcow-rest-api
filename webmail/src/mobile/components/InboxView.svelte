@@ -16,7 +16,8 @@
     } from '../../lib/api';
     import { formatDate, senderShort, isTrackingEmail } from '../../lib/format';
     import { sortInboxClient, type InboxSortRanking } from '../../lib/sort-inbox-client';
-    import { settings } from '../../lib/settings.svelte';
+    import { settings, setInboxTab, isVipAddress } from '../../lib/settings.svelte';
+    import { filterMessagesByInboxTab } from '../../lib/focused-inbox';
     import Icon from '../../components/Icon.svelte';
     import Avatar from '../../components/Avatar.svelte';
     import SwipeableRow from './SwipeableRow.svelte';
@@ -413,6 +414,9 @@
         let base = mobileState.messages;
         if (f === 'unread') base = mobileState.messages.filter((m) => !m.flags.includes('\\Seen'));
         else if (f === 'starred') base = mobileState.messages.filter((m) => m.flags.includes('\\Flagged'));
+        if (showInboxTabs) {
+            base = filterMessagesByInboxTab(base, settings.inboxTab, { isVip: isVipAddress });
+        }
         if (f !== 'ai-sorted' || aiRankings.length === 0) return base;
         const indexFor = new Map<number, number>();
         aiRankings.forEach((r, i) => indexFor.set(r.uid, i));
@@ -432,6 +436,12 @@
 
     const currentFolder = $derived(
         mobileState.mailboxes.find((m) => m.path === mobileState.selectedPath)
+    );
+
+    const showInboxTabs = $derived(
+        !(mobileState.search || '').trim()
+        && mobileState.searchScope !== 'all'
+        && (mobileState.selectedPath || '').toUpperCase() === 'INBOX'
     );
 
     const unreadCount = $derived(
@@ -572,6 +582,27 @@
         </div>
     {/if}
 
+    {#if showInboxTabs}
+        <nav class="inbox-tabs" aria-label="Inbox view" data-testid="inbox-tabs">
+            <button
+                type="button"
+                class="inbox-tab"
+                class:active={settings.inboxTab === 'focused'}
+                aria-pressed={settings.inboxTab === 'focused'}
+                onclick={() => setInboxTab('focused')}
+                data-testid="inbox-tab-focused"
+            >Focused</button>
+            <button
+                type="button"
+                class="inbox-tab"
+                class:active={settings.inboxTab === 'other'}
+                aria-pressed={settings.inboxTab === 'other'}
+                onclick={() => setInboxTab('other')}
+                data-testid="inbox-tab-other"
+            >Other</button>
+        </nav>
+    {/if}
+
     <div class="segments" style="margin: 8px 16px 0;">
         {#each (settings.aiFeatures ? ['all','unread','starred','ai-sorted'] : ['all','unread','starred']) as f}
             <button
@@ -615,6 +646,24 @@
                 <p>{mobileState.messagesError}</p>
                 <button class="mbtn mbtn-secondary" onclick={() => refreshMessages(true)}>Retry</button>
             </div>
+        {:else if !mobileState.messagesLoading && filtered.length === 0 && showInboxTabs && mobileState.messages.length > 0}
+            <div class="mempty" data-testid="inbox-tab-empty">
+                <Icon name="inbox" size={40} />
+                <p>
+                    {#if settings.inboxTab === 'other'}
+                        Nothing in <strong>Other</strong> right now. Newsletters and bulk mail land here.
+                    {:else}
+                        Nothing in <strong>Focused</strong> right now.
+                    {/if}
+                </p>
+                <button
+                    type="button"
+                    class="mbtn mbtn-secondary"
+                    onclick={() => setInboxTab(settings.inboxTab === 'focused' ? 'other' : 'focused')}
+                >
+                    Switch to {settings.inboxTab === 'focused' ? 'Other' : 'Focused'}
+                </button>
+            </div>
         {:else if !mobileState.messagesLoading && mobileState.messages.length === 0}
             <div class="mempty">
                 <Icon name="inbox" size={40} />
@@ -651,7 +700,19 @@
                     leftColor="var(--danger)"
                 >
                     {@const isFresh = (() => { const t = Date.parse(msg.internalDate || msg.envelope.date || ''); return !Number.isNaN(t) && (Date.now() - t < 10 * 60 * 1000); })()}
-                    <div class="msg-row" class:unread={isUnread} class:fresh={isFresh} class:spy-tracked={isTracked} class:danger-1={dlevel === 1} class:danger-2={dlevel === 2} class:danger-3={dlevel === 3} class:danger-4={dlevel === 4} class:rule-running={ruleAnimUids.has(msg.uid)} class:rule-popping={ruleDoneUids.has(msg.uid)}>
+                    <div
+                        class="msg-row"
+                        data-testid={`msg-row-${msg.uid}`}
+                        class:unread={isUnread}
+                        class:fresh={isFresh}
+                        class:spy-tracked={isTracked}
+                        class:danger-1={dlevel === 1}
+                        class:danger-2={dlevel === 2}
+                        class:danger-3={dlevel === 3}
+                        class:danger-4={dlevel === 4}
+                        class:rule-running={ruleAnimUids.has(msg.uid)}
+                        class:rule-popping={ruleDoneUids.has(msg.uid)}
+                    >
                         <Avatar {email} {name} size={40} />
                         <div class="msg-body">
                             <div class="msg-top">
@@ -712,6 +773,42 @@
         flex-direction: column;
         min-height: 0;
         overflow: hidden;
+    }
+    .inbox-tabs {
+        flex: 0 0 auto;
+        display: flex;
+        gap: 0;
+        padding: 0 12px;
+        border-bottom: 1px solid var(--border-subtle);
+        background: var(--bg-surface);
+    }
+    .inbox-tab {
+        position: relative;
+        padding: 10px 14px 8px;
+        border: none;
+        background: transparent;
+        font: inherit;
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--text-secondary);
+        cursor: pointer;
+        border-radius: 0;
+    }
+    .inbox-tab:active {
+        background: color-mix(in srgb, var(--accent) 8%, transparent);
+    }
+    .inbox-tab.active {
+        color: var(--accent-text);
+    }
+    .inbox-tab.active::after {
+        content: '';
+        position: absolute;
+        left: 8px;
+        right: 8px;
+        bottom: 0;
+        height: 2px;
+        border-radius: 2px 2px 0 0;
+        background: var(--accent);
     }
     .header-left {
         display: inline-flex;

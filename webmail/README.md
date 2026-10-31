@@ -121,6 +121,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Skip link focused](docs/assets/outlook-slice17/46-skip-link-focused.png)
 
+- **Mobile Focused / Other** — the `/webmail/mobile/` inbox uses the same deterministic Focused vs Other split as desktop (shared `inboxTab` setting). Tabs hide during search and outside INBOX.
+
+![Mobile inbox Focused tab](docs/assets/outlook-slice19/48-mobile-inbox-focused-tab.png)
+
 ## Keyboard shortcuts (mail)
 
 Global shortcuts are listed under **Settings → General → Keyboard shortcuts** (press **?** in the inbox for the same list). Reading-pane placement:
