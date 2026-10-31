@@ -34,7 +34,8 @@ const ASSET24 = 'docs/assets/outlook-slice24';
 const ASSET25 = 'docs/assets/outlook-slice25';
 const ASSET26 = 'docs/assets/outlook-slice26';
 const ASSET27 = 'docs/assets/outlook-slice27';
-for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET20, ASSET22, ASSET23, ASSET24, ASSET25, ASSET26, ASSET27]) mkdirSync(d, { recursive: true });
+const ASSET28 = 'docs/assets/outlook-slice28';
+for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET20, ASSET22, ASSET23, ASSET24, ASSET25, ASSET26, ASSET27, ASSET28]) mkdirSync(d, { recursive: true });
 
 const baseSettings = {
     aiFeatures: false,
@@ -466,6 +467,21 @@ test.describe('docs desktop (1440×900 @2x)', () => {
         await page.getByTestId('ai-summarize-btn').click();
         await expect(page.getByTestId('ai-summary-out')).toContainText(/lunch thread/i);
         await shot(page, `${ASSET23}/53-ai-thread-summary-panel.png`);
+    });
+
+    test('slice28 AI compose rewrite bar', async ({ page }) => {
+        await page.addInitScript((blob) => {
+            localStorage.setItem('webmail.theme', 'light');
+            localStorage.setItem('webmail.settings.v1', blob);
+        }, seedSettings({ aiFeatures: true, aiRewriteCompose: true }));
+        await login(page);
+        await page.click('[data-testid=compose-btn]');
+        const surface = page.locator('[data-testid=rich-editor-surface] .ProseMirror');
+        await surface.click();
+        await page.keyboard.type('Thanks so much!!! This is great.');
+        await page.keyboard.press('Control+a');
+        await expect(page.getByTestId('compose-rewrite-bar')).toBeVisible();
+        await shot(page, `${ASSET28}/58-compose-rewrite-bar.png`);
     });
 });
 

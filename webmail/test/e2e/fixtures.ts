@@ -523,6 +523,7 @@ export async function applyMocks(page: Page) {
         const body = (route.request().postData() || '') as string;
         const isInboxSort = body.includes('Triage these') && body.includes('rankings');
         const isNlSearch = body.includes('natural-language mail search');
+        const isComposeRewrite = body.includes('Outlook compose rewrite assistant');
         const content = isInboxSort
             ? JSON.stringify({
                 rankings: [
@@ -540,6 +541,8 @@ export async function applyMocks(page: Page) {
             })
             : isNlSearch
                 ? JSON.stringify({ search: 'from:billing@acme.example subject:invoice' })
+            : isComposeRewrite
+                ? 'Thank you — this looks excellent. I appreciate the quick turnaround.'
             : 'This is a mocked AI response for the test suite.';
         route.fulfill({
             status: 200,

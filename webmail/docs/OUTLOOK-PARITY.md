@@ -333,7 +333,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 27 (this PR)
+## Slice 27 (done in #114)
 
 - **`MobileQuickFilterBar.svelte`**: mobile **Filter** / **Sort** menus (same `list-quick-filters.ts` options as desktop).
 - **`InboxView.svelte`**: uses **`settings.listFilter`** / **`settings.listSort`** via `filterMessagesByOutlookFilter` and `sortWithPinnedFirst`; removes legacy segment chips.
@@ -342,9 +342,20 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 28 (this PR)
+
+- **`webmail/src/lib/compose-ai-rewrite.ts`**: tone presets, prompt builder, selection eligibility.
+- **`compose-ai-rewrite.client.ts`**: opt-in rewrite via configured provider (`cachedChatCompletion`, scope `compose-rewrite`).
+- **`settings.aiRewriteCompose`**: default **off**; toggle in Settings → AI (requires `aiFeatures` + configured provider).
+- **`RichEditor.svelte`** / **`Compose.svelte`**: selection handle + rewrite bar above the editor.
+- Tests: unit (`compose-ai-rewrite.test.mjs`) + Playwright (`outlook-ai-compose-rewrite.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice28/58-compose-rewrite-bar.png`.
+
+---
+
 ## Next planned slice
 
-**Opt-in AI draft/rewrite reply**, **saved searches**, or **mobile search scope parity**.
+**Saved searches**, **smart triage / categorise**, or **mobile search scope parity**.
 
 ---
 

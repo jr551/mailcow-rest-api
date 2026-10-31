@@ -120,7 +120,7 @@ const read = (p) => readFileSync(src(p), 'utf8');
 test('compose escapes model-written reply text before inserting it as HTML', () => {
     const compose = read('components/Compose.svelte');
     assert.ok(!/`<p>\$\{p\.replace\(/.test(compose), 'AI reply paragraphs must go through escapeHtml');
-    assert.equal((compose.match(/<p>\$\{escapeHtml\(p\)\.replace/g) || []).length, 2);
+    assert.equal((compose.match(/<p>\$\{escapeHtml\(p\)\.replace/g) || []).length, 3);
 });
 
 test('compose never sends an empty subject and honours Shift+Click', () => {

@@ -14,6 +14,12 @@
     import { suggestSubject, suggestSubjects } from '../lib/subject-suggest';
     import { aiAvailable } from '../lib/settings.svelte';
     import { ReplySuggest, DraftSparkle, threadForAi, htmlToPlainText } from '../lib/reply-suggest.svelte';
+    import {
+        COMPOSE_REWRITE_TONES,
+        selectionEligibleForRewrite,
+        type ComposeRewriteTone
+    } from '../lib/compose-ai-rewrite';
+    import { rewriteComposeSelection } from '../lib/compose-ai-rewrite.client';
     import { summariseRecipientHistory, type HistorySummary } from '../lib/recipient-history';
     import { preSendCheck } from '../lib/pre-send-check';
     import { undoSendEnabled } from '../lib/undo-send';
@@ -295,7 +301,12 @@
     // write-only as far as the editor is concerned (RichEditor only pushes
     // HTML out via onUpdate), so anything that needs to put text INTO the
     // document has to go through this.
-    let editorApi: { insertHtml?: (html: string) => void } = $state({});
+    let editorApi: {
+        insertHtml?: (html: string) => void;
+        getSelectedPlainText?: () => string;
+        replaceSelectionWithHtml?: (html: string) => void;
+    } = $state({});
+    let composeSelectionPlain = $state('');
 
     // Empty-subject AI assist: when the user hits Send with no subject, we
     // ask the model for one and show it inline (purple) with Use / Edit /
@@ -531,6 +542,42 @@
             aiDrafting = false;
         }
     }
+
+    let aiRewriting = $state(false);
+    async function rewriteSelectedText(tone: ComposeRewriteTone) {
+        if (aiRewriting) return;
+        if (!settings.aiFeatures || !settings.aiRewriteCompose || !aiAvailable()) return;
+        const selected = (editorApi.getSelectedPlainText?.() || composeSelectionPlain || '').trim();
+        if (!selectionEligibleForRewrite(selected)) return;
+        aiRewriting = true;
+        try {
+            const rewritten = await rewriteComposeSelection(selected, tone);
+            if (!rewritten) {
+                showToast('error', 'Couldn\'t rewrite that — carry on.');
+                return;
+            }
+            const htmlFrag = rewritten.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean)
+                .map((p) => `<p>${escapeHtml(p).replace(/\n/g, '<br>')}</p>`).join('')
+                || `<p>${escapeHtml(rewritten).replace(/\n/g, '<br>')}</p>`;
+            if (editorApi.replaceSelectionWithHtml) {
+                editorApi.replaceSelectionWithHtml(htmlFrag);
+            } else if (editorApi.insertHtml) {
+                editorApi.insertHtml(htmlFrag);
+            }
+            draftSparkle.flash();
+        } catch {
+            showToast('error', 'Couldn\'t rewrite that — carry on.');
+        } finally {
+            aiRewriting = false;
+        }
+    }
+
+    const showComposeRewriteBar = $derived(
+        settings.aiFeatures
+        && settings.aiRewriteCompose
+        && aiAvailable()
+        && selectionEligibleForRewrite(composeSelectionPlain)
+    );
 
     // The hard-off can be flipped while this window is open. Abort, hide,
     // and never re-fire: the master switch is the privacy control and a
@@ -1419,6 +1466,24 @@
             </div>
         {/if}
 
+        {#if showComposeRewriteBar}
+            <div class="compose-rewrite-bar" data-testid="compose-rewrite-bar" role="toolbar" aria-label="Rewrite selection">
+                <span class="compose-rewrite-label"><Icon name="sparkles" size={12} /> Rewrite</span>
+                {#each COMPOSE_REWRITE_TONES as tone (tone.id)}
+                    <button
+                        type="button"
+                        class="compose-rewrite-btn"
+                        disabled={aiRewriting}
+                        onclick={() => void rewriteSelectedText(tone.id)}
+                        data-testid={`compose-rewrite-${tone.id}`}
+                    >
+                        {tone.label}
+                    </button>
+                {/each}
+                {#if aiRewriting}<span class="spinner small"></span>{/if}
+            </div>
+        {/if}
+
         <div
             class="body"
             class:reply-mode={replyMode === 'reply' || replyMode === 'replyAll'}
@@ -1440,6 +1505,7 @@
             <RichEditor
                 bind:html={body}
                 api={editorApi}
+                onSelectionChange={(plain) => { composeSelectionPlain = plain; }}
                 ghostPlaceholder={replyMode === 'reply' || replyMode === 'replyAll'}
                 placeholder={replyMode === 'forward' ? 'Add a note above the forwarded message…'
                     : (replyMode === 'reply' || replyMode === 'replyAll')
@@ -2120,6 +2186,42 @@
         color: var(--bg-base);
     }
     .draft-sugg-btn.accept:hover { filter: brightness(1.06); }
+    .compose-rewrite-bar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+        margin: 0 12px 8px;
+        padding: 8px 10px;
+        border-radius: var(--radius-sm);
+        background: var(--accent-soft);
+        border: 1px solid var(--border-subtle);
+    }
+    .compose-rewrite-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--accent-text);
+        margin-right: 4px;
+    }
+    .compose-rewrite-btn {
+        font-size: 12px;
+        padding: 4px 10px;
+        border-radius: var(--radius-xs);
+        border: 1px solid var(--border-subtle);
+        background: var(--bg-base);
+        color: var(--text-primary);
+        cursor: pointer;
+    }
+    .compose-rewrite-btn:hover:not(:disabled) {
+        background: var(--bg-hover);
+    }
+    .compose-rewrite-btn:disabled {
+        opacity: 0.6;
+        cursor: default;
+    }
     .spinner.small { width: 12px; height: 12px; border-width: 2px; }
     /* Pre-send modal — sits over the compose pane. Held back from
        scary phishing-overlay treatment because it's just a friendly
