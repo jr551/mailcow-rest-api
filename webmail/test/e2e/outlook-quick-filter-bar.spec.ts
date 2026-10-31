@@ -27,6 +27,7 @@ test('Outlook Filter menu: unread, flagged, has files, to me, mentions', async (
 
     await login(page);
     await expect(page.getByTestId('quick-filter-bar')).toBeVisible();
+    await expect(page.getByTestId('msg-row-1001')).toBeVisible();
 
     await page.getByTestId('quick-filter-trigger').click();
     await expect(page.getByTestId('quick-filter-menu')).toBeVisible();

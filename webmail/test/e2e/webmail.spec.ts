@@ -250,12 +250,12 @@ test('compose modal: Send button is disabled when SMTP is not configured', async
     await expect(page.getByTestId('compose-status')).toBeVisible();
     await page.screenshot({ path: `${SCREEN_DIR}/07-compose.png`, fullPage: true });
 
-    // Send is disabled with a tooltip + label flips to "Save draft".
+    // Without SMTP, primary action saves to Drafts (slice 14).
     const send = page.getByTestId('compose-send');
-    await expect(send).toBeDisabled();
+    await expect(send).toBeEnabled();
     await expect(send).toContainText(/Save draft/);
     const tooltip = await send.getAttribute('title');
-    expect(tooltip).toMatch(/SMTP not configured|isn't enabled/i);
+    expect(tooltip).toMatch(/Save draft to Drafts folder/i);
     await page.screenshot({ path: `${SCREEN_DIR}/08-compose-disabled.png`, fullPage: true });
 });
 
@@ -1121,6 +1121,7 @@ test('filter chips switch between All / Unread / Starred', async ({ page }) => {
     await page.addInitScript(() => localStorage.setItem('webmail.theme', 'dark'));
     await login(page);
     await expect(page.getByTestId('filter-chips')).toBeVisible();
+    await expect(page.getByTestId('msg-row-1001')).toBeVisible();
     await page.getByTestId('quick-filter-trigger').click();
     await page.click('[data-testid=filter-unread]');
     // Only the unread row should remain (the Concierge "Welcome" message).
