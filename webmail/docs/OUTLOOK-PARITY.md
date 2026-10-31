@@ -24,7 +24,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 | **AI features** | Master switch **`aiFeatures`**; defaults **off** for new profiles; every AI entry point hidden when off | Low — opt-in provider config remains in Settings |
 | **People / VIP** | VIP list in Settings; local address book | Medium vs OWA People app |
 | **Deep links** | `#mail?folder=…&uid=…` hash URLs + **Copy link** in reading pane | Low–medium: no server-side permalink API yet |
-| **Accessibility** | Landmark regions + skip link (slice 17); mobile landmarks + skip link (slice 33) | Low–medium: deeper mobile focus-order polish |
+| **Accessibility** | Landmark regions + skip link (slice 17); mobile landmarks + skip link (slice 33); mobile compose landmarks + initial focus (slice 38) | Low–medium: deeper mobile focus-order polish |
 
 ---
 
@@ -445,19 +445,19 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 39 (this PR)
+## Slice 38 (this PR)
 
-- **`mobile-compose-discard.ts`**: discard sheet copy + **`mobileComposeNeedsDiscardConfirm`** helper.
-- **`ComposeView.svelte`**: hardware-back guard overlay; **Close** / back with draft content opens **Keep editing / Save draft / Discard** sheet.
-- **`SettingsView.svelte`**: Compose discard confirmation docs.
-- Tests: unit (`mobile-compose-discard.test.mjs`) + Playwright (`outlook-mobile-compose-discard.spec.ts`) against API mocks.
-- Screenshot: `webmail/docs/assets/outlook-slice39/69-mobile-compose-discard-sheet.png`.
+- **`mobile-compose-landmarks.ts`**: compose landmark id, OWA-style region labels, focus helpers.
+- **`ComposeView.svelte`**: **Compose message** `<main>` landmark, labelled field/action regions, initial focus on **To**, focus moves into Send options / Schedule send sheets.
+- **`SettingsView.svelte`**: Accessibility docs for compose regions.
+- Tests: unit (`mobile-compose-landmarks.test.mjs`) + Playwright (`outlook-mobile-compose-a11y.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice38/68-mobile-compose-to-focused.png`.
 
 ---
 
 ## Next planned slice
 
-**Smart triage / categorise** (opt-in AI), richer conversation HTML parity, or mobile compose accessibility polish (slice 38).
+**Smart triage / categorise** (opt-in AI), richer conversation HTML parity, or mobile compose discard-changes confirmation.
 
 ---
 

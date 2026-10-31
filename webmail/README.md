@@ -190,6 +190,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Mobile save draft compose](docs/assets/outlook-slice37/67-mobile-save-draft-compose.png)
 
+- **Mobile compose accessibility** — labelled **Compose message**, **Message fields**, and **Compose actions** regions; focus moves to **To** when compose opens. Documented under mobile **Settings → Accessibility**.
+
+![Mobile compose To field focused](docs/assets/outlook-slice38/68-mobile-compose-to-focused.png)
+
 - **Mobile compose discard confirmation** — closing compose or pressing hardware back with unsaved changes shows **Keep editing**, **Save draft**, and **Discard** (same overlay stack as other mobile sheets).
 
 ![Mobile compose discard sheet](docs/assets/outlook-slice39/69-mobile-compose-discard-sheet.png)
