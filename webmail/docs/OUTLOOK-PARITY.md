@@ -24,7 +24,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 | **AI features** | Master switch **`aiFeatures`**; defaults **off** for new profiles; every AI entry point hidden when off | Low — opt-in provider config remains in Settings |
 | **People / VIP** | VIP list in Settings; local address book | Medium vs OWA People app |
 | **Deep links** | `#mail?folder=…&uid=…` hash URLs + **Copy link** in reading pane | Low–medium: no server-side permalink API yet |
-| **Accessibility** | Landmark regions + skip link (slice 17); mobile landmarks + skip link (slice 33); mobile compose landmarks + initial focus (slice 38) | Low–medium: deeper mobile focus-order polish |
+| **Accessibility** | Landmark regions + skip link (slice 17); mobile landmarks + skip link (slice 33); mobile compose landmarks + initial focus (slice 38); mobile reading-pane focus on open (slice 40) | Low–medium: deeper mobile focus-order polish |
 
 ---
 
@@ -445,7 +445,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 38 (this PR)
+## Slice 38 (done in #125)
 
 - **`mobile-compose-landmarks.ts`**: compose landmark id, OWA-style region labels, focus helpers.
 - **`ComposeView.svelte`**: **Compose message** `<main>` landmark, labelled field/action regions, initial focus on **To**, focus moves into Send options / Schedule send sheets.
@@ -455,9 +455,19 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 40 (this PR)
+
+- **`mobile-mail-landmarks.ts`**: **`focusMobileReadingPaneLandmark`** helper; reading-pane row copy mentions initial focus.
+- **`MessageView.svelte`**: **Reading pane** `<main>` is focusable; full-screen message view moves focus there when a message loads (tablet embedded split unchanged).
+- **`SettingsView.svelte`**: Accessibility docs for reading-pane focus on open.
+- Tests: unit (`mobile-mail-landmarks.test.mjs`) + Playwright (`outlook-mobile-reading-focus.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice40/70-mobile-reading-pane-focused.png`.
+
+---
+
 ## Next planned slice
 
-**Smart triage / categorise** (opt-in AI), richer conversation HTML parity, or mobile compose discard-changes confirmation.
+**Smart triage / categorise** (opt-in AI), richer conversation HTML parity, or mobile compose discard confirmation (slice 39, PR #126).
 
 ---
 

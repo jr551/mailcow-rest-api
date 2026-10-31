@@ -29,10 +29,15 @@ export const MOBILE_LANDMARK_ROWS = [
     },
     {
         region: MAIL_READING_PANE_LABEL,
-        description: 'Opened message and conversation thread'
+        description: 'Opened message and conversation thread; focus moves here when you open a message'
     }
 ] as const;
 
 export function focusMobileMessageListLandmark(): void {
     document.getElementById(MAIL_MESSAGE_LIST_LANDMARK_ID)?.focus();
+}
+
+/** Move screen-reader / keyboard focus into the opened message (slice 40). */
+export function focusMobileReadingPaneLandmark(): void {
+    document.getElementById(MAIL_READING_PANE_LANDMARK_ID)?.focus();
 }

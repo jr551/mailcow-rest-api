@@ -466,6 +466,10 @@
                     {/each}
                 </ul>
                 <p class="muted small" style="margin:8px 0 0;">
+                    When you open a message on mobile, focus moves to the <strong>Reading pane</strong> landmark
+                    so screen readers land on the message body region (same pattern as compose focusing <strong>To</strong>).
+                </p>
+                <p class="muted small" style="margin:8px 0 0;">
                     When you compose on mobile, screen readers get a dedicated <strong>Compose message</strong> region
                     with labelled field and action areas; focus moves to the <strong>To</strong> field when compose opens.
                 </p>

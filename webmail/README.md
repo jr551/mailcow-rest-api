@@ -194,6 +194,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Mobile compose To field focused](docs/assets/outlook-slice38/68-mobile-compose-to-focused.png)
 
+- **Mobile reading pane focus** — opening a message moves focus to the **Reading pane** landmark (full-screen reader only; tablet split keeps list focus). Documented under mobile **Settings → Accessibility**.
+
+![Mobile reading pane focused](docs/assets/outlook-slice40/70-mobile-reading-pane-focused.png)
+
 ## Keyboard shortcuts (mail)
 
 Global shortcuts are listed under **Settings → General → Keyboard shortcuts** (press **?** in the inbox for the same list). Reading-pane placement:
