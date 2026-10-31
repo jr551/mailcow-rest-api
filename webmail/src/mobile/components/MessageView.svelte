@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { mobileState, goBack, navigate, showToast, pushOverlay } from '../lib/store.svelte';
+    import { mobileState, goBack, navigate, showToast, pushOverlay, clearMobileMessageSelection } from '../lib/store.svelte';
     import { authState, setSession } from '../../lib/auth.svelte';
     import {
         modifyFlags,
@@ -27,6 +27,17 @@
     import { effectiveTheme } from '../../lib/theme.svelte';
     import { messageIframeTheme } from '../../lib/mobile-appearance';
     import { setMobileMailShortcutHandler } from '../lib/mail-shortcut-handlers.svelte';
+
+    interface Props {
+        /** Embedded in tablet split pane — no back navigation to full-screen list. */
+        embedded?: boolean;
+    }
+    let { embedded = false }: Props = $props();
+
+    function leaveMessageView() {
+        if (embedded) clearMobileMessageSelection();
+        else goBack();
+    }
 
     const msg = $derived(mobileState.detail);
     const loading = $derived(mobileState.detailLoading);
@@ -267,7 +278,7 @@
             mobileState.messages = mobileState.messages.filter((m) => !isOpenRow(m));
             mobileState.messagesTotal = Math.max(0, mobileState.messagesTotal - 1);
             showToast('success', from === trashBox ? 'Deleted' : 'Moved to Trash');
-            goBack();
+            leaveMessageView();
         } catch {
             showToast('error', 'Failed to delete');
         }
@@ -282,7 +293,7 @@
             mobileState.messages = mobileState.messages.filter((m) => !isOpenRow(m));
             mobileState.messagesTotal = Math.max(0, mobileState.messagesTotal - 1);
             showToast('success', 'Archived');
-            goBack();
+            leaveMessageView();
         } catch {
             showToast('error', 'Failed to archive');
         }
@@ -385,12 +396,14 @@
     );
 </script>
 
-<div class="message-view">
+<div class="message-view" class:embedded>
     <header class="mheader">
-        <button type="button" class="mbtn mbtn-ghost back-btn" onclick={goBack} aria-label="Back to list">
+        {#if !embedded}
+        <button type="button" class="mbtn mbtn-ghost back-btn" onclick={leaveMessageView} aria-label="Back to list">
             <Icon name="chevronLeft" size={20} />
             <span>Back</span>
         </button>
+        {/if}
         <div class="actions">
             <button type="button" class="mbtn mbtn-ghost action-icon" onclick={toggleStar} aria-label={msg?.flags.includes('\\Flagged') ? 'Unstar' : 'Star'} title="Star">
                 <Icon name={msg?.flags.includes('\\Flagged') ? 'starFilled' : 'star'} size={18} />
@@ -410,7 +423,7 @@
         <div class="mempty">
             <Icon name="info" size={32} />
             <p>{error}</p>
-            <button class="mbtn mbtn-secondary" onclick={goBack}>Go back</button>
+            <button class="mbtn mbtn-secondary" onclick={leaveMessageView}>Go back</button>
         </div>
     {:else if msg}
         <div class="scroll-y msg-body-wrap">
@@ -617,6 +630,9 @@
         min-height: 0;
         overflow: hidden;
         background: var(--bg-base);
+    }
+    .message-view.embedded .mheader {
+        justify-content: flex-end;
     }
     .actions {
         display: flex;

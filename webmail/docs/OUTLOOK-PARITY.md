@@ -294,13 +294,23 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 23 (this PR)
+## Slice 23 (done in #110)
 
 - **`webmail/src/lib/thread-ai-summarize.ts`**: build single-message or full-thread text for `/v1/ai/summarize`.
 - **`settings.aiThreadSummary`**: default **off**; toggle in Settings → AI (requires `aiFeatures` + configured provider).
 - **`AiPanel.svelte`**: **Summarize thread** when grouping + toggle are on and the reading pane shows a multi-message stack.
 - Tests: unit (`thread-ai-summarize.test.mjs`) + Playwright (`outlook-ai-thread-summary.spec.ts`) against API mocks.
 - Screenshot: `webmail/docs/assets/outlook-slice23/53-ai-thread-summary-panel.png`.
+
+---
+
+## Slice 24 (done in #111)
+
+- **`webmail/src/lib/mobile-tablet-reading-pane.ts`**: tablet split breakpoint (768px+) and **`settings.readingPaneLayout`** axis (right = horizontal, bottom = vertical, hidden = phone full-screen).
+- **`TabletMailShell.svelte`**: list + reading pane on tablet widths; **`MessageView`** **`embedded`** mode hides back navigation.
+- **`App.svelte`**: viewport-aware shell; phone ↔ tablet transitions preserve selection.
+- Tests: unit (`mobile-tablet-reading-pane.test.mjs`) + Playwright (`outlook-mobile-tablet-reading-pane.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice24/54-tablet-split-reading-pane.png`.
 
 ---
 
@@ -316,7 +326,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ## Next planned slice
 
-**Opt-in AI draft/rewrite reply**, **tablet reading-pane layout** (slice 24), or **mobile snooze / sweep** on the action sheet.
+**Opt-in AI draft/rewrite reply**, **mobile snooze / sweep** on the action sheet, or **saved searches**.
 
 ---
 
