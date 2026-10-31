@@ -25,8 +25,8 @@ const ASSET14 = 'docs/assets/outlook-slice14';
 const ASSET15 = 'docs/assets/outlook-slice15';
 const ASSET16 = 'docs/assets/outlook-slice16';
 const ASSET17 = 'docs/assets/outlook-slice17';
-const ASSET19 = 'docs/assets/outlook-slice19';
-for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET19]) mkdirSync(d, { recursive: true });
+const ASSET18 = 'docs/assets/outlook-slice18';
+for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18]) mkdirSync(d, { recursive: true });
 
 const baseSettings = {
     aiFeatures: false,
@@ -429,6 +429,20 @@ test.describe('docs desktop (1440×900 @2x)', () => {
         await expect(page.getByTestId('mail-skip-link')).toBeFocused();
         await shot(page, `${ASSET17}/46-skip-link-focused.png`);
     });
+
+    test('slice18 follow-up flag row label', async ({ page }) => {
+        await page.addInitScript((blob) => {
+            localStorage.setItem('webmail.theme', 'light');
+            localStorage.setItem('webmail.settings.v1', blob);
+        }, seedSettings());
+        await login(page);
+        const row = page.getByTestId('msg-row-1001');
+        await row.click({ button: 'right' });
+        await page.getByTestId('ctx-follow-up-trigger').hover();
+        await page.getByTestId('ctx-follow-up-item-today').click();
+        await expect(page.getByTestId('msg-follow-up-1001')).toBeVisible();
+        await shot(page, `${ASSET18}/47-follow-up-today-row.png`);
+    });
 });
 
 test.describe('docs outlook slice 15 (compose pop-out)', () => {
@@ -461,19 +475,5 @@ test.describe('docs mobile (390×844 @2x)', () => {
         await page.click('button:has-text("Sign in")');
         await expect(page.locator('.mheader h1:has-text("INBOX")')).toBeVisible();
         await shot(page, `${DOCS}/mobile-inbox.png`);
-    });
-
-    test('slice19 mobile focused tab', async ({ page }) => {
-        await page.addInitScript((blob) => {
-            localStorage.setItem('webmail.theme', 'light');
-            localStorage.setItem('webmail.settings.v1', blob);
-        }, seedSettings({ inboxTab: 'focused' }));
-        await page.goto('/webmail/mobile/');
-        await page.fill('input[type="email"]', MOCK_USER);
-        await page.fill('input[type="password"]', 'hunter2');
-        await page.click('button:has-text("Sign in")');
-        await expect(page.getByTestId('inbox-tab-focused')).toHaveClass(/active/);
-        await expect(page.getByTestId('msg-row-1000')).not.toBeVisible();
-        await shot(page, `${ASSET19}/48-mobile-inbox-focused-tab.png`);
     });
 });

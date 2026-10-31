@@ -15,6 +15,13 @@
         remapCategoryOverlay
     } from '../lib/message-categories.svelte';
     import { hydrateMessagePinSnooze, remapPinSnoozeOverlay } from '../lib/message-pin-snooze.svelte';
+    import type { FollowUpPresetId } from '../lib/message-follow-up';
+    import {
+        hydrateMessageFollowUp,
+        setFollowUpDue,
+        clearFollowUpDue,
+        remapFollowUpOverlay
+    } from '../lib/message-follow-up.svelte';
     import { hydrateScheduledSends, processDueScheduledSends } from '../lib/scheduled-send.svelte';
     import {
         parseMailDeepLinkHash,
@@ -478,6 +485,7 @@
         onFolderRenamed(oldPath, newPath);
         remapCategoryOverlay(oldPath, newPath);
         remapPinSnoozeOverlay(oldPath, newPath);
+        remapFollowUpOverlay(oldPath, newPath);
         await refreshMailboxes();
         showToast('success', `Renamed to ${newPath}`);
     }
@@ -1129,8 +1137,41 @@
             const r = await modifyFlags(ui.selectedPath, uid, isFlagged ? { remove: ['\\Flagged'] } : { add: ['\\Flagged'] });
             li.flags = r.flags;
             if (ui.detail && ui.detail.uid === uid) ui.detail.flags = r.flags;
+            if (isFlagged) clearFollowUpDue(ui.selectedPath, uid);
+            else setFollowUpDue(ui.selectedPath, uid, 'no-date');
         } catch (err) {
             showToast('error', describe(err, 'Failed to update star'));
+        }
+    }
+
+    async function applyFollowUpFlag(uid: number, preset: FollowUpPresetId | 'clear') {
+        const li = ui.messages.find((m) => m.uid === uid);
+        if (!li) return;
+        if (preset === 'clear') {
+            clearFollowUpDue(ui.selectedPath, uid);
+            if (!li.flags.includes('\\Flagged')) return;
+            try {
+                const r = await modifyFlags(ui.selectedPath, uid, { remove: ['\\Flagged'] });
+                li.flags = r.flags;
+                if (ui.detail && ui.detail.uid === uid) ui.detail.flags = r.flags;
+                showToast('success', 'Follow-up flag cleared');
+            } catch (err) {
+                showToast('error', describe(err, 'Failed to clear flag'));
+            }
+            return;
+        }
+        setFollowUpDue(ui.selectedPath, uid, preset);
+        if (li.flags.includes('\\Flagged')) {
+            showToast('success', 'Follow-up date updated');
+            return;
+        }
+        try {
+            const r = await modifyFlags(ui.selectedPath, uid, { add: ['\\Flagged'] });
+            li.flags = r.flags;
+            if (ui.detail && ui.detail.uid === uid) ui.detail.flags = r.flags;
+            showToast('success', 'Flagged for follow-up');
+        } catch (err) {
+            showToast('error', describe(err, 'Failed to set follow-up flag'));
         }
     }
 
@@ -1864,6 +1905,7 @@
         loadAddressBook().catch(() => { /* offline / server predates the feature */ });
         hydrateMessageCategories();
         hydrateMessagePinSnooze();
+        hydrateMessageFollowUp();
         hydrateScheduledSends();
         void processDueScheduledSends();
         // Skip the probe while the tab is hidden or the browser knows it's
@@ -2466,6 +2508,7 @@
             <MessageList
                 onSelect={selectMessage}
                 onStar={toggleStar}
+                onFollowUpFlag={applyFollowUpFlag}
                 onSetCategory={setMessageCategory}
                 onUnread={toggleUnread}
                 onTrash={trashMessage}

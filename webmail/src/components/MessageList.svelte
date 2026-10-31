@@ -37,6 +37,13 @@
         tickPinSnoozeOverlay
     } from '../lib/message-pin-snooze.svelte';
     import {
+        followUpSubmenuItems,
+        followUpDueLabel,
+        getFollowUpDueMs,
+        type FollowUpPresetId
+    } from '../lib/message-follow-up';
+    import { followUpOverlay } from '../lib/message-follow-up.svelte';
+    import {
         senderAddressFromMessage,
         senderDisplayLabel,
         senderSweepConfirmText,
@@ -73,6 +80,7 @@
     interface Props {
         onSelect: (uid: number) => void;
         onStar: (uid: number) => void;
+        onFollowUpFlag?: (uid: number, preset: FollowUpPresetId | 'clear') => void;
         onSetCategory?: (uid: number, category: MessageCategoryId | null) => void;
         onUnread: (uid: number) => void;
         onTrash: (uid: number) => void;
@@ -97,7 +105,7 @@
         onBlockSender?: (uid: number, pattern?: string) => void;
     }
     let {
-        onSelect, onStar, onSetCategory, onUnread, onTrash, onArchive,
+        onSelect, onStar, onFollowUpFlag, onSetCategory, onUnread, onTrash, onArchive,
         onPageChange, onMarkFolderRead, onSummariseAndMarkRead, onLoadMore,
         effectivePageSize = 25, appendingMore = false,
         scanState = null,
@@ -677,6 +685,14 @@
         playClick();
     }
     const snoozeCtxItems = snoozeSubmenuItems();
+    const followUpCtxItems = followUpSubmenuItems();
+
+    function rowFollowUpHint(uid: number, isFlagged: boolean): string | null {
+        if (!isFlagged) return null;
+        void followUpOverlay();
+        const due = getFollowUpDueMs(followUpOverlay(), ui.selectedPath, uid);
+        return followUpDueLabel(due, pinSnoozeNow);
+    }
 
     let senderSweepBusy = $state(false);
 
@@ -1877,6 +1893,7 @@
                 {@const headMsg = t.latest}
                 {@const headIsUnread = isThread ? t.hasUnread : unread(headMsg.flags)}
                 {@const headIsStarred = isThread ? t.hasFlagged : flagged(headMsg.flags)}
+                {@const headFollowUpHint = rowFollowUpHint(headMsg.uid, headIsStarred)}
                 {@const headSender = isThread ? senderListText(t) : senderShort(headMsg.envelope.from)}
                 {@const headEmail = headMsg.envelope.from?.[0]?.address || ''}
                 {@const headName = headMsg.envelope.from?.[0]?.name || null}
@@ -1968,6 +1985,7 @@
                         data-testid={`msg-row-${headMsg.uid}`}
                         data-category={headCategory ?? ''}
                         data-pinned={headIsPinned ? 'true' : 'false'}
+                        data-follow-up={headFollowUpHint ?? ''}
                     >
                         {#if headCategory}
                             <span
@@ -2017,6 +2035,11 @@
                                 {#if headHasAttachments}
                                     <span class="row-attachment-mark" title="Has attachment" aria-label="Has attachment">
                                         <Icon name="paperclip" size={12} />
+                                    </span>
+                                {/if}
+                                {#if headFollowUpHint}
+                                    <span class="follow-up-due muted" title={headFollowUpHint} data-testid={`msg-follow-up-${headMsg.uid}`}>
+                                        {headFollowUpHint}
                                     </span>
                                 {/if}
                                 <span class="date muted">{formatDate(headMsg.internalDate || headMsg.envelope.date)}</span>
@@ -2314,12 +2337,25 @@
             <li><button type="button" role="menuitem" onclick={() => { selectRow(ctx!.uid); closeCtx(); }}>
                 <Icon name="mail" size={12} /> Open
             </button></li>
-            <li><button type="button" role="menuitem" onclick={() => { onStar(ctx!.uid); closeCtx(); }}>
-                <Icon name={isFlagged ? 'starFilled' : 'star'} size={12} /> {isFlagged ? 'Clear flag' : 'Flag for follow-up'}
-            </button></li>
             <li><button type="button" role="menuitem" onclick={() => { onTogglePin(ctx!.uid); closeCtx(); }} data-testid="ctx-pin-toggle">
                 <Icon name="pin" size={12} /> {rowPinned(ctx!.uid) ? 'Unpin' : 'Pin to top'}
             </button></li>
+            {#if onFollowUpFlag}
+                <MenuSubmenu
+                    label="Flag"
+                    icon="star"
+                    items={followUpCtxItems}
+                    onSelect={(key) => {
+                        onFollowUpFlag(ctx!.uid, key as FollowUpPresetId | 'clear');
+                        closeCtx();
+                    }}
+                    testid="ctx-follow-up"
+                />
+            {:else}
+                <li><button type="button" role="menuitem" onclick={() => { onStar(ctx!.uid); closeCtx(); }}>
+                    <Icon name={isFlagged ? 'starFilled' : 'star'} size={12} /> {isFlagged ? 'Clear flag' : 'Flag for follow-up'}
+                </button></li>
+            {/if}
             <MenuSubmenu
                 label="Snooze"
                 icon="clock"
@@ -3763,6 +3799,12 @@
     }
     .row.unread .from { font-weight: 700; }
     .date { font-size: 12px; flex: 0 0 auto; }
+    .follow-up-due {
+        font-size: 11px;
+        flex: 0 0 auto;
+        white-space: nowrap;
+        color: var(--warning, #c4750a);
+    }
     /* Paperclip glyph next to the date when bodyStructure showed at least
      * one attachment. Subtle — meant to be quickly scannable, not loud. */
     .row-attachment-mark {

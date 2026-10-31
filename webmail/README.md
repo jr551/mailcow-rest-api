@@ -121,9 +121,9 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Skip link focused](docs/assets/outlook-slice17/46-skip-link-focused.png)
 
-- **Mobile Focused / Other** — the `/webmail/mobile/` inbox uses the same deterministic Focused vs Other split as desktop (shared `inboxTab` setting). Tabs hide during search and outside INBOX.
+- **Follow-up flags** — right-click **Flag** to set **Today**, **Tomorrow**, **This week**, or **No date**; the list shows a follow-up hint (e.g. “Follow up today”). Due dates stay in this browser; `\Flagged` syncs with IMAP.
 
-![Mobile inbox Focused tab](docs/assets/outlook-slice19/48-mobile-inbox-focused-tab.png)
+![Follow-up today on message row](docs/assets/outlook-slice18/47-follow-up-today-row.png)
 
 ## Keyboard shortcuts (mail)
 

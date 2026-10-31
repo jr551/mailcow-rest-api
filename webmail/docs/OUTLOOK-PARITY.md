@@ -243,24 +243,21 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 18 (in #105)
+## Slice 18 (this PR)
 
-Follow-up flag due dates on desktop — see PR #105.
-
----
-
-## Slice 19 (this PR)
-
-- **`webmail/src/mobile/components/InboxView.svelte`**: **Focused | Other** tabs on mobile INBOX (same rules as desktop via `focused-inbox.ts`); `data-testid` row ids for e2e.
-- **`settings.inboxTab`**: shared with desktop; persists across form factors.
-- Tests: Playwright (`outlook-mobile-focused-inbox.spec.ts`) against API mocks.
-- Screenshot: `webmail/docs/assets/outlook-slice19/48-mobile-inbox-focused-tab.png`.
+- **`webmail/src/lib/message-follow-up.ts`**: OWA-style follow-up due presets (Today / Tomorrow / This week / No date).
+- **`message-follow-up.svelte.ts`**: `webmail.message-follow-up.v1` local due-date overlay; `\Flagged` on the server.
+- **`MessageList.svelte`**: **Flag** context submenu; row hint (e.g. “Follow up today”).
+- **`Layout.svelte`**: applies presets via `modifyFlags` + overlay; star toggle clears due dates.
+- **`Settings.svelte`**: General section documents follow-up flags.
+- Tests: unit (`message-follow-up.test.mjs`) + Playwright (`outlook-follow-up-flag.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice18/47-follow-up-today-row.png`.
 
 ---
 
 ## Next planned slice
 
-**Mobile conversation reader** stack, **follow-up flags** on mobile, **dark mode** polish, or opt-in **AI thread summarise**.
+**Dark mode / mobile** polish, or opt-in **AI thread summarise** (thread summary gated on `aiFeatures` + provider).
 
 ---
 
