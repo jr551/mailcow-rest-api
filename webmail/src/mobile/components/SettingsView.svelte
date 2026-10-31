@@ -27,6 +27,7 @@
     import { themeState, setTheme, effectiveTheme } from '../../lib/theme.svelte';
     import { MOBILE_THEME_OPTIONS } from '../../lib/mobile-appearance';
     import { MAIL_SKIP_LINK_TEXT, MOBILE_LANDMARK_ROWS } from '../../lib/mobile-mail-landmarks';
+    import { MOBILE_COMPOSE_LANDMARK_ROWS } from '../../lib/mobile-compose-landmarks';
 
     // Mail rules — minimal port of the desktop block. Mobile keeps to
     // contains-only conditions to avoid a deep dropdown stack on phones.
@@ -461,6 +462,15 @@
                 </p>
                 <ul class="landmark-list muted small" style="margin:0;padding-left:18px;" data-testid="mobile-settings-landmarks">
                     {#each MOBILE_LANDMARK_ROWS as row}
+                        <li><strong>{row.region}</strong> — {row.description}</li>
+                    {/each}
+                </ul>
+                <p class="muted small" style="margin:8px 0 0;">
+                    When you compose on mobile, screen readers get a dedicated <strong>Compose message</strong> region
+                    with labelled field and action areas; focus moves to the <strong>To</strong> field when compose opens.
+                </p>
+                <ul class="landmark-list muted small" style="margin:4px 0 0;padding-left:18px;" data-testid="mobile-settings-compose-landmarks">
+                    {#each MOBILE_COMPOSE_LANDMARK_ROWS as row}
                         <li><strong>{row.region}</strong> — {row.description}</li>
                     {/each}
                 </ul>

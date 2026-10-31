@@ -24,7 +24,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 | **AI features** | Master switch **`aiFeatures`**; defaults **off** for new profiles; every AI entry point hidden when off | Low — opt-in provider config remains in Settings |
 | **People / VIP** | VIP list in Settings; local address book | Medium vs OWA People app |
 | **Deep links** | `#mail?folder=…&uid=…` hash URLs + **Copy link** in reading pane | Low–medium: no server-side permalink API yet |
-| **Accessibility** | Landmark regions + skip link (slice 17); mobile landmarks + skip link (slice 33) | Low–medium: deeper mobile focus-order polish |
+| **Accessibility** | Landmark regions + skip link (slice 17); mobile landmarks + skip link (slice 33); mobile compose landmarks + initial focus (slice 38) | Low–medium: deeper mobile focus-order polish |
 
 ---
 
@@ -434,7 +434,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 37 (this PR)
+## Slice 37 (done in #124)
 
 - **`mobile-compose-save-draft.ts`**: toast copy + plain-text → draft HTML helper.
 - **`compose-save-draft.svelte.ts`**: **`saveMobileComposeDraft`** via shared `buildComposeDraftRfc822` / `appendRawMessage` (same as desktop slice 14).
@@ -445,9 +445,19 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 38 (this PR)
+
+- **`mobile-compose-landmarks.ts`**: compose landmark id, OWA-style region labels, focus helpers.
+- **`ComposeView.svelte`**: **Compose message** `<main>` landmark, labelled field/action regions, initial focus on **To**, focus moves into Send options / Schedule send sheets.
+- **`SettingsView.svelte`**: Accessibility docs for compose regions.
+- Tests: unit (`mobile-compose-landmarks.test.mjs`) + Playwright (`outlook-mobile-compose-a11y.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice38/68-mobile-compose-to-focused.png`.
+
+---
+
 ## Next planned slice
 
-**Smart triage / categorise** (opt-in AI), richer conversation HTML parity, or mobile compose accessibility polish.
+**Smart triage / categorise** (opt-in AI), richer conversation HTML parity, or mobile compose discard-changes confirmation.
 
 ---
 

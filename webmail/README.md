@@ -190,6 +190,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Mobile save draft compose](docs/assets/outlook-slice37/67-mobile-save-draft-compose.png)
 
+- **Mobile compose accessibility** — labelled **Compose message**, **Message fields**, and **Compose actions** regions; focus moves to **To** when compose opens. Documented under mobile **Settings → Accessibility**.
+
+![Mobile compose To field focused](docs/assets/outlook-slice38/68-mobile-compose-to-focused.png)
+
 ## Keyboard shortcuts (mail)
 
 Global shortcuts are listed under **Settings → General → Keyboard shortcuts** (press **?** in the inbox for the same list). Reading-pane placement:

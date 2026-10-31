@@ -44,7 +44,8 @@ const ASSET34 = 'docs/assets/outlook-slice34';
 const ASSET35 = 'docs/assets/outlook-slice35';
 const ASSET36 = 'docs/assets/outlook-slice36';
 const ASSET37 = 'docs/assets/outlook-slice37';
-for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET20, ASSET22, ASSET23, ASSET24, ASSET25, ASSET26, ASSET27, ASSET28, ASSET29, ASSET30, ASSET31, ASSET32, ASSET33, ASSET34, ASSET35, ASSET36, ASSET37]) mkdirSync(d, { recursive: true });
+const ASSET38 = 'docs/assets/outlook-slice38';
+for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET20, ASSET22, ASSET23, ASSET24, ASSET25, ASSET26, ASSET27, ASSET28, ASSET29, ASSET30, ASSET31, ASSET32, ASSET33, ASSET34, ASSET35, ASSET36, ASSET37, ASSET38]) mkdirSync(d, { recursive: true });
 
 const baseSettings = {
     aiFeatures: false,
@@ -867,6 +868,21 @@ test.describe('docs mobile (390×844 @2x)', () => {
         await expect(page.getByTestId('compose-save-draft')).toBeEnabled();
         await settleForScreenshot(page);
         await shot(page, `${ASSET37}/67-mobile-save-draft-compose.png`);
+    });
+
+    test('slice38 mobile compose To field focused', async ({ page }) => {
+        await page.addInitScript((blob) => {
+            localStorage.setItem('webmail.theme', 'light');
+            localStorage.setItem('webmail.settings.v1', blob);
+        }, seedSettings({ undoSendSeconds: 0, preSendCheck: false }));
+        await page.goto('/webmail/mobile/');
+        await page.fill('input[type="email"]', MOCK_USER);
+        await page.fill('input[type="password"]', 'hunter2');
+        await page.click('button:has-text("Sign in")');
+        await page.getByTestId('compose-btn').click();
+        await expect(page.locator('[data-testid="compose-to"]')).toBeFocused();
+        await expect(page.getByTestId('mobile-compose-landmark')).toBeVisible();
+        await shot(page, `${ASSET38}/68-mobile-compose-to-focused.png`);
     });
 });
 
