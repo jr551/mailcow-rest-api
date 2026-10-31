@@ -137,6 +137,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Mobile Settings dark theme](docs/assets/outlook-slice22/52-mobile-settings-dark-theme.png)
 
+- **Tablet reading pane** — at **768px+** width, `/webmail/mobile/` docks the message list and reading pane side-by-side (or stacked when **Reading pane → Bottom**), using the same **`readingPaneLayout`** setting as desktop. **Hide** keeps phone-style full-screen reading.
+
+![Tablet split reading pane](docs/assets/outlook-slice24/54-tablet-split-reading-pane.png)
+
 ## Keyboard shortcuts (mail)
 
 Global shortcuts are listed under **Settings → General → Keyboard shortcuts** (press **?** in the inbox for the same list). Reading-pane placement:

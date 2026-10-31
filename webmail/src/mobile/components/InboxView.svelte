@@ -36,6 +36,8 @@
     import LatencyChip from '../../components/LatencyChip.svelte';
     import { playClick } from '../../lib/sounds.svelte';
     import { findThreadForUid } from '../../lib/conversation-view';
+    import { shouldUseMobileTabletSplit } from '../../lib/mobile-tablet-reading-pane';
+    import { getMobileViewportWidth } from '../lib/viewport.svelte';
 
     let searchInput = $state('');
     let searchDebounce: ReturnType<typeof setTimeout> | null = null;
@@ -219,7 +221,9 @@
             mobileState.selectedPath = msg.mailbox;
         }
         const path = mobileState.selectedPath;
-        navigate('message');
+        if (!shouldUseMobileTabletSplit(settings.readingPaneLayout, getMobileViewportWidth())) {
+            navigate('message');
+        }
         try {
             const fresh = await getMessage(path, uid);
             mobileState.detail = fresh;
@@ -810,6 +814,7 @@
                         class:danger-2={dlevel === 2}
                         class:danger-3={dlevel === 3}
                         class:danger-4={dlevel === 4}
+                        class:selected={mobileState.selectedUid === msg.uid}
                         class:rule-running={ruleAnimUids.has(msg.uid)}
                         class:rule-popping={ruleDoneUids.has(msg.uid)}
                     >
@@ -1000,6 +1005,10 @@
         border-bottom: 0.5px solid var(--border-subtle);
         transition: background-color 80ms;
         min-height: 68px;
+    }
+    .msg-row.selected {
+        background: color-mix(in srgb, var(--accent) 12%, var(--bg-surface));
+        box-shadow: inset 3px 0 0 var(--accent);
     }
     .msg-row.danger-4 { animation: danger-pulse-4 2.2s ease-in-out infinite; }
     .msg-row.danger-3 { animation: danger-pulse-3 2.6s ease-in-out infinite; }

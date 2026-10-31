@@ -29,7 +29,8 @@ const ASSET18 = 'docs/assets/outlook-slice18';
 const ASSET19 = 'docs/assets/outlook-slice19';
 const ASSET20 = 'docs/assets/outlook-slice20';
 const ASSET22 = 'docs/assets/outlook-slice22';
-for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET20, ASSET22]) mkdirSync(d, { recursive: true });
+const ASSET24 = 'docs/assets/outlook-slice24';
+for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET20, ASSET22, ASSET24]) mkdirSync(d, { recursive: true });
 
 const baseSettings = {
     aiFeatures: false,
@@ -519,5 +520,24 @@ test.describe('docs mobile (390×844 @2x)', () => {
         await page.getByTestId('mobile-theme-dark').click();
         await expect(page.getByTestId('mobile-theme-dark')).toHaveClass(/active/);
         await shot(page, `${ASSET22}/52-mobile-settings-dark-theme.png`);
+    });
+});
+
+test.describe('docs tablet mobile (834×1194 @2x)', () => {
+    test.use({ viewport: { width: 834, height: 1194 }, deviceScaleFactor: 2 });
+
+    test('slice24 tablet split reading pane', async ({ page }) => {
+        await page.addInitScript((blob) => {
+            localStorage.setItem('webmail.theme', 'light');
+            localStorage.setItem('webmail.settings.v1', blob);
+        }, seedSettings({ readingPaneLayout: 'right' }));
+        await page.goto('/webmail/mobile/');
+        await page.fill('input[type="email"]', MOCK_USER);
+        await page.fill('input[type="password"]', 'hunter2');
+        await page.click('button:has-text("Sign in")');
+        await expect(page.getByTestId('tablet-mail-split')).toBeVisible();
+        await page.getByTestId('msg-row-1001').click();
+        await expect(page.locator('.message-view.embedded')).toBeVisible();
+        await shot(page, `${ASSET24}/54-tablet-split-reading-pane.png`);
     });
 });

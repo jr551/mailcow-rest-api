@@ -284,7 +284,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 22 (this PR)
+## Slice 22 (done in #109)
 
 - **`webmail/src/lib/mobile-appearance.ts`**: mobile theme mode list + **`messageIframeTheme`** helper (uses `effectiveTheme()`, not `html.dark`).
 - **`SettingsView.svelte`**: **Theme** segmented control (Auto / Light / Dark), shared `webmail.theme` with desktop.
@@ -294,9 +294,19 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 24 (this PR)
+
+- **`webmail/src/lib/mobile-tablet-reading-pane.ts`**: tablet split breakpoint (768px+) and **`settings.readingPaneLayout`** axis (right = horizontal, bottom = vertical, hidden = phone full-screen).
+- **`TabletMailShell.svelte`**: list + reading pane on tablet widths; **`MessageView`** **`embedded`** mode hides back navigation.
+- **`App.svelte`**: viewport-aware shell; phone ↔ tablet transitions preserve selection.
+- Tests: unit (`mobile-tablet-reading-pane.test.mjs`) + Playwright (`outlook-mobile-tablet-reading-pane.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice24/54-tablet-split-reading-pane.png`.
+
+---
+
 ## Next planned slice
 
-**Opt-in AI thread summarise** (gated on `aiFeatures` + provider), **mobile reading-pane layout** for tablet widths, or **mobile keyboard shortcuts** help sheet.
+**Opt-in AI thread summarise** (gated on `aiFeatures` + provider), **mobile keyboard shortcuts** help sheet, or **opt-in AI draft/rewrite reply**.
 
 ---
 
