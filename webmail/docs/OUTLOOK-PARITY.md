@@ -434,6 +434,17 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 37 (done in #124)
+
+- **`mobile-compose-save-draft.ts`**: toast copy + plain-text → draft HTML helper.
+- **`compose-save-draft.svelte.ts`**: **`saveMobileComposeDraft`** via shared `buildComposeDraftRfc822` / `appendRawMessage` (same as desktop slice 14).
+- **`ComposeView.svelte`**: **Save draft** in the compose header, **Ctrl+S**, SMTP-off hint, **Send** split (slice 36) when SMTP is enabled.
+- **`SettingsView.svelte`**: Compose **Save draft** documentation.
+- Tests: unit (`mobile-compose-save-draft.test.mjs`) + Playwright (`outlook-mobile-save-draft.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice37/67-mobile-save-draft-compose.png`.
+
+---
+
 ## Slice 38 (this PR)
 
 - **`mobile-compose-landmarks.ts`**: compose landmark id, OWA-style region labels, focus helpers.
@@ -446,7 +457,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ## Next planned slice
 
-**Smart triage / categorise** (opt-in AI), richer conversation HTML parity, or mobile explicit save draft UX (slice 37).
+**Smart triage / categorise** (opt-in AI), richer conversation HTML parity, or mobile compose discard-changes confirmation.
 
 ---
 

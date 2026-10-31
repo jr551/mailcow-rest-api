@@ -186,6 +186,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Mobile schedule send dialog](docs/assets/outlook-slice36/66-mobile-schedule-send-dialog.png)
 
+- **Mobile save draft** — explicit **Save draft** in compose (and **Ctrl+S** with a hardware keyboard). Appends RFC822 to IMAP **Drafts** with the `\\Draft` flag; works when SMTP send is disabled.
+
+![Mobile save draft compose](docs/assets/outlook-slice37/67-mobile-save-draft-compose.png)
+
 - **Mobile compose accessibility** — labelled **Compose message**, **Message fields**, and **Compose actions** regions; focus moves to **To** when compose opens. Documented under mobile **Settings → Accessibility**.
 
 ![Mobile compose To field focused](docs/assets/outlook-slice38/68-mobile-compose-to-focused.png)
