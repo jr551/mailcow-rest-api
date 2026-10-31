@@ -142,6 +142,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Tablet split reading pane](docs/assets/outlook-slice24/54-tablet-split-reading-pane.png)
 
+- **Mobile keyboard shortcuts (external keyboard)** — press **?** in the inbox (or **Settings → Keyboard shortcuts**) for an OWA-style chord list. **J** / **K**, **Enter**, **N**, **E**, **/**, and reply keys work on tablet or phone with a Bluetooth keyboard; touch-only use is unchanged.
+
+![Mobile keyboard shortcuts help](docs/assets/outlook-slice25/55-mobile-keyboard-shortcuts-help.png)
+
 - **Mobile Snooze & Sweep** — long-press a message for **Snooze** presets (same local overlay as desktop) or **Sweep** bulk actions for the sender (delete all / keep latest / archive all).
 
 ![Mobile snooze menu](docs/assets/outlook-slice26/56-mobile-snooze-menu.png)

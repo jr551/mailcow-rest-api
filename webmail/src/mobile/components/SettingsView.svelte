@@ -405,6 +405,23 @@
                 <Toggle checked={settings.groupThreads} label="Group threads" onToggle={() => setGroupThreads(!settings.groupThreads)} />
             </div>
             <div class="ios-row">
+                <button
+                    type="button"
+                    class="btn btn-secondary"
+                    style="width:100%;"
+                    data-testid="mobile-settings-keyboard-shortcuts"
+                    onclick={() => window.dispatchEvent(new Event('webmail:mobile-show-shortcut-help'))}
+                >
+                    <Icon name="monitor" size={16} /> Keyboard shortcuts
+                </button>
+            </div>
+            <div class="ios-row">
+                <div class="toggle-info">
+                    <span class="row-label">External keyboard</span>
+                    <span class="muted small">Press <strong>?</strong> in the inbox for the shortcut list (tablet or Bluetooth keyboard).</span>
+                </div>
+            </div>
+            <div class="ios-row">
                 <div class="toggle-info">
                     <span class="row-label">Focused inbox</span>
                     <span class="muted small">INBOX uses Focused and Other tabs (same as desktop). Your last tab is remembered.</span>

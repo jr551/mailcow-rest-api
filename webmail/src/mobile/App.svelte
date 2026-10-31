@@ -3,7 +3,7 @@
     import { probeCapabilities } from '../lib/settings.svelte';
     import { initImapSync } from '../lib/ai-threads.svelte';
     import { doctor, installErrorDoctor } from '../lib/error-doctor.svelte';
-    import { mobileState, navigate, installAndroidBackHandler, resetMobileState } from './lib/store.svelte';
+    import { mobileState, navigate, goBack, installAndroidBackHandler, resetMobileState } from './lib/store.svelte';
     import { setAppBadge, onResume } from './lib/native-bridge';
     import { onMount } from 'svelte';
     import LoginView from './components/LoginView.svelte';
@@ -17,11 +17,16 @@
     import BottomNav from './components/BottomNav.svelte';
     import BackgroundTaskFloater from '../components/BackgroundTaskFloater.svelte';
     import PwaUpdatePrompt from '../components/PwaUpdatePrompt.svelte';
+    import MobileMailShortcutHelp from './components/MobileMailShortcutHelp.svelte';
     import { settings, setTesseractOcrInstalled, setPhishingScanOcrInline } from '../lib/settings.svelte';
     import { shouldUseMobileTabletSplit } from '../lib/mobile-tablet-reading-pane';
     import { getMobileViewportWidth } from './lib/viewport.svelte';
     import TabletMailShell from './components/TabletMailShell.svelte';
     import { warmupTesseract } from '../lib/tesseract-ocr';
+    import { resolveMobileMailShortcut } from '../lib/mobile-mail-keyboard-shortcuts';
+    import { dispatchMobileMailShortcut } from './lib/mail-shortcut-handlers.svelte';
+
+    let mobileShortcutHelpOpen = $state(false);
 
     const views: Record<string, any> = {
         inbox: InboxView,
@@ -94,12 +99,15 @@
         const stopResume = onResume(() => { mobileState.resumeTick++; });
         handleLaunchIntent();
         autoActivateOcr();
+        const showShortcuts = () => { mobileShortcutHelpOpen = true; };
+        window.addEventListener('webmail:mobile-show-shortcut-help', showShortcuts);
         // Settings + trusted-senders sync from the hidden IMAP folder.
         import('../lib/settings-sync').then((m) => m.startSync()).catch(() => { /* */ });
         return () => {
             stop();
             stopBack();
             stopResume();
+            window.removeEventListener('webmail:mobile-show-shortcut-help', showShortcuts);
         };
     });
 
@@ -191,7 +199,59 @@
     });
 
     installErrorDoctor();
+
+    function typingInField(target: EventTarget | null): boolean {
+        if (!target || !(target instanceof HTMLElement)) return false;
+        if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT') return true;
+        return target.isContentEditable;
+    }
+
+    async function onMobileMailKey(e: KeyboardEvent) {
+        if (!authState.activeUser || e.defaultPrevented) return;
+        if (typingInField(e.target)) {
+            if (e.key === 'Escape' && mobileShortcutHelpOpen) {
+                mobileShortcutHelpOpen = false;
+                e.preventDefault();
+            }
+            return;
+        }
+        if (e.key === 'Escape') {
+            if (mobileShortcutHelpOpen) {
+                mobileShortcutHelpOpen = false;
+                e.preventDefault();
+                return;
+            }
+            if (mobileState.view === 'message') {
+                e.preventDefault();
+                goBack();
+                return;
+            }
+            if (mobileState.view === 'compose') return;
+        }
+        if (mobileState.view === 'compose' || mobileState.view === 'ai') return;
+
+        const action = resolveMobileMailShortcut(e);
+        if (!action) return;
+
+        if (action === 'show-help') {
+            e.preventDefault();
+            mobileShortcutHelpOpen = true;
+            return;
+        }
+        if (action === 'compose-new') {
+            e.preventDefault();
+            mobileState.composeReplyTo = null;
+            mobileState.composeMode = 'new';
+            navigate('compose');
+            return;
+        }
+
+        e.preventDefault();
+        await dispatchMobileMailShortcut(action);
+    }
 </script>
+
+<svelte:window onkeydown={onMobileMailKey} />
 
 {#if !authState.activeUser}
     <LoginView />
@@ -213,7 +273,7 @@
 {/if}
 
 {#if mobileState.toast}
-    <div class="mtoast {mobileState.toast.kind}" role={mobileState.toast.kind === 'error' ? 'alert' : 'status'} aria-live={mobileState.toast.kind === 'error' ? 'assertive' : 'polite'}>
+    <div class="mtoast {mobileState.toast.kind}" data-testid="mobile-toast" role={mobileState.toast.kind === 'error' ? 'alert' : 'status'} aria-live={mobileState.toast.kind === 'error' ? 'assertive' : 'polite'}>
         {mobileState.toast.message}
     </div>
 {/if}
@@ -226,6 +286,7 @@
 {#if authState.activeUser}
     <BackgroundTaskFloater />
 {/if}
+<MobileMailShortcutHelp open={mobileShortcutHelpOpen} onClose={() => (mobileShortcutHelpOpen = false)} />
 <PwaUpdatePrompt />
 
 <style>
