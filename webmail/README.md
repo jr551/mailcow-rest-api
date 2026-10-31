@@ -194,9 +194,9 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Mobile compose To field focused](docs/assets/outlook-slice38/68-mobile-compose-to-focused.png)
 
-- **Mobile reading pane focus** — opening a message moves focus to the **Reading pane** landmark (full-screen reader only; tablet split keeps list focus). Documented under mobile **Settings → Accessibility**.
+- **Mobile compose discard confirmation** — closing compose or pressing hardware back with unsaved changes shows **Keep editing**, **Save draft**, and **Discard** (same overlay stack as other mobile sheets).
 
-![Mobile reading pane focused](docs/assets/outlook-slice40/70-mobile-reading-pane-focused.png)
+![Mobile compose discard sheet](docs/assets/outlook-slice39/69-mobile-compose-discard-sheet.png)
 
 ## Keyboard shortcuts (mail)
 

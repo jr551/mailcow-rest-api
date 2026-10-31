@@ -18,6 +18,14 @@
     import { scheduleMobileUndoSend } from '../lib/compose-undo-send.svelte';
     import { composeDraftHasContent } from '../../lib/compose-draft';
     import { saveMobileComposeDraft } from '../lib/compose-save-draft.svelte';
+    import {
+        MOBILE_COMPOSE_DISCARD_BODY,
+        MOBILE_COMPOSE_DISCARD_CONFIRM,
+        MOBILE_COMPOSE_DISCARD_KEEP,
+        MOBILE_COMPOSE_DISCARD_SAVE,
+        MOBILE_COMPOSE_DISCARD_TITLE,
+        mobileComposeNeedsDiscardConfirm
+    } from '../../lib/mobile-compose-discard';
     import { ReplySuggest, DraftSparkle, htmlToPlainText } from '../../lib/reply-suggest.svelte';
     import { addressBook } from '../../lib/address-book.svelte';
     import Icon from '../../components/Icon.svelte';
@@ -117,6 +125,83 @@
     function closeScheduleSheet() {
         scheduleSheetOpen = false;
         if (scheduleDispose) { scheduleDispose(); scheduleDispose = null; }
+    }
+
+    let discardSheetOpen = $state(false);
+    let discardSheetDispose: (() => void) | null = null;
+    let composeBackDispose: (() => void) | null = null;
+
+    function registerComposeBackGuard() {
+        if (composeBackDispose) return;
+        composeBackDispose = pushOverlay('compose-leave-guard', () => {
+            composeBackDispose = null;
+            if (discardSheetOpen) {
+                closeDiscardSheet({ rearmGuard: true, fromHistoryPop: true });
+                return;
+            }
+            if (mobileComposeNeedsDiscardConfirm(canSaveDraft)) {
+                openDiscardSheet();
+            } else {
+                goBack();
+            }
+        });
+    }
+
+    function unregisterComposeBackGuard() {
+        if (composeBackDispose) {
+            composeBackDispose();
+            composeBackDispose = null;
+        }
+    }
+
+    function openDiscardSheet() {
+        if (discardSheetOpen) return;
+        discardSheetOpen = true;
+        discardSheetDispose = pushOverlay('compose-discard-confirm', () => {
+            closeDiscardSheet({ rearmGuard: true, fromHistoryPop: true });
+        });
+        queueMicrotask(() => {
+            document.querySelector<HTMLElement>('[data-testid="compose-discard-keep"]')?.focus();
+        });
+    }
+
+    function closeDiscardSheet(opts: { rearmGuard?: boolean; fromHistoryPop?: boolean } = {}) {
+        const { rearmGuard = true, fromHistoryPop = false } = opts;
+        discardSheetOpen = false;
+        if (discardSheetDispose) {
+            if (!fromHistoryPop) dropOverlay('compose-discard-confirm');
+            discardSheetDispose = null;
+        }
+        if (rearmGuard) registerComposeBackGuard();
+    }
+
+    function keepEditingCompose() {
+        closeDiscardSheet();
+    }
+
+    function confirmDiscardCompose() {
+        closeDiscardSheet({ rearmGuard: false });
+        dropOverlay('compose-leave-guard');
+        composeBackDispose = null;
+        const prev = mobileState.previousView;
+        mobileState.previousView = mobileState.view;
+        mobileState.view = prev;
+    }
+
+    async function saveDraftAndLeave() {
+        closeDiscardSheet({ rearmGuard: false });
+        dropOverlay('compose-leave-guard');
+        composeBackDispose = null;
+        await saveDraft({ close: true });
+    }
+
+    function requestLeaveCompose() {
+        if (!mobileComposeNeedsDiscardConfirm(canSaveDraft)) {
+            unregisterComposeBackGuard();
+            goBack();
+            return;
+        }
+        openDiscardSheet();
     }
 
     function buildSendPayload() {
@@ -305,7 +390,7 @@
     }
 
     function handleClose() {
-        goBack();
+        requestLeaveCompose();
     }
 
     async function saveDraft(opts: { close?: boolean } = {}) {
@@ -420,6 +505,7 @@
     });
 
     onMount(() => {
+        registerComposeBackGuard();
         const t = requestAnimationFrame(() => focusMobileComposeToField());
         function onKey(e: KeyboardEvent) {
             if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
@@ -429,6 +515,7 @@
         }
         window.addEventListener('keydown', onKey);
         return () => {
+            unregisterComposeBackGuard();
             cancelAnimationFrame(t);
             window.removeEventListener('keydown', onKey);
         };
@@ -755,6 +842,48 @@
     </div>
 {/if}
 
+{#if discardSheetOpen}
+    <div class="sheet-backdrop" role="presentation" onclick={keepEditingCompose}></div>
+    <div
+        class="picker-sheet slide-up discard-sheet"
+        role="alertdialog"
+        aria-labelledby="mobile-compose-discard-title"
+        aria-describedby="mobile-compose-discard-body"
+        data-testid="compose-discard-dialog"
+    >
+        <div class="picker-header">
+            <h2 id="mobile-compose-discard-title">{MOBILE_COMPOSE_DISCARD_TITLE}</h2>
+            <button type="button" class="mbtn mbtn-ghost" aria-label="Close" onclick={keepEditingCompose}>
+                <Icon name="close" size={18} />
+            </button>
+        </div>
+        <div class="discard-body">
+            <p id="mobile-compose-discard-body" class="muted small">{MOBILE_COMPOSE_DISCARD_BODY}</p>
+            <div class="discard-actions">
+                <button
+                    type="button"
+                    class="mbtn mbtn-secondary"
+                    data-testid="compose-discard-keep"
+                    onclick={keepEditingCompose}
+                >{MOBILE_COMPOSE_DISCARD_KEEP}</button>
+                <button
+                    type="button"
+                    class="mbtn mbtn-secondary"
+                    data-testid="compose-discard-save"
+                    disabled={draftSaving || !canSaveDraft}
+                    onclick={() => void saveDraftAndLeave()}
+                >{MOBILE_COMPOSE_DISCARD_SAVE}</button>
+                <button
+                    type="button"
+                    class="mbtn mbtn-primary discard-confirm"
+                    data-testid="compose-discard-confirm"
+                    onclick={confirmDiscardCompose}
+                >{MOBILE_COMPOSE_DISCARD_CONFIRM}</button>
+            </div>
+        </div>
+    </div>
+{/if}
+
 <style>
     .compose-view {
         flex: 1;
@@ -1066,6 +1195,23 @@
         justify-content: flex-end;
         gap: 10px;
         margin-top: 4px;
+    }
+    .discard-sheet { max-height: 70vh; }
+    .discard-body {
+        padding: 0 16px 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+    }
+    .discard-actions {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+    }
+    .discard-actions .mbtn { width: 100%; justify-content: center; }
+    .discard-confirm {
+        background: var(--danger, #c50f1f);
+        border-color: var(--danger, #c50f1f);
     }
 
     /* AI reply suggestion strip — sits between the header fields and the

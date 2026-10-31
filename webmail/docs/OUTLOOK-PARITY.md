@@ -455,6 +455,16 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 39 (done in #126)
+
+- **`mobile-compose-discard.ts`**: unsaved-change detection, OWA-style discard copy.
+- **`ComposeView.svelte`**: **Keep editing**, **Save draft**, and **Discard** sheet when closing compose or hardware back with unsaved content; shares overlay stack with other mobile sheets.
+- **`SettingsView.svelte`**: Compose section documents discard confirmation.
+- Tests: unit (`mobile-compose-discard.test.mjs`) + Playwright (`outlook-mobile-compose-discard.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice39/69-mobile-compose-discard-sheet.png`.
+
+---
+
 ## Slice 40 (this PR)
 
 - **`mobile-mail-landmarks.ts`**: **`focusMobileReadingPaneLandmark`** helper; reading-pane row copy mentions initial focus.
@@ -467,7 +477,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ## Next planned slice
 
-**Smart triage / categorise** (opt-in AI), richer conversation HTML parity, or mobile compose discard confirmation (slice 39, PR #126).
+**Smart triage / categorise** (opt-in AI), richer conversation HTML parity, or desktop reading-pane initial focus on message open.
 
 ---
 

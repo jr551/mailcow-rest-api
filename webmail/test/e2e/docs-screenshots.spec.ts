@@ -45,8 +45,8 @@ const ASSET35 = 'docs/assets/outlook-slice35';
 const ASSET36 = 'docs/assets/outlook-slice36';
 const ASSET37 = 'docs/assets/outlook-slice37';
 const ASSET38 = 'docs/assets/outlook-slice38';
-const ASSET40 = 'docs/assets/outlook-slice40';
-for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET20, ASSET22, ASSET23, ASSET24, ASSET25, ASSET26, ASSET27, ASSET28, ASSET29, ASSET30, ASSET31, ASSET32, ASSET33, ASSET34, ASSET35, ASSET36, ASSET37, ASSET38, ASSET40]) mkdirSync(d, { recursive: true });
+const ASSET39 = 'docs/assets/outlook-slice39';
+for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET20, ASSET22, ASSET23, ASSET24, ASSET25, ASSET26, ASSET27, ASSET28, ASSET29, ASSET30, ASSET31, ASSET32, ASSET33, ASSET34, ASSET35, ASSET36, ASSET37, ASSET38, ASSET39]) mkdirSync(d, { recursive: true });
 
 const baseSettings = {
     aiFeatures: false,
@@ -886,18 +886,21 @@ test.describe('docs mobile (390×844 @2x)', () => {
         await shot(page, `${ASSET38}/68-mobile-compose-to-focused.png`);
     });
 
-    test('slice40 mobile reading pane focused', async ({ page }) => {
+    test('slice39 mobile compose discard sheet', async ({ page }) => {
         await page.addInitScript((blob) => {
             localStorage.setItem('webmail.theme', 'light');
             localStorage.setItem('webmail.settings.v1', blob);
-        }, seedSettings());
+        }, seedSettings({ undoSendSeconds: 0, preSendCheck: false }));
         await page.goto('/webmail/mobile/');
         await page.fill('input[type="email"]', MOCK_USER);
         await page.fill('input[type="password"]', 'hunter2');
         await page.click('button:has-text("Sign in")');
-        await page.getByTestId('msg-row-1001').click();
-        await expect(page.locator('#mail-reading-pane-landmark')).toBeFocused();
-        await shot(page, `${ASSET40}/70-mobile-reading-pane-focused.png`);
+        await page.getByTestId('compose-btn').click();
+        await page.fill('[data-testid=compose-subject]', 'Leave without sending');
+        await page.getByTestId('compose-close').click();
+        await expect(page.getByTestId('compose-discard-dialog')).toBeVisible();
+        await settleForScreenshot(page);
+        await shot(page, `${ASSET39}/69-mobile-compose-discard-sheet.png`);
     });
 });
 
