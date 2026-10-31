@@ -41,7 +41,8 @@ const ASSET31 = 'docs/assets/outlook-slice31';
 const ASSET32 = 'docs/assets/outlook-slice32';
 const ASSET33 = 'docs/assets/outlook-slice33';
 const ASSET34 = 'docs/assets/outlook-slice34';
-for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET20, ASSET22, ASSET23, ASSET24, ASSET25, ASSET26, ASSET27, ASSET28, ASSET29, ASSET30, ASSET31, ASSET32, ASSET33, ASSET34]) mkdirSync(d, { recursive: true });
+const ASSET35 = 'docs/assets/outlook-slice35';
+for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET20, ASSET22, ASSET23, ASSET24, ASSET25, ASSET26, ASSET27, ASSET28, ASSET29, ASSET30, ASSET31, ASSET32, ASSET33, ASSET34, ASSET35]) mkdirSync(d, { recursive: true });
 
 const baseSettings = {
     aiFeatures: false,
@@ -743,6 +744,56 @@ test.describe('docs mobile (390×844 @2x)', () => {
         await expect(page.getByTestId('msg-pin-mark-1018')).toBeVisible();
         await settleForScreenshot(page);
         await shot(page, `${ASSET34}/64-mobile-pinned-row.png`);
+    });
+
+    test('slice35 mobile undo send toast', async ({ page }) => {
+        await page.route(/\/health$/, (route) => {
+            route.fulfill({
+                status: 200,
+                contentType: 'application/json',
+                body: JSON.stringify({
+                    ok: true,
+                    cache: 0,
+                    pool: 0,
+                    capabilities: { ai: true, ocr: true, smtp: true, drive: true }
+                })
+            });
+        });
+        await page.route('**/imap-rest/health', (route) => {
+            route.fulfill({
+                status: 200,
+                contentType: 'application/json',
+                body: JSON.stringify({
+                    ok: true,
+                    cache: 0,
+                    pool: 0,
+                    capabilities: { ai: true, ocr: true, smtp: true, drive: true }
+                })
+            });
+        });
+        await page.route('**/v1/messages/send', (route) => {
+            route.fulfill({
+                status: 200,
+                contentType: 'application/json',
+                body: JSON.stringify({ sent: true, messageId: '<docs-mock@local>' })
+            });
+        });
+        await page.addInitScript((blob) => {
+            localStorage.setItem('webmail.theme', 'light');
+            localStorage.setItem('webmail.settings.v1', blob);
+        }, seedSettings({ undoSendSeconds: 10, preSendCheck: false }));
+        await page.goto('/webmail/mobile/');
+        await page.fill('input[type="email"]', MOCK_USER);
+        await page.fill('input[type="password"]', 'hunter2');
+        await page.click('button:has-text("Sign in")');
+        await page.getByTestId('compose-btn').click();
+        await page.fill('[data-testid=compose-to]', 'friend@example.com');
+        await page.fill('[data-testid=compose-subject]', 'Mobile undo');
+        await page.fill('[data-testid=compose-body]', 'Delayed send');
+        await page.getByTestId('compose-send').click();
+        await expect(page.getByTestId('mobile-send-undo-btn')).toBeVisible();
+        await settleForScreenshot(page);
+        await shot(page, `${ASSET35}/65-mobile-undo-send-toast.png`);
     });
 });
 

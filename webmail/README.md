@@ -178,6 +178,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Mobile pinned row](docs/assets/outlook-slice34/64-mobile-pinned-row.png)
 
+- **Mobile undo send** — same delayed-send window as desktop (`settings.undoSendSeconds`). After **Send**, the toast offers **Undo** to restore the compose draft. Configure under mobile **Settings → Compose**.
+
+![Mobile undo send toast](docs/assets/outlook-slice35/65-mobile-undo-send-toast.png)
+
 ## Keyboard shortcuts (mail)
 
 Global shortcuts are listed under **Settings → General → Keyboard shortcuts** (press **?** in the inbox for the same list). Reading-pane placement:
