@@ -69,6 +69,18 @@
         recordSavedMailSearchUse
     } from '../../lib/saved-mail-searches.svelte';
     import { shouldShowMobileSavedSearchPanel } from '../../lib/mobile-saved-search-panel';
+    import {
+        MAIL_COMMAND_BAR_LABEL,
+        MAIL_MESSAGE_LIST_LABEL,
+        MAIL_MESSAGE_LIST_LANDMARK_ID,
+        MAIL_SKIP_LINK_TEXT,
+        focusMobileMessageListLandmark
+    } from '../../lib/mobile-mail-landmarks';
+
+    function focusMessageListLandmark(e?: MouseEvent) {
+        e?.preventDefault();
+        focusMobileMessageListLandmark();
+    }
 
     let searchInput = $state('');
     let searchInputEl: HTMLInputElement | undefined = $state();
@@ -876,7 +888,13 @@
 </script>
 
 <div class="inbox-view">
-    <header class="mheader">
+    <a
+        href={`#${MAIL_MESSAGE_LIST_LANDMARK_ID}`}
+        class="mobile-skip-link"
+        data-testid="mobile-mail-skip-link"
+        onclick={focusMessageListLandmark}
+    >{MAIL_SKIP_LINK_TEXT}</a>
+    <header class="mheader" role="banner" aria-label={MAIL_COMMAND_BAR_LABEL}>
         <div class="header-left">
             <button type="button" class="mbtn mbtn-ghost" aria-label="Refresh folder" title="Refresh" onclick={() => { refreshMessages(true); refreshMailboxes(); }}>
                 <Icon name="refresh" size={18} />
@@ -1037,8 +1055,12 @@
     <!-- The touch handlers drive pull-to-refresh / swipe gestures — pointer
          enhancements over a plain content list, not a widget. -->
     <div
-        class="list scroll-y"
-        role="presentation"
+        class="list scroll-y mobile-mail-landmark-list"
+        role="region"
+        tabindex="-1"
+        id={MAIL_MESSAGE_LIST_LANDMARK_ID}
+        aria-label={MAIL_MESSAGE_LIST_LABEL}
+        data-testid="mobile-mail-landmark-message-list"
         bind:this={listEl}
         onscroll={onScroll}
         ontouchstart={onTouchStart}
@@ -1196,11 +1218,37 @@
 
 <style>
     .inbox-view {
+        position: relative;
         flex: 1;
         display: flex;
         flex-direction: column;
         min-height: 0;
         overflow: hidden;
+    }
+    .mobile-skip-link {
+        position: absolute;
+        left: 8px;
+        top: 8px;
+        z-index: 100;
+        padding: 8px 12px;
+        border-radius: var(--radius-sm, 8px);
+        background: var(--bg-elevated);
+        color: var(--text-primary);
+        border: 1px solid var(--border-strong);
+        font-size: 13px;
+        font-weight: 600;
+        text-decoration: none;
+        transform: translateY(-160%);
+        transition: transform 0.15s ease;
+    }
+    .mobile-skip-link:focus {
+        transform: translateY(0);
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+    }
+    .mobile-mail-landmark-list:focus {
+        outline: 2px solid var(--accent);
+        outline-offset: -2px;
     }
     .inbox-tabs {
         flex: 0 0 auto;

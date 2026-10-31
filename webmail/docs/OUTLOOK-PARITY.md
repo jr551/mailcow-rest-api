@@ -24,7 +24,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 | **AI features** | Master switch **`aiFeatures`**; defaults **off** for new profiles; every AI entry point hidden when off | Low — opt-in provider config remains in Settings |
 | **People / VIP** | VIP list in Settings; local address book | Medium vs OWA People app |
 | **Deep links** | `#mail?folder=…&uid=…` hash URLs + **Copy link** in reading pane | Low–medium: no server-side permalink API yet |
-| **Accessibility** | Landmark regions + skip link (slice 17) | Low–medium: mobile focus order polish |
+| **Accessibility** | Landmark regions + skip link (slice 17); mobile landmarks + skip link (slice 33) | Low–medium: deeper mobile focus-order polish |
 
 ---
 
@@ -371,7 +371,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 31 (this PR)
+## Slice 31 (done in #118)
 
 - **`mobile-saved-search-panel.ts`**: panel visibility rules shared with unit tests.
 - **`InboxView.svelte`**: mobile search panel lists saved searches, **Save this search**, and remove controls (shared `webmail.saved-searches.v1` with desktop).
@@ -380,9 +380,20 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 33 (this PR)
+
+- **`mobile-mail-landmarks.ts`**: mobile region labels, shared list landmark id, skip-link focus helper.
+- **`InboxView.svelte`**: **Skip to message list** link, command bar + message list landmarks.
+- **`MessageView.svelte`**: reading pane **`main`** landmark; **`BottomNav.svelte`**: **App navigation** label.
+- **`SettingsView.svelte`**: **Accessibility** section documents landmarks and tab order.
+- Tests: unit (`mobile-mail-landmarks.test.mjs`) + Playwright (`outlook-mobile-mail-landmarks.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice33/63-mobile-skip-link-focused.png`.
+
+---
+
 ## Next planned slice
 
-**Smart triage / categorise**, richer conversation HTML parity, or mobile compose parity.
+**Smart triage / categorise** (opt-in AI), richer conversation HTML parity, or mobile compose parity.
 
 ---
 

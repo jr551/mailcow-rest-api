@@ -24,6 +24,11 @@
     import Avatar from '../../components/Avatar.svelte';
     import ConversationStack from '../../components/ConversationStack.svelte';
     import { shouldShowConversationStack } from '../../lib/conversation-view';
+    import {
+        MAIL_COMMAND_BAR_LABEL,
+        MAIL_READING_PANE_LABEL,
+        MAIL_READING_PANE_LANDMARK_ID
+    } from '../../lib/mobile-mail-landmarks';
     import { effectiveTheme } from '../../lib/theme.svelte';
     import { messageIframeTheme } from '../../lib/mobile-appearance';
     import { setMobileMailShortcutHandler } from '../lib/mail-shortcut-handlers.svelte';
@@ -397,7 +402,7 @@
 </script>
 
 <div class="message-view" class:embedded>
-    <header class="mheader">
+    <header class="mheader" role="banner" aria-label={MAIL_COMMAND_BAR_LABEL}>
         {#if !embedded}
         <button type="button" class="mbtn mbtn-ghost back-btn" onclick={leaveMessageView} aria-label="Back to list">
             <Icon name="chevronLeft" size={20} />
@@ -426,7 +431,12 @@
             <button class="mbtn mbtn-secondary" onclick={leaveMessageView}>Go back</button>
         </div>
     {:else if msg}
-        <div class="scroll-y msg-body-wrap">
+        <main
+            class="scroll-y msg-body-wrap mobile-reading-landmark"
+            id={MAIL_READING_PANE_LANDMARK_ID}
+            aria-label={MAIL_READING_PANE_LABEL}
+            data-testid="mobile-mail-landmark-reading-pane"
+        >
             <div class="scan-bubble-rail" aria-live="polite">
                 {#if phishingScanning && !phishingDismissed}
                     <div class="scan-bubble scan-bubble-scanning" role="status" data-testid="mobile-scam-scanning-bubble">
@@ -574,7 +584,7 @@
                     {/each}
                 </div>
             {/if}
-        </div>
+        </main>
 
         <div class="msg-toolbar">
             <button type="button" class="toolbar-btn" onclick={() => reply('reply')}>

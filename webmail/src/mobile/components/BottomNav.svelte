@@ -2,6 +2,7 @@
     import { mobileState, navigate } from '../lib/store.svelte';
     import Icon from '../../components/Icon.svelte';
     import { settings } from '../../lib/settings.svelte';
+    import { MOBILE_APP_NAV_LABEL } from '../../lib/mobile-mail-landmarks';
 
     // The AI tab is dropped from the list entirely when AI is hard-off.
     // The nav is a flex row, so removing the item re-flows the remaining
@@ -16,7 +17,7 @@
     const visibleTabs = $derived(tabs.filter((t) => t.key !== 'ai' || settings.aiFeatures));
 </script>
 
-<nav class="bottom-nav no-select" aria-label="Main">
+<nav class="bottom-nav no-select" aria-label={MOBILE_APP_NAV_LABEL}>
     {#each visibleTabs as t (t.key)}
         <button
             type="button"
