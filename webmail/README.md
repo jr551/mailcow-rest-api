@@ -75,6 +75,7 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 - **Compose rewrite tones (opt-in)** — enable **Settings → AI → Rewrite selected text in compose** to show tone buttons (Professional, Friendly, Concise, …) when you select text in the rich editor. Uses your configured provider; off by default.
 
 ![Compose rewrite bar](docs/assets/outlook-slice28/58-compose-rewrite-bar.png)
+
 - **Quick filter bar** — Outlook-style **Filter** menu (All, Unread, Flagged, To me, Has files, Mentions me) and **Sort** menu on the message list; IMAP tag tokens for supported filters when paging server-side.
 - **Colour categories** — right-click **Categorize** on a message row to assign Outlook-style colour categories (IMAP `$Category*` keywords when the server keeps them; local overlay fallback otherwise). A colour stripe appears on the row.
 - **AI features off by default** — new profiles load with **Settings → AI → AI features** off. Turn it on when you want the assistant, AI sort, link safety, compose helpers, and related surfaces. The mail UI is fully usable with AI disabled.
