@@ -27,7 +27,8 @@
     import {
         MAIL_COMMAND_BAR_LABEL,
         MAIL_READING_PANE_LABEL,
-        MAIL_READING_PANE_LANDMARK_ID
+        MAIL_READING_PANE_LANDMARK_ID,
+        focusMobileReadingPaneLandmark
     } from '../../lib/mobile-mail-landmarks';
     import { effectiveTheme } from '../../lib/theme.svelte';
     import { messageIframeTheme } from '../../lib/mobile-appearance';
@@ -399,6 +400,14 @@
     const showConversationStack = $derived(
         shouldShowConversationStack(settings.groupThreads, mobileState.conversationStack)
     );
+
+    $effect(() => {
+        if (embedded) return;
+        const uid = msg?.uid;
+        if (!uid || loading) return;
+        const t = requestAnimationFrame(() => focusMobileReadingPaneLandmark());
+        return () => cancelAnimationFrame(t);
+    });
 </script>
 
 <div class="message-view" class:embedded>
@@ -434,6 +443,7 @@
         <main
             class="scroll-y msg-body-wrap mobile-reading-landmark"
             id={MAIL_READING_PANE_LANDMARK_ID}
+            tabindex="-1"
             aria-label={MAIL_READING_PANE_LABEL}
             data-testid="mobile-mail-landmark-reading-pane"
         >
@@ -663,6 +673,10 @@
         padding: 12px 16px;
         display: flex;
         flex-direction: column;
+    }
+    .mobile-reading-landmark:focus {
+        outline: 2px solid var(--accent);
+        outline-offset: -2px;
     }
     .msg-meta {
         flex: 0 0 auto;

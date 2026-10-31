@@ -465,6 +465,16 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 40 (done in #127)
+
+- **`mobile-mail-landmarks.ts`**: **`focusMobileReadingPaneLandmark`** helper; reading-pane row copy mentions initial focus.
+- **`MessageView.svelte`**: **Reading pane** `<main>` is focusable; full-screen message view moves focus there when a message loads (tablet embedded split unchanged).
+- **`SettingsView.svelte`**: Accessibility docs for reading-pane focus on open.
+- Tests: unit (`mobile-mail-landmarks.test.mjs`) + Playwright (`outlook-mobile-reading-focus.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice40/70-mobile-reading-pane-focused.png`.
+
+---
+
 ## Slice 41 (this PR)
 
 - **`mail-landmarks.ts`**: **`focusMailReadingPaneLandmark`** helper; reading-pane region copy mentions initial focus.
@@ -477,7 +487,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ## Next planned slice
 
-**Smart triage / categorise** (opt-in AI), richer conversation HTML parity, or mobile reading-pane focus (slice 40, PR #127).
+**Smart triage / categorise** (opt-in AI) or richer conversation HTML parity.
 
 ---
 
