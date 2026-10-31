@@ -19,7 +19,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 | **Reading pane** | `MessageDetail.svelte`, reply/forward, conversation stack when grouped | Low–medium: richer HTML parity; pane position done (slice 3) |
 | **Conversation view** | List grouping via `threads.ts`; reading-pane stack via `conversation-view.ts` + `ConversationStack.svelte` | Medium: attachments per message in stack; richer HTML parity |
 | **Compose** | `Compose.svelte` + `FloatingPanel.svelte`, TipTap | Medium: sensitivity labels; **undo send** (slice 12), **scheduled send** (#100), **Save draft** (slice 14) |
-| **Search** | Header search + tag syntax; optional **natural-language** translation when AI + provider configured | Medium: no unified People/Files search; no saved searches |
+| **Search** | Header search + tag syntax; **saved searches** (local); optional **natural-language** translation when AI + provider configured | Medium: no unified People/Files search |
 | **Settings shell** | `Settings.svelte` 3-column Outlook-like modal, 19 sections | Low–medium: content differs |
 | **AI features** | Master switch **`aiFeatures`**; defaults **off** for new profiles; every AI entry point hidden when off | Low — opt-in provider config remains in Settings |
 | **People / VIP** | VIP list in Settings; local address book | Medium vs OWA People app |
@@ -342,7 +342,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 28 (this PR)
+## Slice 28 (done in #115)
 
 - **`webmail/src/lib/compose-ai-rewrite.ts`**: tone presets, prompt builder, selection eligibility.
 - **`compose-ai-rewrite.client.ts`**: opt-in rewrite via configured provider (`cachedChatCompletion`, scope `compose-rewrite`).
@@ -353,9 +353,18 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 29 (this PR)
+
+- **`saved-mail-searches.ts`** / **`saved-mail-searches.svelte.ts`**: named queries in `webmail.saved-searches.v1` (folder or all-folders scope).
+- **`Layout.svelte`**: search dropdown lists saved searches, **Save this search**, remove control; reapplies scope when run.
+- Tests: unit (`saved-mail-searches.test.mjs`) + Playwright (`outlook-saved-searches.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice29/59-saved-searches-menu.png`.
+
+---
+
 ## Next planned slice
 
-**Saved searches**, **smart triage / categorise**, or **mobile search scope parity**.
+**Smart triage / categorise**, **mobile saved-search parity**, or **conversation attachment chrome**.
 
 ---
 
