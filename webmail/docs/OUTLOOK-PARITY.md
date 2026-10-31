@@ -264,7 +264,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 20 (this PR)
+## Slice 20 (done in #107)
 
 - **`webmail/src/mobile/components/InboxView.svelte`**: loads sibling bodies when **Group threads** is on (same rules as desktop).
 - **`webmail/src/mobile/components/MessageView.svelte`**: reuses **`ConversationStack.svelte`** with mobile state overrides.
@@ -275,9 +275,22 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Next planned slice
+## Slice 21 (done in #108)
 
-**Mobile dark mode theme picker** (PR #109), **mobile reading-pane layout** for tablet widths, or **mobile keyboard shortcuts** help sheet.
+- **`webmail/src/mobile/components/MessageActionSheet.svelte`**: **Flag for follow-up** submenu (Today / Tomorrow / This week / No date), same presets as desktop.
+- **`webmail/src/mobile/components/InboxView.svelte`**: follow-up due hints on rows (shared `message-follow-up` overlay).
+- Tests: Playwright (`outlook-mobile-follow-up-flag.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice21/51-mobile-follow-up-today-row.png`.
+
+---
+
+## Slice 22 (done in #109)
+
+- **`webmail/src/lib/mobile-appearance.ts`**: mobile theme mode list + **`messageIframeTheme`** helper (uses `effectiveTheme()`, not `html.dark`).
+- **`SettingsView.svelte`**: **Theme** segmented control (Auto / Light / Dark), shared `webmail.theme` with desktop.
+- **`MessageView.svelte`**: message-body iframe follows the resolved app theme in dark mode.
+- Tests: unit (`mobile-appearance.test.mjs`) + Playwright (`outlook-mobile-dark-mode.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice22/52-mobile-settings-dark-theme.png`.
 
 ---
 
@@ -288,6 +301,12 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 - **`AiPanel.svelte`**: **Summarize thread** when grouping + toggle are on and the reading pane shows a multi-message stack.
 - Tests: unit (`thread-ai-summarize.test.mjs`) + Playwright (`outlook-ai-thread-summary.spec.ts`) against API mocks.
 - Screenshot: `webmail/docs/assets/outlook-slice23/53-ai-thread-summary-panel.png`.
+
+---
+
+## Next planned slice
+
+**Mobile reading-pane layout** for tablet widths, **mobile keyboard shortcuts** help sheet, or **opt-in AI draft/rewrite reply**.
 
 ---
 
