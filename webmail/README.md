@@ -154,6 +154,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Mobile quick filter menu](docs/assets/outlook-slice27/57-mobile-quick-filter-menu.png)
 
+- **Saved searches** — save a header search (folder or **Search all folders** scope) with a name; reopen from the search dropdown (localStorage only, no AI required).
+
+![Saved searches menu](docs/assets/outlook-slice29/59-saved-searches-menu.png)
+
 ## Keyboard shortcuts (mail)
 
 Global shortcuts are listed under **Settings → General → Keyboard shortcuts** (press **?** in the inbox for the same list). Reading-pane placement:

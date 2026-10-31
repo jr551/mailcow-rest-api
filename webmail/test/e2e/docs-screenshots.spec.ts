@@ -34,7 +34,8 @@ const ASSET24 = 'docs/assets/outlook-slice24';
 const ASSET25 = 'docs/assets/outlook-slice25';
 const ASSET26 = 'docs/assets/outlook-slice26';
 const ASSET27 = 'docs/assets/outlook-slice27';
-for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET20, ASSET22, ASSET23, ASSET24, ASSET25, ASSET26, ASSET27]) mkdirSync(d, { recursive: true });
+const ASSET29 = 'docs/assets/outlook-slice29';
+for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET20, ASSET22, ASSET23, ASSET24, ASSET25, ASSET26, ASSET27, ASSET29]) mkdirSync(d, { recursive: true });
 
 const baseSettings = {
     aiFeatures: false,
@@ -466,6 +467,36 @@ test.describe('docs desktop (1440×900 @2x)', () => {
         await page.getByTestId('ai-summarize-btn').click();
         await expect(page.getByTestId('ai-summary-out')).toContainText(/lunch thread/i);
         await shot(page, `${ASSET23}/53-ai-thread-summary-panel.png`);
+    });
+
+    test('slice29 saved searches menu', async ({ page }) => {
+        await page.addInitScript(() => {
+            localStorage.setItem('webmail.theme', 'light');
+            localStorage.setItem(
+                'webmail.saved-searches.v1',
+                JSON.stringify([
+                    { id: 'shot-invoices', name: 'Acme invoices', query: 'from:concierge@example.com', scope: 'folder' },
+                    { id: 'shot-unread', name: 'Unread team mail', query: 'is:unread subject:team', scope: 'folder' }
+                ])
+            );
+            localStorage.setItem(
+                'webmail.settings.v1',
+                JSON.stringify({
+                    aiFeatures: false,
+                    density: 'comfortable',
+                    listFilter: 'all',
+                    inboxTab: 'focused',
+                    readingPaneLayout: 'right',
+                    groupThreads: true,
+                    useCustomLlm: false,
+                    llm: { kind: 'openai', preset: '', apiKey: '', baseUrl: '', model: '' }
+                })
+            );
+        });
+        await login(page);
+        await page.getByTestId('search-input').click();
+        await expect(page.getByTestId('saved-search-shot-invoices')).toBeVisible();
+        await shot(page, `${ASSET29}/59-saved-searches-menu.png`);
     });
 });
 
