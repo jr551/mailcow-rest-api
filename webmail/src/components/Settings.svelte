@@ -112,6 +112,14 @@
     import { ensureCountry, geoipCache, flagEmoji } from '../lib/geoip.svelte';
     import { takeover, loadTakeover, setTakeoverEnabled, setTakeoverKnobs, addSenderRule, saveSenderRule, removeSenderRule } from '../lib/takeover.svelte';
     import type { TakeoverSettings, TakeoverSender } from '../lib/api';
+    import {
+        filterMailRulesList,
+        mailRulesListFilterCounts,
+        mailRulesListFilterEmptyHint,
+        MAIL_RULES_LIST_FILTER_LABELS,
+        type MailRulesListFilter
+    } from '../lib/mail-rules-management';
+    import { isSweepAutomationMailRule } from '../lib/message-sender-sweep-automation';
     import type { IconName } from '../lib/icons';
     import { MAIL_KEYBOARD_SHORTCUT_ROWS } from '../lib/mail-keyboard-shortcuts';
     import { MAIL_LANDMARK_ROWS, MAIL_SKIP_LINK_TEXT, MAIL_SKIP_TO_READING_PANE_TEXT } from '../lib/mail-landmarks';
@@ -688,6 +696,12 @@
     let ruleSaving = $state(false);
     let ruleActionFolder = $state('');
     let ruleActionWebhookId = $state('');
+    let mailRulesListFilter = $state<MailRulesListFilter>('all');
+    const mailRulesFilterCounts = $derived(mailRulesListFilterCounts(mailRules));
+    const filteredMailRules = $derived(filterMailRulesList(mailRules, mailRulesListFilter));
+    const mailRulesFilterEmpty = $derived(
+        mailRulesListFilterEmptyHint(mailRulesListFilter, mailRulesFilterCounts)
+    );
 
     // Outbound webhooks — the targets rules' "send to webhook" action points
     // at. Loaded with the rest of the account data; a 404/501 means the
@@ -2930,10 +2944,38 @@
                                     </div>
 
                                     {#if mailRules.length}
+                                        <div
+                                            class="rule-filter-seg"
+                                            role="tablist"
+                                            aria-label="Filter rules list"
+                                            data-testid="mail-rules-filter"
+                                        >
+                                            {#each (['all', 'sweep', 'other'] as const) as f (f)}
+                                                <button
+                                                    type="button"
+                                                    role="tab"
+                                                    class:active={mailRulesListFilter === f}
+                                                    aria-selected={mailRulesListFilter === f}
+                                                    data-testid={`mail-rules-filter-${f}`}
+                                                    onclick={() => { mailRulesListFilter = f; }}
+                                                >
+                                                    {MAIL_RULES_LIST_FILTER_LABELS[f]}
+                                                    <span class="count">{mailRulesFilterCounts[f]}</span>
+                                                </button>
+                                            {/each}
+                                        </div>
+                                        {#if mailRulesFilterEmpty}
+                                            <p class="muted small" data-testid="mail-rules-filter-empty">{mailRulesFilterEmpty}</p>
+                                        {/if}
                                         <ul class="rule-cards" data-testid="rule-list">
-                                            {#each mailRules as r (r.id)}
+                                            {#each filteredMailRules as r (r.id)}
                                                 <li class={`rule-card rule-${r.action.type}`} data-testid={`rule-item-${r.id}`}>
                                                     <div class="rule-card-head">
+                                                        {#if isSweepAutomationMailRule(r)}
+                                                            <span class="rule-badge rule-sweep" data-testid="rule-sweep-badge">
+                                                                <Icon name="filter" size={11} /> Sweep
+                                                            </span>
+                                                        {/if}
                                                         <span class={`rule-badge rule-${r.action.type}`}>
                                                             {#if r.action.type === 'discard'}
                                                                 <Icon name="trash" size={11} /> Block
@@ -6467,6 +6509,38 @@
         margin-top: 10px;
         padding-top: 10px;
         border-top: 1px dashed var(--border-subtle);
+    }
+    .rule-filter-seg {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 10px;
+    }
+    .rule-filter-seg button {
+        font: inherit;
+        font-size: 12px;
+        padding: 5px 10px;
+        border-radius: 999px;
+        border: 1px solid var(--border-subtle);
+        background: var(--bg-base);
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+    .rule-filter-seg button.active {
+        background: var(--accent-muted, rgb(0 120 212 / 0.12));
+        border-color: var(--accent);
+        color: var(--accent);
+        font-weight: 600;
+    }
+    .rule-filter-seg .count {
+        font-size: 11px;
+        opacity: 0.85;
+    }
+    .rule-badge.rule-sweep {
+        background: rgb(0 120 212 / 0.12);
+        color: var(--accent);
     }
     .rule-cards {
         list-style: none;

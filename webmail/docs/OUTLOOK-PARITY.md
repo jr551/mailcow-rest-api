@@ -623,7 +623,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 56 (this PR)
+## Slice 56 (done in #143)
 
 - Reuses **`SenderSweepDialog.svelte`** on `/webmail/mobile/` (same one-time + automation UX as desktop slice 54).
 - **`InboxView.svelte`**: long-press **Sweep** opens the dialog; **`runMobileSenderSweep`** supports **`skipConfirm`** for in-dialog applies.
@@ -633,9 +633,19 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 57 (this PR)
+
+- **`mail-rules-management.ts`**: OWA-style **All / Sweep / Other** filter chips and empty-state hints for the rules list.
+- **`message-sender-sweep-automation.ts`**: **`isSweepAutomationMailRule`** identifies rules created via Sweep (`Sweep:` prefix).
+- **`Settings.svelte`**: filter tabs on **Settings → Rules**, **Sweep** badge on automation rules.
+- Tests: unit (`mail-rules-management.test.mjs`) + Playwright (`outlook-mail-rules-management.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice57/87-mail-rules-sweep-filter.png`.
+
+---
+
 ## Next planned slice
 
-Rules management UI, compose pop-out polish, or opt-in AI draft/rewrite improvements (slice 57+).
+Compose pop-out polish, rules editing polish, accessibility focus order, or opt-in AI draft/rewrite improvements (slice 58+).
 
 ---
 
