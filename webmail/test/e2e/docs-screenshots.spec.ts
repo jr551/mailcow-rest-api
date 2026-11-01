@@ -6,7 +6,7 @@
  */
 import { test, expect, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
-import { applyMocks, login, messages, MOCK_USER, MOCK_PASS } from './fixtures';
+import { applyMocks, installPopoutMockForwarding, login, messages, MOCK_USER, MOCK_PASS } from './fixtures';
 
 const DOCS = 'docs/screenshots';
 const ASSET1 = 'docs/assets/outlook-slice1';
@@ -62,7 +62,8 @@ const ASSET53 = 'docs/assets/outlook-slice53';
 const ASSET54 = 'docs/assets/outlook-slice54';
 const ASSET55 = 'docs/assets/outlook-slice55';
 const ASSET56 = 'docs/assets/outlook-slice56';
-for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET20, ASSET22, ASSET23, ASSET24, ASSET25, ASSET26, ASSET27, ASSET28, ASSET29, ASSET30, ASSET31, ASSET32, ASSET33, ASSET34, ASSET35, ASSET36, ASSET37, ASSET38, ASSET39, ASSET41, ASSET42, ASSET43, ASSET44, ASSET45, ASSET46, ASSET47, ASSET48, ASSET49, ASSET50, ASSET51, ASSET52, ASSET53, ASSET54, ASSET55, ASSET56]) mkdirSync(d, { recursive: true });
+const ASSET58 = 'docs/assets/outlook-slice58';
+for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET20, ASSET22, ASSET23, ASSET24, ASSET25, ASSET26, ASSET27, ASSET28, ASSET29, ASSET30, ASSET31, ASSET32, ASSET33, ASSET34, ASSET35, ASSET36, ASSET37, ASSET38, ASSET39, ASSET41, ASSET42, ASSET43, ASSET44, ASSET45, ASSET46, ASSET47, ASSET48, ASSET49, ASSET50, ASSET51, ASSET52, ASSET53, ASSET54, ASSET55, ASSET56, ASSET58]) mkdirSync(d, { recursive: true });
 
 const baseSettings = {
     aiFeatures: false,
@@ -733,6 +734,24 @@ test.describe('docs outlook slice 15 (compose pop-out)', () => {
         await popup.waitForLoadState('networkidle');
         await expect(popup.getByTestId('compose-popout-shell')).toBeVisible();
         await shot(popup, `${ASSET15}/44-compose-pop-out.png`);
+    });
+});
+
+test.describe('docs outlook slice 58 (compose pop-out dock)', () => {
+    test('compose pop-out dock-in control', async ({ page, context }) => {
+        installPopoutMockForwarding(context);
+        await applyMocks(page);
+        await page.goto('/webmail/');
+        await login(page);
+        await page.waitForSelector('[data-testid=shell]');
+        await page.click('[data-testid=compose-btn]');
+        await page.fill('[data-testid=compose-subject]', 'Slice 58 dock in main window');
+        const popupPromise = context.waitForEvent('page');
+        await page.getByTestId('compose-modal-pop-out').click();
+        const popup = await popupPromise;
+        await popup.waitForLoadState('networkidle');
+        await expect(popup.getByTestId('compose-modal-dock-in')).toBeVisible();
+        await shot(popup, `${ASSET58}/88-compose-popout-dock-in.png`);
     });
 });
 

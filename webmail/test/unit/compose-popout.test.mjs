@@ -59,4 +59,32 @@ describe('compose-popout (slice 15)', () => {
         assert.equal(mod.isComposePopoutLocation({ search: `?composePopout=1&sid=${id}` }), true);
         assert.equal(mod.composePopoutSessionId({ search: `?composePopout=1&sid=${id}` }), id);
     });
+
+    it('parses dock broadcasts and builds document titles (slice 58)', async () => {
+        const mod = await loadModule();
+        const id = 'pop-testdock123456';
+        const ctx = {
+            mode: 'new',
+            replyTo: null,
+            restore: {
+                to: 'dock@example.com',
+                cc: '',
+                bcc: '',
+                subject: 'Dock me',
+                body: '<p>Hi</p>',
+                from: 'me@example.com',
+                trackOpens: false,
+                attachments: []
+            }
+        };
+        assert.deepEqual(mod.parseComposePopoutBroadcast({ type: 'dock', sessionId: id, composeContext: ctx }), {
+            type: 'dock',
+            sessionId: id,
+            composeContext: ctx
+        });
+        assert.equal(mod.parseComposePopoutBroadcast({ type: 'closed', sessionId: id })?.type, 'closed');
+        assert.equal(mod.parseComposePopoutBroadcast({ type: 'dock', sessionId: 'bad', composeContext: ctx }), null);
+        assert.equal(mod.composePopoutDocumentTitle(''), 'Compose — Mail');
+        assert.equal(mod.composePopoutDocumentTitle('  Re: hello '), 'Re: hello — Compose');
+    });
 });

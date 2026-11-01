@@ -76,13 +76,74 @@ export function openComposePopoutWindow(id: string): Window | null {
     return window.open(buildComposePopoutUrl(id), `webmail-compose-${id}`, features);
 }
 
-export function broadcastComposePopoutClosed(sessionId: string): void {
+export type ComposePopoutBroadcast =
+    | { type: 'closed'; sessionId: string }
+    | { type: 'dock'; sessionId: string; composeContext: ComposePopoutContext };
+
+export function parseComposePopoutBroadcast(data: unknown): ComposePopoutBroadcast | null {
+    if (!data || typeof data !== 'object') return null;
+    const msg = data as Record<string, unknown>;
+    const sessionId = msg.sessionId;
+    if (typeof sessionId !== 'string' || !SESSION_ID_RE.test(sessionId)) return null;
+    if (msg.type === 'closed') return { type: 'closed', sessionId };
+    if (msg.type === 'dock') {
+        const ctx = msg.composeContext;
+        if (!ctx || typeof ctx !== 'object') return null;
+        const composeContext = ctx as ComposePopoutContext;
+        if (!composeContext.restore) return null;
+        return { type: 'dock', sessionId, composeContext };
+    }
+    return null;
+}
+
+function postComposePopoutBroadcast(payload: ComposePopoutBroadcast): void {
     if (typeof BroadcastChannel === 'undefined') return;
     try {
         const ch = new BroadcastChannel(COMPOSE_POPOUT_BROADCAST);
-        ch.postMessage({ type: 'closed', sessionId });
+        ch.postMessage(payload);
         ch.close();
     } catch { /* noop */ }
+}
+
+export function broadcastComposePopoutClosed(sessionId: string): void {
+    if (!SESSION_ID_RE.test(sessionId)) return;
+    postComposePopoutBroadcast({ type: 'closed', sessionId });
+}
+
+/** Move an in-progress draft from the pop-out window back to the main mail tab (slice 58). */
+export function broadcastComposePopoutDock(
+    sessionId: string,
+    composeContext: ComposePopoutContext
+): void {
+    if (!SESSION_ID_RE.test(sessionId)) return;
+    postComposePopoutBroadcast({ type: 'dock', sessionId, composeContext });
+}
+
+export function attachComposePopoutBroadcastListener(
+    handler: (msg: ComposePopoutBroadcast) => void
+): () => void {
+    if (typeof BroadcastChannel === 'undefined') return () => {};
+    let ch: BroadcastChannel | null = null;
+    try {
+        ch = new BroadcastChannel(COMPOSE_POPOUT_BROADCAST);
+        ch.onmessage = (ev) => {
+            const parsed = parseComposePopoutBroadcast(ev.data);
+            if (parsed) handler(parsed);
+        };
+    } catch {
+        return () => {};
+    }
+    return () => {
+        try {
+            ch?.close();
+        } catch { /* noop */ }
+    };
+}
+
+/** OWA-style pop-out window title — subject when present, otherwise generic Compose. */
+export function composePopoutDocumentTitle(subject: string): string {
+    const trimmed = (subject || '').trim();
+    return trimmed ? `${trimmed} — Compose` : 'Compose — Mail';
 }
 
 export function buildPopoutComposeContext(

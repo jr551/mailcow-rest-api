@@ -1,5 +1,4 @@
 <script lang="ts">
-    import { onMount } from 'svelte';
     import Compose from './Compose.svelte';
     import {
         composePopoutSessionId,
@@ -20,15 +19,11 @@
         if (sessionId) broadcastComposePopoutClosed(sessionId);
         window.close();
     }
-
-    onMount(() => {
-        document.title = 'Compose — Mail';
-    });
 </script>
 
 {#if session}
     <div class="popout-root" data-testid="compose-popout-shell">
-        <Compose onClose={closePopout} popout />
+        <Compose onClose={closePopout} popout popoutSessionId={sessionId} />
     </div>
 {:else}
     <main class="popout-missing" data-testid="compose-popout-missing">

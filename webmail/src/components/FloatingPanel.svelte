@@ -28,6 +28,8 @@
         testId?: string;
         /** OWA-style open in new window — hidden when undefined. */
         onPopOut?: (() => void) | null;
+        /** Pop-out only: return draft to the main mail tab (slice 58). */
+        onDockIn?: (() => void) | null;
     }
 
     let {
@@ -45,7 +47,8 @@
         overlay,
         overlayVisible = false,
         testId = 'floating-panel',
-        onPopOut = null
+        onPopOut = null,
+        onDockIn = null
     }: Props = $props();
 
     interface Geometry {
@@ -335,6 +338,18 @@
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="14" x2="19" y2="14"/></svg>
                 {/if}
             </button>
+            {#if !geo.minimized && onDockIn}
+                <button
+                    type="button"
+                    class="head-btn"
+                    onclick={() => onDockIn?.()}
+                    title="Open in main window"
+                    aria-label="Open in main window"
+                    data-testid={`${testId}-dock-in`}
+                >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6"/><path d="M14 3h7v7"/><path d="M10 14 21 3"/></svg>
+                </button>
+            {/if}
             {#if !geo.minimized && onPopOut}
                 <button
                     type="button"
