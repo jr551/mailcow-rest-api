@@ -27,6 +27,7 @@
     import { resolveMobileMailShortcut } from '../lib/mobile-mail-keyboard-shortcuts';
     import { dispatchMobileMailShortcut } from './lib/mail-shortcut-handlers.svelte';
     import { startMobileScheduledSendFlusher } from './lib/compose-schedule-send.svelte';
+    import { focusMobileMessageListLandmark } from '../lib/mobile-mail-landmarks';
 
     let mobileShortcutHelpOpen = $state(false);
 
@@ -56,6 +57,17 @@
     const showTabletMailShell = $derived(tabletMailSplit && mobileState.view === 'inbox');
 
     let prevTabletSplit = $state(false);
+    let prevMobileView = $state(mobileState.view);
+
+    // Phone full-screen reader: Esc / back returns to the list with focus on its landmark (slice 44).
+    $effect(() => {
+        const view = mobileState.view;
+        const split = tabletMailSplit;
+        if (prevMobileView === 'message' && view === 'inbox' && !split) {
+            requestAnimationFrame(() => focusMobileMessageListLandmark());
+        }
+        prevMobileView = view;
+    });
 
     // Phone ↔ tablet width: swap between split inbox and full-screen reader.
     $effect(() => {

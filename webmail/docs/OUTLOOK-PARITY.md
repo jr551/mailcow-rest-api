@@ -24,7 +24,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 | **AI features** | Master switch **`aiFeatures`**; defaults **off** for new profiles; every AI entry point hidden when off | Low — opt-in provider config remains in Settings |
 | **People / VIP** | VIP list in Settings; local address book | Medium vs OWA People app |
 | **Deep links** | `#mail?folder=…&uid=…` hash URLs + **Copy link** in reading pane | Low–medium: no server-side permalink API yet |
-| **Accessibility** | Landmark regions + skip link (slice 17); mobile landmarks + skip link (slice 33); mobile compose landmarks + initial focus (slice 38); desktop + mobile reading-pane focus on open (slices 41 / 40); desktop message-list focus on Esc (slice 43); desktop compose close returns focus to list (slice 45) | Low–medium: deeper focus-order polish |
+| **Accessibility** | Landmark regions + skip link (slice 17); mobile landmarks + skip link (slice 33); mobile compose landmarks + initial focus (slice 38); desktop + mobile reading-pane focus on open (slices 41 / 40); desktop + mobile message-list focus on Esc (slices 43 / 44); desktop compose close returns focus to list (slice 45) | Low–medium: deeper focus-order polish |
 
 ---
 
@@ -504,6 +504,16 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 44 (done in #131)
+
+- **`mobile-mail-landmarks.ts`**: message-list region copy mentions Esc return focus; **`focusMobileMessageListLandmark`** reused after navigation.
+- **`App.svelte`**: leaving full-screen **message** view (Esc, back, or history) moves focus to the **Message list** landmark; tablet split layout unchanged.
+- **`SettingsView.svelte`** + **`mobile-mail-keyboard-shortcuts.ts`**: Accessibility and **?** help document Esc focus return (pairs with desktop slice 43, PR #130).
+- Tests: unit (`mobile-mail-landmarks.test.mjs`) + Playwright (`outlook-mobile-message-list-focus-return.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice44/74-mobile-message-list-focused-after-esc.png`.
+
+---
+
 ## Slice 45 (this PR)
 
 - **`mail-landmarks.ts`**: message-list region copy mentions compose close focus return.
@@ -516,7 +526,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ## Next planned slice
 
-**Smart triage / categorise** (opt-in AI) or mobile compose focus return (pairs with slice 45) and further keyboard polish.
+**Smart triage / categorise** (opt-in AI) or mobile compose focus return (pairs with slice 45) and further keyboard polish (slice 46).
 
 ---
 

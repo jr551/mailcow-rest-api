@@ -25,7 +25,7 @@ export const MOBILE_LANDMARK_ROWS = [
     },
     {
         region: MAIL_MESSAGE_LIST_LABEL,
-        description: 'Messages in the selected folder'
+        description: 'Messages in the selected folder; Esc from a full-screen message returns focus here'
     },
     {
         region: MAIL_READING_PANE_LABEL,
