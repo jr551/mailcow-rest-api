@@ -9,10 +9,7 @@
         type SnoozePresetId
     } from '../../lib/message-pin-snooze';
     import {
-        senderAddressFromMessage,
-        senderDisplayLabel,
-        senderSweepMenuItems,
-        type SenderSweepAction
+        senderAddressFromMessage
     } from '../../lib/message-sender-sweep';
     import {
         categoryMenuItems,
@@ -34,12 +31,11 @@
         onArchive: () => void;
         onTrash: () => void;
         onSnooze: (preset: SnoozePresetId) => void | Promise<void>;
-        onSweep: (action: SenderSweepAction) => void | Promise<void>;
+        onOpenSweepDialog: () => void;
         onCategory: (category: MessageCategoryId | 'clear') => void | Promise<void>;
         onTogglePin: () => void;
         isPinned?: boolean;
         currentCategory?: MessageCategoryId | null;
-        sweepBusy?: boolean;
     }
 
     let {
@@ -55,12 +51,11 @@
         onArchive,
         onTrash,
         onSnooze,
-        onSweep,
+        onOpenSweepDialog,
         onCategory,
         onTogglePin,
         isPinned = false,
-        currentCategory = null,
-        sweepBusy = false
+        currentCategory = null
     }: Props = $props();
 
     let summaryLoading = $state(false);
@@ -68,14 +63,12 @@
     let summaryError = $state<string | null>(null);
     let followUpMenuOpen = $state(false);
     let snoozeMenuOpen = $state(false);
-    let sweepMenuOpen = $state(false);
     let categoryMenuOpen = $state(false);
 
     const followUpItems = followUpSubmenuItems();
     const categoryItems = categoryMenuItems();
     const snoozeItems = snoozeSubmenuItems();
     const sweepSender = $derived(senderAddressFromMessage(msg));
-    const sweepItems = $derived(senderSweepMenuItems(senderDisplayLabel(msg)));
 
     // Derived, not captured at init: the sheet stays open after a Star /
     // mark-read tap and the handlers mutate `msg.flags` in place, so frozen
@@ -122,7 +115,6 @@
         summaryError = null;
         followUpMenuOpen = false;
         snoozeMenuOpen = false;
-        sweepMenuOpen = false;
         categoryMenuOpen = false;
         onClose();
     }
@@ -136,13 +128,6 @@
     async function pickSnooze(key: string) {
         await onSnooze(key as SnoozePresetId);
         snoozeMenuOpen = false;
-        onClose();
-    }
-
-    async function pickSweep(key: string) {
-        if (sweepBusy) return;
-        await onSweep(key as SenderSweepAction);
-        sweepMenuOpen = false;
         onClose();
     }
 
@@ -197,30 +182,6 @@
                         onclick={() => pickSnooze(item.key)}
                     >
                         <Icon name="clock" size={20} />
-                        <span>{item.label}</span>
-                    </button>
-                {/each}
-            </div>
-        {:else if sweepMenuOpen}
-            <div class="sheet-header">
-                <button type="button" class="back-btn" aria-label="Back" onclick={() => { sweepMenuOpen = false; }}>
-                    <Icon name="chevronLeft" size={18} />
-                </button>
-                <h3>Sweep</h3>
-                <button type="button" class="close-btn" aria-label="Close" onclick={onClose}>
-                    <Icon name="close" size={18} />
-                </button>
-            </div>
-            <div class="actions">
-                {#each sweepItems as item (item.key)}
-                    <button
-                        type="button"
-                        class="action-row"
-                        disabled={sweepBusy}
-                        data-testid={`mobile-sweep-item-${item.key}`}
-                        onclick={() => pickSweep(item.key)}
-                    >
-                        <Icon name="filter" size={20} />
                         <span>{item.label}</span>
                     </button>
                 {/each}
@@ -347,8 +308,7 @@
                         type="button"
                         class="action-row"
                         data-testid="mobile-sweep-trigger"
-                        disabled={sweepBusy}
-                        onclick={() => { sweepMenuOpen = true; }}
+                        onclick={() => { onOpenSweepDialog(); onClose(); }}
                     >
                         <Icon name="filter" size={20} />
                         <span>Sweep</span>

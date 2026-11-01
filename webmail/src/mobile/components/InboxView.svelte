@@ -56,6 +56,7 @@
     import Avatar from '../../components/Avatar.svelte';
     import SwipeableRow from './SwipeableRow.svelte';
     import MessageActionSheet from './MessageActionSheet.svelte';
+    import SenderSweepDialog from '../../components/SenderSweepDialog.svelte';
     import MobileQuickFilterBar from './MobileQuickFilterBar.svelte';
     import LatencyChip from '../../components/LatencyChip.svelte';
     import { playClick } from '../../lib/sounds.svelte';
@@ -721,6 +722,12 @@
     let followUpNow = $state(Date.now());
     let pinSnoozeNow = $state(Date.now());
     let mobileSweepBusy = $state(false);
+    let senderSweepDialogMessage = $state<MessageListItem | null>(null);
+
+    function openMobileSenderSweepDialog(msg: MessageListItem) {
+        closeActionSheet();
+        senderSweepDialogMessage = msg;
+    }
 
     function rowFollowUpHint(uid: number, isFlagged: boolean): string | null {
         if (!isFlagged) return null;
@@ -827,12 +834,16 @@
         showToast('success', 'Message snoozed — it will return when the reminder is due.');
     }
 
-    async function runMobileSenderSweep(msg: MessageListItem, action: SenderSweepAction) {
-        if (mobileSweepBusy) return;
+    async function runMobileSenderSweep(
+        msg: MessageListItem,
+        action: SenderSweepAction,
+        opts: { skipConfirm?: boolean } = {}
+    ): Promise<boolean> {
+        if (mobileSweepBusy) return false;
         const sender = senderAddressFromMessage(msg);
         if (!sender) {
             showToast('error', 'No sender address on this message.');
-            return;
+            return false;
         }
         const label = senderDisplayLabel(msg);
         const path = rowPath(msg);
@@ -843,18 +854,18 @@
         } catch (err) {
             showToast('error', `Sweep failed: ${err instanceof Error ? err.message : 'unknown error'}`);
             mobileSweepBusy = false;
-            return;
+            return false;
         }
         if (targets.length === 0) {
             showToast('info', action === 'keep-latest'
                 ? `Only one message from ${label} is in this folder.`
                 : `No messages from ${label} to sweep.`);
             mobileSweepBusy = false;
-            return;
+            return false;
         }
-        if (!window.confirm(senderSweepConfirmText(action, targets.length, label))) {
+        if (!opts.skipConfirm && !window.confirm(senderSweepConfirmText(action, targets.length, label))) {
             mobileSweepBusy = false;
-            return;
+            return false;
         }
         let dest: string | null = null;
         try {
@@ -867,7 +878,7 @@
                 ? 'No Archive folder found.'
                 : 'No Trash folder found.');
             mobileSweepBusy = false;
-            return;
+            return false;
         }
         const items = targets.map((t) => ({ path, uid: t.uid }));
         try {
@@ -878,10 +889,12 @@
             const movedUids = new Set(r.movedItems.map((i) => i.uid));
             mobileState.messages = mobileState.messages.filter((m) => !movedUids.has(m.uid));
             mobileState.messagesTotal = Math.max(0, mobileState.messagesTotal - r.moved);
+            mobileSweepBusy = false;
+            return !r.failed;
         } catch {
             showToast('error', 'Sweep failed');
-        } finally {
             mobileSweepBusy = false;
+            return false;
         }
     }
 
@@ -1387,12 +1400,21 @@
         onArchive={() => archiveMessage(sheetMsg)}
         onTrash={() => trashMessage(sheetMsg)}
         onSnooze={(preset) => applySnooze(sheetMsg, preset)}
-        onSweep={(action) => runMobileSenderSweep(sheetMsg, action)}
+        onOpenSweepDialog={() => openMobileSenderSweepDialog(sheetMsg)}
         onCategory={(cat) => applyMessageCategory(sheetMsg, cat === 'clear' ? null : cat)}
         onTogglePin={() => togglePin(sheetMsg)}
         isPinned={rowIsPinned(sheetMsg)}
         currentCategory={rowMessageCategory(sheetMsg)}
-        sweepBusy={mobileSweepBusy}
+    />
+{/if}
+
+{#if senderSweepDialogMessage}
+    <SenderSweepDialog
+        message={senderSweepDialogMessage}
+        folderPath={rowPath(senderSweepDialogMessage)}
+        busy={mobileSweepBusy}
+        onClose={() => (senderSweepDialogMessage = null)}
+        onRunOneTime={(action) => runMobileSenderSweep(senderSweepDialogMessage!, action, { skipConfirm: true })}
     />
 {/if}
 
