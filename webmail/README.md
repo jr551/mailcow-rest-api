@@ -180,6 +180,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Mobile skip link focused](docs/assets/outlook-slice33/63-mobile-skip-link-focused.png)
 
+- **Mobile reading & list focus** — opening a message moves focus to the **Reading pane** landmark; **Esc** (or back) from full-screen reading returns focus to the **Message list** landmark (tablet split unchanged). Documented under mobile **Settings → Accessibility**.
+
+![Mobile message list focused after Esc](docs/assets/outlook-slice44/74-mobile-message-list-focused-after-esc.png)
+
 - **Mobile pin to top** — long-press a message and choose **Pin to top** (same `webmail.message-pin-snooze.v1` overlay as desktop). Pinned rows show a pin icon and stay at the top of the list.
 
 ![Mobile pinned row](docs/assets/outlook-slice34/64-mobile-pinned-row.png)
