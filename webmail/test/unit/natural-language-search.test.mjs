@@ -3,7 +3,8 @@ import { describe, test } from 'node:test';
 import {
     looksLikeStructuredMailSearch,
     parseNlSearchResponse,
-    sanitizeTranslatedSearch
+    sanitizeTranslatedSearch,
+    shouldTranslateNlSearchQuery
 } from '../../src/lib/natural-language-search.ts';
 
 describe('looksLikeStructuredMailSearch', () => {
@@ -35,4 +36,19 @@ describe('parseNlSearchResponse', () => {
 
 test('sanitizeTranslatedSearch trims and collapses whitespace', () => {
     assert.equal(sanitizeTranslatedSearch('  from:a   subject:b  '), 'from:a subject:b');
+});
+
+describe('shouldTranslateNlSearchQuery (slice 55 mobile)', () => {
+    const on = { aiFeatures: true, naturalLanguageSearch: true };
+
+    test('requires mail category and both AI toggles', () => {
+        assert.equal(shouldTranslateNlSearchQuery('find invoices', 'mail', on), true);
+        assert.equal(shouldTranslateNlSearchQuery('find invoices', 'people', on), false);
+        assert.equal(shouldTranslateNlSearchQuery('find invoices', 'mail', { aiFeatures: false, naturalLanguageSearch: true }), false);
+        assert.equal(shouldTranslateNlSearchQuery('find invoices', 'mail', { aiFeatures: true, naturalLanguageSearch: false }), false);
+    });
+
+    test('skips tag-syntax queries', () => {
+        assert.equal(shouldTranslateNlSearchQuery('from:alice@example.com', 'mail', on), false);
+    });
 });

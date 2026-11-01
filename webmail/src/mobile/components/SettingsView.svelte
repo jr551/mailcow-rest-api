@@ -7,7 +7,7 @@
     import {
         settings, capabilities, setProxyImages, setDefaultFromAddress,
         setDensity, setGroupThreads, setPageSize, setAccountChipDisplay,
-        setLlm, setUseCustomLlm, setAiFeatures,
+        setLlm, setUseCustomLlm, setAiFeatures, setNaturalLanguageSearch,
         setPhishingScan, setTrackOpensDefault, setAiSuggestSubjectOnBlur, setDisplayName, setUndoSendSeconds,
         setPhishingScanTimeoutSec, setPhishingScanPromptAddendum, setPhishingScanConfidenceFloor,
         setTesseractOcrInstalled, setPhishingScanOcrInline
@@ -768,6 +768,19 @@
                 {#if !settings.aiFeatures}
                     <div class="ios-row" style="align-items:flex-start;flex-direction:column;gap:4px;">
                         <span class="muted small">AI is off. The provider settings below are kept, but nothing uses them until you turn AI back on.</span>
+                    </div>
+                {:else}
+                    <div class="ios-row toggle-row">
+                        <div class="toggle-info">
+                            <span class="row-label">Natural-language search</span>
+                            <span class="muted small">Translate plain-language inbox queries to tag syntax using your configured provider</span>
+                        </div>
+                        <Toggle
+                            checked={settings.naturalLanguageSearch}
+                            label="Natural-language search"
+                            testid="settings-nl-search"
+                            onToggle={() => setNaturalLanguageSearch(!settings.naturalLanguageSearch)}
+                        />
                     </div>
                 {/if}
                 {#if capabilities.caps && !capabilities.caps.configured}
