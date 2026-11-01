@@ -29,10 +29,15 @@ export const MAIL_LANDMARK_ROWS = [
     },
     {
         region: MAIL_READING_PANE_LABEL,
-        description: 'Opened message and conversation thread'
+        description: 'Opened message and conversation thread; focus moves here when you open a message'
     }
 ] as const;
 
 export function mailLandmarkLabelSet(): Set<string> {
     return new Set(MAIL_LANDMARK_ROWS.map((r) => r.region));
+}
+
+/** Move screen-reader / keyboard focus into the opened message (parity slice 41). */
+export function focusMailReadingPaneLandmark(): void {
+    document.getElementById(MAIL_READING_PANE_LANDMARK_ID)?.focus();
 }
