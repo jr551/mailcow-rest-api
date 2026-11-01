@@ -326,7 +326,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ## Slice 26 (done in #113)
 
-- **`MessageActionSheet.svelte`**: **Snooze** and **Sweep** submenus on the mobile long-press sheet (same presets and sender sweep actions as desktop).
+- **`MessageActionSheet.svelte`**: **Snooze** submenu on the mobile long-press sheet; **Sweep…** opens the OWA dialog (slice 56).
 - **`InboxView.svelte`**: snooze overlay filtering + sender sweep via `resolveSenderSweepTargets` / `bulkMove`.
 - Tests: Playwright (`outlook-mobile-snooze-sweep.spec.ts`) against API mocks.
 - Screenshot: `webmail/docs/assets/outlook-slice26/56-mobile-snooze-menu.png`.
@@ -613,7 +613,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 55 (this PR)
+## Slice 55 (done in #142)
 
 - **`natural-language-search.ts`**: **`shouldTranslateNlSearchQuery`** gate for mobile **Mail** tab (requires **`aiFeatures`** + **`naturalLanguageSearch`**, skips tag syntax).
 - **`InboxView.svelte`**: debounced translation via **`translateNaturalLanguageSearch`**; **Translating…** / **as …** hint under category tabs; placeholder matches desktop when NL is on.
@@ -623,9 +623,19 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 56 (this PR)
+
+- Reuses **`SenderSweepDialog.svelte`** on `/webmail/mobile/` (same one-time + automation UX as desktop slice 54).
+- **`InboxView.svelte`**: long-press **Sweep** opens the dialog; **`runMobileSenderSweep`** supports **`skipConfirm`** for in-dialog applies.
+- **`MessageActionSheet.svelte`**: removes the old Sweep submenu in favour of the OWA dialog.
+- Tests: Playwright (`outlook-mobile-sender-sweep-automation.spec.ts`, updated `outlook-mobile-snooze-sweep.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice56/86-mobile-sender-sweep-automation-dialog.png`.
+
+---
+
 ## Next planned slice
 
-Rules management UI, mobile Sweep dialog parity, or compose pop-out polish (slice 56+).
+Rules management UI, compose pop-out polish, or opt-in AI draft/rewrite improvements (slice 57+).
 
 ---
 
