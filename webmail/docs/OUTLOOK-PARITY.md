@@ -24,7 +24,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 | **AI features** | Master switch **`aiFeatures`**; defaults **off** for new profiles; every AI entry point hidden when off | Low — opt-in provider config remains in Settings |
 | **People / VIP** | VIP list in Settings; local address book | Medium vs OWA People app |
 | **Deep links** | `#mail?folder=…&uid=…` hash URLs + **Copy link** in reading pane | Low–medium: no server-side permalink API yet |
-| **Accessibility** | Landmark regions + skip link (slice 17); mobile landmarks + skip link (slice 33); mobile compose landmarks + initial focus (slice 38); desktop + mobile reading-pane focus on open (slices 41 / 40); desktop + mobile message-list focus on Esc (slices 43 / 44); desktop compose close returns focus to list (slice 45) | Low–medium: deeper focus-order polish |
+| **Accessibility** | Landmark regions + skip link (slice 17); mobile landmarks + skip link (slice 33); mobile compose landmarks + initial focus (slice 38); desktop + mobile reading-pane focus on open (slices 41 / 40); desktop + mobile message-list focus on Esc (slices 43 / 44); desktop compose close returns focus to list (slice 45); mobile compose close returns focus to list or reading pane (slice 46) | Low–medium: deeper focus-order polish |
 
 ---
 
@@ -514,7 +514,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 45 (this PR)
+## Slice 45 (done in #132)
 
 - **`mail-landmarks.ts`**: message-list region copy mentions compose close focus return.
 - **`Layout.svelte`**: **`closeCompose`** clears compose state and moves focus to the message list landmark (Discard, send, schedule, and other compose exit paths).
@@ -524,9 +524,19 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 46 (this PR)
+
+- **`mobile-mail-landmarks.ts`**: message-list region copy mentions compose close focus return.
+- **`App.svelte`**: leaving **compose** moves focus to the **Message list** when returning to the inbox, or to the **Reading pane** when returning to a full-screen message (tablet split inbox unchanged).
+- **`SettingsView.svelte`** + **`mobile-mail-keyboard-shortcuts.ts`**: Accessibility and **?** help document compose focus return (pairs with desktop slice 45, PR #132).
+- Tests: unit (`mobile-mail-landmarks.test.mjs`) + Playwright (`outlook-mobile-compose-focus-return.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice46/76-mobile-compose-close-message-list-focused.png`.
+
+---
+
 ## Next planned slice
 
-**Smart triage / categorise** (opt-in AI) or mobile compose focus return (pairs with slice 45) and further keyboard polish (slice 46).
+**Smart triage / categorise** (opt-in AI) or further keyboard / focus-order polish (slice 47).
 
 ---
 

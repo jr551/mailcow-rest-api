@@ -190,6 +190,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Mobile message list focused after Esc](docs/assets/outlook-slice44/74-mobile-message-list-focused-after-esc.png)
 
+- **Mobile compose focus return** — closing compose from the inbox (close, back, or **Discard**) returns keyboard focus to the **Message list** landmark; replying from a full-screen message returns focus to the **Reading pane**. Documented under mobile **Settings → Accessibility**.
+
+![Mobile message list focused after closing compose](docs/assets/outlook-slice46/76-mobile-compose-close-message-list-focused.png)
+
 - **Mobile pin to top** — long-press a message and choose **Pin to top** (same `webmail.message-pin-snooze.v1` overlay as desktop). Pinned rows show a pin icon and stay at the top of the list.
 
 ![Mobile pinned row](docs/assets/outlook-slice34/64-mobile-pinned-row.png)
