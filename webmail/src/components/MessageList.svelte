@@ -47,7 +47,6 @@
         senderAddressFromMessage,
         senderDisplayLabel,
         senderSweepConfirmText,
-        senderSweepMenuItems,
         type SenderSweepAction
     } from '../lib/message-sender-sweep';
     import { resolveSenderSweepTargets } from '../lib/message-sender-sweep-fetch';
@@ -79,6 +78,7 @@
     import EventsScanPanel from './EventsScanPanel.svelte';
     import MenuSubmenu, { type SubmenuItem } from './MenuSubmenu.svelte';
     import RuleFromMessageDialog from './RuleFromMessageDialog.svelte';
+    import SenderSweepDialog from './SenderSweepDialog.svelte';
     import { domainPattern, rootDomainPattern } from '../lib/domain-scope';
     import { addMailRule } from '../lib/api';
     import { listOutboundWebhooks, isOutboundWebhooksUnavailable } from '../lib/outbound-webhooks';
@@ -704,15 +704,24 @@
     }
 
     let senderSweepBusy = $state(false);
+    let senderSweepDialogMessage = $state<MessageListItem | null>(null);
 
-    async function runSenderSweep(uid: number, action: SenderSweepAction) {
-        if (senderSweepBusy) return;
+    function openSenderSweepDialog(m: MessageListItem) {
+        senderSweepDialogMessage = m;
+    }
+
+    async function runSenderSweep(
+        uid: number,
+        action: SenderSweepAction,
+        opts: { skipConfirm?: boolean } = {}
+    ): Promise<boolean> {
+        if (senderSweepBusy) return false;
         const m = rowOf(uid);
-        if (!m) return;
+        if (!m) return false;
         const sender = senderAddressFromMessage(m);
         if (!sender) {
             showToast('error', 'No sender address on this message.');
-            return;
+            return false;
         }
         const label = senderDisplayLabel(m);
         senderSweepBusy = true;
@@ -722,18 +731,18 @@
         } catch (err) {
             showToast('error', `Sweep failed: ${err instanceof Error ? err.message : 'unknown error'}`);
             senderSweepBusy = false;
-            return;
+            return false;
         }
         if (targets.length === 0) {
             showToast('info', action === 'keep-latest'
                 ? `Only one message from ${label} is in this folder.`
                 : `No messages from ${label} to sweep.`);
             senderSweepBusy = false;
-            return;
+            return false;
         }
-        if (!window.confirm(senderSweepConfirmText(action, targets.length, label))) {
+        if (!opts.skipConfirm && !window.confirm(senderSweepConfirmText(action, targets.length, label))) {
             senderSweepBusy = false;
-            return;
+            return false;
         }
         let dest: string | null = null;
         try {
@@ -747,7 +756,7 @@
                 ? 'No Archive folder found.'
                 : 'No Trash folder found.');
             senderSweepBusy = false;
-            return;
+            return false;
         }
         const items = targets.map((t) => ({ path: ui.selectedPath, uid: t.uid }));
         const progressLabel = action === 'archive-all' ? `Archiving from ${label}` : `Sweeping from ${label}`;
@@ -763,10 +772,12 @@
             const nextSel = new Set<number>();
             for (const id of ui.selected) if (!movedUids.has(id)) nextSel.add(id);
             ui.selected = nextSel;
+            senderSweepBusy = false;
+            return !r.failed;
         } catch {
             endBulkProgress(run, 0);
-        } finally {
             senderSweepBusy = false;
+            return false;
         }
     }
 
@@ -2323,6 +2334,16 @@
         />
     {/if}
 
+    {#if senderSweepDialogMessage}
+        <SenderSweepDialog
+            message={senderSweepDialogMessage}
+            folderPath={ui.selectedPath}
+            busy={senderSweepBusy}
+            onClose={() => (senderSweepDialogMessage = null)}
+            onRunOneTime={(action) => runSenderSweep(senderSweepDialogMessage!.uid, action, { skipConfirm: true })}
+        />
+    {/if}
+
     <!-- Persistently mounted: the modal gates itself on `open`, so
          reopening against a different right-clicked sender just re-seeds
          its form on the open edge (and focus returns to the list row on
@@ -2451,16 +2472,9 @@
                 testid="ctx-snooze"
             />
             {#if m.envelope.from?.[0]?.address}
-                <MenuSubmenu
-                    label="Sweep"
-                    icon="filter"
-                    items={senderSweepMenuItems(senderDisplayLabel(m))}
-                    onSelect={(key) => {
-                        runSenderSweep(ctx!.uid, key as SenderSweepAction);
-                        closeCtx();
-                    }}
-                    testid="ctx-sweep"
-                />
+                <li><button type="button" role="menuitem" onclick={() => { openSenderSweepDialog(m); closeCtx(); }} data-testid="ctx-sweep-trigger">
+                    <Icon name="filter" size={12} /> Sweep…
+                </button></li>
             {/if}
             {#if onSetCategory}
                 <MenuSubmenu

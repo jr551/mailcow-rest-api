@@ -14,7 +14,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 |------------------|-------|--------------|
 | **App chrome / command bar** | Outlook skin default (`skins.svelte.ts`), top search, account menu, app rail (Mail / Calendar / AI / Drive) | Medium: rail is broader than OWA; unify launcher later |
 | **Folder pane** | `Sidebar.svelte` tree, **Favorites** pin list, drag-drop move, shortcuts row | Medium: no folder groups |
-| **Message list** | `MessageList.svelte`, density, **Outlook Filter / Sort** menus, **colour categories**, **pin / snooze**, **Sweep**, **Quick steps** on selection | Low–medium: richer row chrome |
+| **Message list** | `MessageList.svelte`, density, **Outlook Filter / Sort** menus, **colour categories**, **pin / snooze**, **Sweep** dialog + automation rules (slice 54), **Quick steps** on selection | Low–medium: richer row chrome |
 | **Focused / Other** | `focused-inbox.ts` + INBOX tabs | Low–medium: optional AI refinement later |
 | **Reading pane** | `MessageDetail.svelte`, reply/forward, conversation stack when grouped, **inline quick reply** (slice 52) | Low–medium: richer HTML parity in main pane; stack HTML done (slice 42); pane position done (slice 3) |
 | **Conversation view** | List grouping via `threads.ts`; reading-pane stack via `conversation-view.ts` + `ConversationStack.svelte` | Low–medium: further OWA transcript polish |
@@ -583,7 +583,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 52 (this PR)
+## Slice 52 (done in #139)
 
 - **`reading-pane-quick-reply.ts`**: reply subject/recipient helpers and quoted HTML body for inline sends.
 - **`ReadingPaneQuickReply.svelte`**: OWA-style footer under the reading pane (expand → type → Send / Discard / Open full reply).
@@ -593,9 +593,19 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 54 (this PR)
+
+- **`message-sender-sweep-automation.ts`**: builds **Sweep:** mail rules (always trash / always archive) and duplicate detection.
+- **`SenderSweepDialog.svelte`**: OWA-style Sweep dialog (one-time actions + optional automation checkboxes).
+- **`MessageList.svelte`**: context menu **Sweep…** opens the dialog; one-time bulk move unchanged under the hood.
+- Tests: unit (`message-sender-sweep-automation.test.mjs`) + Playwright (`outlook-sender-sweep-automation.spec.ts`, updated `outlook-sender-sweep.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice54/84-sender-sweep-automation-dialog.png`.
+
+---
+
 ## Next planned slice
 
-Rules / sweep automation UI, compose pop-out window, mobile search category tabs, or opt-in AI features (slice 53).
+Mobile Sweep dialog parity, compose polish, or opt-in AI features (slice 55+).
 
 ---
 
