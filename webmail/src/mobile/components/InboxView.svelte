@@ -85,6 +85,14 @@
     } from '../../lib/saved-mail-searches.svelte';
     import { shouldShowMobileSavedSearchPanel } from '../../lib/mobile-saved-search-panel';
     import {
+        OWA_SEARCH_CATEGORIES,
+        mailQueryForCategory,
+        shouldRunMailSearch,
+        searchPlaceholderForCategory,
+        type SearchCategory
+    } from '../../lib/search-category';
+    import { loadAddressBook, searchContacts, contactNameFor } from '../../lib/address-book.svelte';
+    import {
         MAIL_COMMAND_BAR_LABEL,
         MAIL_MESSAGE_LIST_LABEL,
         MAIL_MESSAGE_LIST_LANDMARK_ID,
@@ -104,13 +112,27 @@
     let saveSearchFormOpen = $state(false);
     let saveSearchDraftName = $state('');
 
-    const canSaveCurrentSearch = $derived.by(() => (searchInput || mobileState.search || '').trim().length > 0);
+    const canSaveCurrentSearch = $derived.by(() => {
+        if (mobileState.searchCategory !== 'mail') return false;
+        return (searchInput || mobileState.search || '').trim().length > 0;
+    });
+    const peopleSearchActive = $derived(
+        mobileState.searchCategory === 'people' && searchInput.trim().length > 0
+    );
+    const peopleSearchResults = $derived.by(() => {
+        if (mobileState.searchCategory !== 'people') return [];
+        return searchContacts(searchInput, 12);
+    });
+    const mobileSearchPlaceholder = $derived(
+        searchPlaceholderForCategory(mobileState.searchCategory, false)
+    );
     const showMobileSearchPanel = $derived(
         shouldShowMobileSavedSearchPanel(
             searchPanelOpen,
             savedMailSearches.items.length,
             canSaveCurrentSearch,
-            saveSearchFormOpen
+            saveSearchFormOpen,
+            peopleSearchActive
         )
     );
 
@@ -355,17 +377,49 @@
 
     function onSearch(value: string) {
         searchInput = value;
+        if (mobileState.searchCategory === 'people' && value.trim()) {
+            searchPanelOpen = true;
+        }
         if (searchDebounce) clearTimeout(searchDebounce);
-        searchDebounce = setTimeout(() => {
-            mobileState.search = searchInput.trim();
-            // Typing always reverts to current-folder scope; users have to
-            // tap "All folders" again deliberately.
+        searchDebounce = setTimeout(() => applySearchFromInput(), 300);
+    }
+
+    function setSearchCategory(category: SearchCategory) {
+        if (mobileState.searchCategory === category) return;
+        mobileState.searchCategory = category;
+        searchPanelOpen = true;
+        if (searchDebounce) clearTimeout(searchDebounce);
+        applySearchFromInput();
+    }
+
+    function applySearchFromInput() {
+        if (!shouldRunMailSearch(mobileState.searchCategory)) {
+            mobileState.search = '';
             if (mobileState.searchScope === 'all') {
                 cancelGlobalSearch();
                 mobileState.searchScope = 'folder';
             }
-            refreshMessages(true);
-        }, 300);
+            mobileState.messages = [];
+            mobileState.messagesTotal = 0;
+            mobileState.messagesLoading = false;
+            return;
+        }
+        let q = searchInput.trim();
+        q = mailQueryForCategory(q, mobileState.searchCategory);
+        mobileState.search = q;
+        if (mobileState.searchScope === 'all') {
+            cancelGlobalSearch();
+            mobileState.searchScope = 'folder';
+        }
+        refreshMessages(true);
+    }
+
+    function composeToContact(address: string) {
+        searchPanelOpen = false;
+        mobileState.composeReplyTo = null;
+        mobileState.composeMode = 'new';
+        mobileState.composePrefillTo = address;
+        navigate('compose');
     }
 
     // ----- Global (all-folders) search -----------------------------------
@@ -912,6 +966,7 @@
         hydrateMessageFollowUp();
         hydrateMessagePinSnooze();
         hydrateMessageCategories();
+        void loadAddressBook();
         followUpNow = Date.now();
         pinSnoozeNow = Date.now();
         const followUpTick = setInterval(() => { followUpNow = Date.now(); }, 60_000);
@@ -978,11 +1033,29 @@
     </header>
 
     <div class="msearch-wrap">
+        <div
+            class="msearch-category-tabs"
+            role="tablist"
+            aria-label="Search category"
+            data-testid="mobile-search-category-tabs"
+        >
+            {#each OWA_SEARCH_CATEGORIES as cat (cat.id)}
+                <button
+                    type="button"
+                    role="tab"
+                    class="msearch-category-tab"
+                    class:active={mobileState.searchCategory === cat.id}
+                    aria-selected={mobileState.searchCategory === cat.id}
+                    onclick={() => setSearchCategory(cat.id)}
+                    data-testid={`mobile-search-category-${cat.id}`}
+                >{cat.label}</button>
+            {/each}
+        </div>
         <div class="msearch">
             <input
                 bind:this={searchInputEl}
                 type="search"
-                placeholder="Search"
+                placeholder={mobileSearchPlaceholder}
                 aria-label="Search mail"
                 aria-expanded={showMobileSearchPanel}
                 data-testid="mobile-search-input"
@@ -1022,7 +1095,28 @@
                     }
                 }}
             >
-                {#if savedMailSearches.items.length > 0}
+                {#if peopleSearchActive}
+                    <div class="msearch-panel-hint">People</div>
+                    {#if peopleSearchResults.length === 0}
+                        <p class="msearch-people-empty muted small">No matching contacts — try a name or email.</p>
+                    {:else}
+                        {#each peopleSearchResults as contact (contact.address)}
+                            <button
+                                type="button"
+                                class="msearch-people-chip"
+                                onmousedown={(e) => e.preventDefault()}
+                                onclick={() => composeToContact(contact.address)}
+                                data-testid="mobile-search-people-result"
+                            >
+                                <Avatar email={contact.address} name={contact.name} size={28} />
+                                <span class="msearch-people-text">
+                                    <span class="msearch-people-name">{contact.name || contactNameFor(contact.address) || contact.address}</span>
+                                    <span class="msearch-people-addr muted small">{contact.address}</span>
+                                </span>
+                            </button>
+                        {/each}
+                    {/if}
+                {:else if savedMailSearches.items.length > 0}
                     <div class="msearch-panel-hint">Saved searches</div>
                     {#each savedMailSearches.items as saved (saved.id)}
                         <div class="msearch-saved-row">
@@ -1088,6 +1182,10 @@
             <span class="muted small">Searching every folder · {globalScan.scanned} / {globalScan.total}</span>
             <span class="scan-bar" aria-hidden="true" style={`--pct: ${Math.min(100, Math.round((globalScan.scanned / Math.max(1, globalScan.total)) * 100))}%;`}></span>
         </div>
+    {/if}
+
+    {#if mobileState.searchCategory === 'files' && (mobileState.search || '').trim()}
+        <div class="msearch-files-scope" data-testid="mobile-search-files-scope">Attachments only</div>
     {/if}
 
     {#if showInboxTabs}

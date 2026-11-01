@@ -57,7 +57,8 @@ const ASSET48 = 'docs/assets/outlook-slice48';
 const ASSET49 = 'docs/assets/outlook-slice49';
 const ASSET50 = 'docs/assets/outlook-slice50';
 const ASSET51 = 'docs/assets/outlook-slice51';
-for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET20, ASSET22, ASSET23, ASSET24, ASSET25, ASSET26, ASSET27, ASSET28, ASSET29, ASSET30, ASSET31, ASSET32, ASSET33, ASSET34, ASSET35, ASSET36, ASSET37, ASSET38, ASSET39, ASSET41, ASSET42, ASSET43, ASSET44, ASSET45, ASSET46, ASSET47, ASSET48, ASSET49, ASSET50, ASSET51]) mkdirSync(d, { recursive: true });
+const ASSET53 = 'docs/assets/outlook-slice53';
+for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET20, ASSET22, ASSET23, ASSET24, ASSET25, ASSET26, ASSET27, ASSET28, ASSET29, ASSET30, ASSET31, ASSET32, ASSET33, ASSET34, ASSET35, ASSET36, ASSET37, ASSET38, ASSET39, ASSET41, ASSET42, ASSET43, ASSET44, ASSET45, ASSET46, ASSET47, ASSET48, ASSET49, ASSET50, ASSET51, ASSET53]) mkdirSync(d, { recursive: true });
 
 const baseSettings = {
     aiFeatures: false,
@@ -819,6 +820,23 @@ test.describe('docs mobile (390×844 @2x)', () => {
         await expect(page.getByTestId('mobile-search-suggest')).toBeVisible();
         await settleForScreenshot(page);
         await shot(page, `${ASSET31}/61-mobile-saved-searches-panel.png`);
+    });
+
+    test('slice53 mobile search category Files scope', async ({ page }) => {
+        await page.addInitScript((blob) => {
+            localStorage.setItem('webmail.theme', 'light');
+            localStorage.setItem('webmail.settings.v1', blob);
+        }, seedSettings());
+        await page.goto('/webmail/mobile/');
+        await page.fill('input[type="email"]', MOCK_USER);
+        await page.fill('input[type="password"]', MOCK_PASS);
+        await page.click('button:has-text("Sign in")');
+        await page.getByTestId('mobile-search-category-files').click();
+        await page.getByTestId('mobile-search-input').fill('Welcome');
+        await page.waitForTimeout(450);
+        await expect(page.getByTestId('mobile-search-files-scope')).toBeVisible();
+        await settleForScreenshot(page);
+        await shot(page, `${ASSET53}/83-mobile-search-category-files.png`);
     });
 
     test('slice32 mobile category stripe', async ({ page }) => {

@@ -263,6 +263,66 @@ body {
     background: var(--bg-surface);
     border-bottom: 0.5px solid var(--border-subtle);
 }
+.msearch-category-tabs {
+    display: flex;
+    gap: 6px;
+    padding: 8px 12px 0;
+}
+.msearch-category-tab {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 4px 12px;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+.msearch-category-tab.active {
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    color: var(--accent);
+    border-color: var(--accent);
+}
+.msearch-files-scope {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    padding: 6px 16px 8px;
+    background: var(--bg-surface);
+    border-bottom: 0.5px solid var(--border-subtle);
+}
+.msearch-people-empty {
+    padding: 4px 8px 8px;
+    margin: 0;
+}
+.msearch-people-chip {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 8px 10px;
+    border: none;
+    border-radius: 10px;
+    background: var(--bg-hover);
+    text-align: left;
+    cursor: pointer;
+}
+.msearch-people-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+.msearch-people-name {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+.msearch-people-addr {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 .msearch-wrap .msearch {
     border-bottom: none;
 }
