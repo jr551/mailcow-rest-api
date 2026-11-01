@@ -9,7 +9,8 @@ import {
     MAIL_READING_PANE_LABEL,
     MAIL_READING_PANE_LANDMARK_ID,
     MAIL_SKIP_LINK_TEXT,
-    mailLandmarkLabelSet
+    mailLandmarkLabelSet,
+    focusMailReadingPaneLandmark
 } from '../../src/lib/mail-landmarks.ts';
 
 describe('mail-landmarks', () => {
@@ -29,5 +30,10 @@ describe('mail-landmarks', () => {
         ];
         assert.equal(new Set(labels).size, labels.length);
         assert.equal(mailLandmarkLabelSet().size, MAIL_LANDMARK_ROWS.length);
+    });
+
+    it('focusMailReadingPaneLandmark targets the reading pane landmark id', () => {
+        assert.equal(MAIL_READING_PANE_LANDMARK_ID, 'mail-reading-pane-landmark');
+        assert.equal(typeof focusMailReadingPaneLandmark, 'function');
     });
 });

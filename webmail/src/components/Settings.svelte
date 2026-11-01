@@ -3230,7 +3230,9 @@
                     <p class="muted small">
                         The mail layout exposes Outlook-style landmarks for screen readers. Tab order
                         follows the panes left to right: command bar, folders, message list, then reading
-                        pane when a message is open. Press <kbd>Tab</kbd> once after load to reach the
+                        pane when a message is open. Opening a message moves focus into the reading pane
+                        landmark (including the slide-over pane when reading pane layout is hidden).
+                        Press <kbd>Tab</kbd> once after load to reach the
                         <strong>{MAIL_SKIP_LINK_TEXT}</strong> link and jump straight to the list.
                     </p>
                     <table class="shortcut-table">
