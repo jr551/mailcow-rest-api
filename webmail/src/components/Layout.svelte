@@ -98,7 +98,8 @@
         MAIL_READING_PANE_LABEL,
         MAIL_READING_PANE_LANDMARK_ID,
         MAIL_SKIP_LINK_TEXT,
-        focusMailReadingPaneLandmark
+        focusMailReadingPaneLandmark,
+        focusMailMessageListLandmark
     } from '../lib/mail-landmarks';
     import MailShortcutHelp from './MailShortcutHelp.svelte';
     import { findThreadForUid } from '../lib/conversation-view';
@@ -492,6 +493,7 @@
         ui.selectedUid = null;
         ui.detail = null;
         ui.detailError = null;
+        requestAnimationFrame(() => focusMailMessageListLandmark());
     }
 
     $effect(() => {
@@ -1849,10 +1851,13 @@
             }
             if (ui.settingsOpen) ui.settingsOpen = false;
             else if (ui.aiPanelOpen) ui.aiPanelOpen = false;
-            else if (ui.selected.size > 0) clearSelection();
-            else {
+            else if (ui.selected.size > 0) {
+                clearSelection();
+                requestAnimationFrame(() => focusMailMessageListLandmark());
+            } else if (ui.selectedUid != null || ui.detail != null) {
                 ui.selectedUid = null;
                 ui.detail = null;
+                requestAnimationFrame(() => focusMailMessageListLandmark());
             }
             return;
         }
@@ -2118,7 +2123,7 @@
 
     function focusMessageListLandmark(e?: MouseEvent) {
         e?.preventDefault();
-        document.getElementById(MAIL_MESSAGE_LIST_LANDMARK_ID)?.focus();
+        focusMailMessageListLandmark();
     }
 </script>
 
