@@ -126,9 +126,11 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Mail deep link reading pane](docs/assets/outlook-slice16/45-mail-deep-link.png)
 
-- **Landmarks & skip link** — OWA-style regions (**Command bar**, **Mail folders**, **Message list**, **Reading pane**) plus a **Skip to message list** link (visible on keyboard focus). Documented under **Settings → General → Accessibility**.
+- **Landmarks & skip links** — OWA-style regions (**Command bar**, **Mail folders**, **Message list**, **Reading pane**) plus **Skip to message list** and, when a message is open, **Skip to reading pane** (visible on keyboard focus). Documented under **Settings → General → Accessibility**.
 
 ![Skip link focused](docs/assets/outlook-slice17/46-skip-link-focused.png)
+
+![Skip to reading pane focused](docs/assets/outlook-slice48/78-skip-reading-pane-focused.png)
 
 - **Reading pane focus** — opening a message moves keyboard focus to the **Reading pane** landmark (docked pane or hidden-layout slide-over). Press **Esc** to close the message and return focus to the **Message list**. Documented under **Settings → General → Accessibility**.
 

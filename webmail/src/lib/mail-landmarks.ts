@@ -5,6 +5,7 @@
  */
 
 export const MAIL_SKIP_LINK_TEXT = 'Skip to message list';
+export const MAIL_SKIP_TO_READING_PANE_TEXT = 'Skip to reading pane';
 
 export const MAIL_MESSAGE_LIST_LANDMARK_ID = 'mail-message-list-landmark';
 export const MAIL_READING_PANE_LANDMARK_ID = 'mail-reading-pane-landmark';

@@ -114,7 +114,7 @@
     import type { TakeoverSettings, TakeoverSender } from '../lib/api';
     import type { IconName } from '../lib/icons';
     import { MAIL_KEYBOARD_SHORTCUT_ROWS } from '../lib/mail-keyboard-shortcuts';
-    import { MAIL_LANDMARK_ROWS, MAIL_SKIP_LINK_TEXT } from '../lib/mail-landmarks';
+    import { MAIL_LANDMARK_ROWS, MAIL_SKIP_LINK_TEXT, MAIL_SKIP_TO_READING_PANE_TEXT } from '../lib/mail-landmarks';
 
     // Outlook's Settings is a three-column overlay: a category rail on the
     // left, a sub-section list in the middle, one content pane on the right.
@@ -3234,8 +3234,10 @@
                         landmark (including the slide-over pane when reading pane layout is hidden).
                         Press <kbd>Esc</kbd> to close the message and return focus to the message list.
                         Closing compose (Discard or after send) also returns focus to the message list.
-                        Press <kbd>Tab</kbd> once after load to reach the
-                        <strong>{MAIL_SKIP_LINK_TEXT}</strong> link and jump straight to the list.
+                        When a message is open, a second skip link —
+                        <strong>{MAIL_SKIP_TO_READING_PANE_TEXT}</strong> — appears after
+                        <strong>{MAIL_SKIP_LINK_TEXT}</strong>. Press <kbd>Tab</kbd> once after load to reach the
+                        list skip link and jump straight to the list.
                     </p>
                     <table class="shortcut-table">
                         <thead>
