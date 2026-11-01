@@ -1078,6 +1078,12 @@
         refreshMessages({ resetPage: true });
     }
 
+    function applySearchRefinement(nextQuery: string) {
+        searchInput = nextQuery;
+        if (searchDebounce) clearTimeout(searchDebounce);
+        void applySearchFromInput();
+    }
+
     function startSaveCurrentSearch() {
         const q = (searchInput || ui.search || '').trim();
         if (!q) return;
@@ -2694,6 +2700,7 @@
                 scanState={globalScanState ?? scanState}
                 onMove={moveTo}
                 onBlockSender={blockSenderForUid}
+                onSearchRefine={applySearchRefinement}
             />
             </section>
             {#if dockedReadingPane}
