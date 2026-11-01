@@ -104,9 +104,9 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Pinned message row](docs/assets/outlook-slice9/38-pinned-message-row.png)
 
-- **Sweep** — right-click **Sweep** on a message to bulk-handle every message from that sender in the folder: delete all, keep only the latest, or move all to Archive (uses server `from:` search, not just the visible page).
+- **Sweep** — right-click **Sweep…** on a message to open the OWA-style Sweep dialog: one-time delete all, keep only the latest, or move all to Archive (server `from:` search), plus optional **Always move future messages** rules to Deleted Items or Archive (server-side mail rules; applies to new mail only).
 
-![Sender sweep menu](docs/assets/outlook-slice10/39-sender-sweep-menu.png)
+![Sender sweep dialog with automation](docs/assets/outlook-slice54/84-sender-sweep-automation-dialog.png)
 
 - **Quick steps** — select one or more messages (row checkbox) to show **Quick steps** beside Filter/Sort: **Done** (read + archive), **Mark read & flag**, **Move to Junk**, **Move to Deleted Items**. Each step runs its actions in order via IMAP flags and bulk move.
 
