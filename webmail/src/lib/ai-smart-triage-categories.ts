@@ -1,5 +1,4 @@
-import type { MessageCategoryId } from './message-categories.ts';
-import { categoryFromFlags } from './message-categories.ts';
+import type { MessageCategoryId } from './message-categories';
 
 /** Minimal ranking shape from AI inbox sort (avoids pulling client deps in unit tests). */
 export type SmartTriageRanking = {
@@ -26,6 +25,19 @@ const INBOX_CATEGORIES = new Set<InboxCategory>([
     'marketing',
     'info'
 ]);
+
+const OWA_CATEGORY_KEYWORDS = [
+    '$CategoryRed',
+    '$CategoryOrange',
+    '$CategoryYellow',
+    '$CategoryGreen',
+    '$CategoryBlue',
+    '$CategoryPurple'
+];
+
+export function messageHasOwaCategoryFlag(flags: string[]): boolean {
+    return flags.some((f) => OWA_CATEGORY_KEYWORDS.includes(f));
+}
 
 export function sanitizeInboxCategory(raw: unknown): InboxCategory | null {
     if (typeof raw !== 'string' || !INBOX_CATEGORIES.has(raw as InboxCategory)) return null;
@@ -72,7 +84,7 @@ export function buildSmartTriageCategoryAssignments(input: {
     const out: SmartTriageCategoryAssignment[] = [];
     for (const ranking of input.rankings) {
         const flags = input.flagsForUid(ranking.uid);
-        if (!flags || categoryFromFlags(flags)) continue;
+        if (!flags || messageHasOwaCategoryFlag(flags)) continue;
 
         const inboxCat = input.resolveEffectiveInboxCategory(ranking.uid);
         if (!inboxCat) continue;
