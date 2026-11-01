@@ -122,7 +122,7 @@
     // htmlToPlainText now lives in lib/reply-suggest.svelte, shared with
     // the mobile compose view.
 
-    let to = $state(restoreSnap?.to ?? buildTo());
+    let to = $state(restoreSnap?.to ?? ui.composeContext?.prefillTo ?? buildTo());
     let cc = $state(restoreSnap?.cc ?? buildCc());
     let bcc = $state(restoreSnap?.bcc ?? '');
 

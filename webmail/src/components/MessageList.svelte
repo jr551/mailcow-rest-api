@@ -1477,6 +1477,9 @@
     <header class="list-header">
         <div class="list-title">
             <span class="title-folder">{prettyName(ui.selectedPath)}</span>
+            {#if ui.searchCategory === 'files' && ui.search}
+                <span class="search-files-scope" data-testid="search-files-scope">Attachments only</span>
+            {/if}
             {#if ui.search}<span class="search-tag">"{ui.search}"</span>{/if}
         </div>
         <div class="list-meta muted">
@@ -2663,6 +2666,14 @@
         border-radius: var(--radius-sm);
         font-size: 12px;
         color: var(--text-tertiary);
+    }
+    .search-files-scope {
+        padding: var(--pill-padding);
+        background: var(--accent-soft, rgba(0, 120, 212, 0.12));
+        border-radius: var(--radius-sm);
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--accent, #0078d4);
     }
     .search-refiners {
         display: flex;
