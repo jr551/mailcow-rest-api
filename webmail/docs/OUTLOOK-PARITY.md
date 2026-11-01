@@ -623,7 +623,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 56 (this PR)
+## Slice 56 (done in #143)
 
 - Reuses **`SenderSweepDialog.svelte`** on `/webmail/mobile/` (same one-time + automation UX as desktop slice 54).
 - **`InboxView.svelte`**: long-press **Sweep** opens the dialog; **`runMobileSenderSweep`** supports **`skipConfirm`** for in-dialog applies.
@@ -633,9 +633,19 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 58 (this PR)
+
+- **`compose-popout.ts`**: **`broadcastComposePopoutDock`** / **`attachComposePopoutBroadcastListener`** hand drafts back to the main tab; **`composePopoutDocumentTitle`** keeps the pop-out window title in sync with the subject.
+- **`FloatingPanel.svelte`**: **Open in main window** title-bar control when compose runs in a pop-out.
+- **`Compose.svelte`** + **`Layout.svelte`**: dock restores the floating compose on the mail tab with fields intact.
+- Tests: unit (`compose-popout.test.mjs`) + Playwright (`outlook-compose-popout-dock.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice58/88-compose-popout-dock-in.png`.
+
+---
+
 ## Next planned slice
 
-Rules management UI, compose pop-out polish, or opt-in AI draft/rewrite improvements (slice 57+).
+Mail rules list filters, rules editing polish, accessibility focus order, or opt-in AI draft/rewrite improvements (slice 59+).
 
 ---
 

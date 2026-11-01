@@ -1,4 +1,4 @@
-import type { Page, Route } from '@playwright/test';
+import type { BrowserContext, Page, Route } from '@playwright/test';
 
 // Centralized API mocks for the webmail SPA. Routes are matched against the
 // preview server's URL space (no /webmail prefix on API calls — Vite preview
@@ -1050,6 +1050,13 @@ export async function applyMocks(page: Page) {
                 model: 'mistral-small-latest'
             })
         });
+    });
+}
+
+/** Compose pop-out opens a second page — forward API mocks so maintenance probes stay green. */
+export function installPopoutMockForwarding(context: BrowserContext) {
+    context.on('page', (p) => {
+        void applyMocks(p);
     });
 }
 

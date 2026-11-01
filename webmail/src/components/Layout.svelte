@@ -27,6 +27,7 @@
         parseMailDeepLinkHash,
         replaceMailDeepLinkInHistory
     } from '../lib/mail-deep-link';
+    import { attachComposePopoutBroadcastListener } from '../lib/compose-popout';
     import { recordView } from '../lib/recent-views.svelte';
     import {
         listMailboxes,
@@ -2211,7 +2212,15 @@
         };
         window.addEventListener('hashchange', onHashChange);
 
+        const detachComposePopout = attachComposePopoutBroadcastListener((msg) => {
+            if (msg.type !== 'dock') return;
+            ui.composeContext = msg.composeContext;
+            ui.composeOpen = true;
+            showToast('info', 'Compose opened in this window');
+        });
+
         return () => {
+            detachComposePopout();
             document.removeEventListener('keydown', handler);
             document.removeEventListener('click', onDocClick);
             window.removeEventListener('hashchange', onHashChange);

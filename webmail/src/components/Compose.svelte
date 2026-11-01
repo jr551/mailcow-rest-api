@@ -37,6 +37,8 @@
     import { saveComposeDraftToImap } from '../lib/compose-draft.svelte';
     import {
         buildPopoutComposeContext,
+        broadcastComposePopoutDock,
+        composePopoutDocumentTitle,
         newComposePopoutSessionId,
         openComposePopoutWindow,
         storeComposePopoutSession
@@ -50,8 +52,10 @@
         onClose: () => void;
         /** Rendered from a dedicated pop-out browser window (slice 15). */
         popout?: boolean;
+        /** Active pop-out session id — required for dock-back to the main tab (slice 58). */
+        popoutSessionId?: string | null;
     }
-    let { onClose, popout = false }: Props = $props();
+    let { onClose, popout = false, popoutSessionId = null }: Props = $props();
 
     const replyTo = ui.composeContext?.replyTo || null;
     const replyMode = ui.composeContext?.mode || (replyTo ? 'reply' : 'new');
@@ -1001,6 +1005,21 @@
         onClose();
     }
 
+    function dockPopoutToMain() {
+        if (!popout || !popoutSessionId) return;
+        const composeContext = buildPopoutComposeContext(
+            ui.composeContext || { replyTo: null, mode: replyMode },
+            snapshotRestore()
+        );
+        broadcastComposePopoutDock(popoutSessionId, composeContext);
+        onClose();
+    }
+
+    $effect(() => {
+        if (!popout || typeof document === 'undefined') return;
+        document.title = composePopoutDocumentTitle(subject);
+    });
+
     async function doSend(immediate = false) {
         if (!to.trim() || !smtpAvailable()) return;
         sending = true;
@@ -1061,6 +1080,7 @@
     minHeight={420}
     onClose={onClose}
     onPopOut={popout ? null : popOutCompose}
+    onDockIn={popout && popoutSessionId ? dockPopoutToMain : null}
     testId="compose-modal"
     overlayVisible={sending || scheduleDialogOpen}
 >

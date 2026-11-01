@@ -2623,6 +2623,8 @@
                                     Use the <strong>Open in new window</strong> control in the compose title bar
                                     (Outlook-style) to continue writing in a separate browser window while you
                                     read mail in the main tab. Your in-progress fields move with the pop-out.
+                                    In the pop-out, choose <strong>Open in main window</strong> to return the draft
+                                    to the compose panel on the mail tab.
                                 </span>
                             </div>
                         </div>
