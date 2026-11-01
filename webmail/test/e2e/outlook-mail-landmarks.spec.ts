@@ -25,4 +25,16 @@ test.describe('Outlook mail landmarks (slice 17)', () => {
         const listLandmark = page.locator(`#mail-message-list-landmark`);
         await expect(listLandmark).toBeFocused();
     });
+
+    test('reading pane skip link appears when a message is open (slice 48)', async ({ page }) => {
+        await login(page);
+        await expect(page.getByTestId('mail-skip-reading-pane-link')).toHaveCount(0);
+        await page.getByTestId('msg-row-1001').click();
+        await expect(page.locator('#mail-reading-pane-landmark')).toBeFocused();
+        const skipReading = page.getByTestId('mail-skip-reading-pane-link');
+        await expect(skipReading).toBeVisible();
+        await skipReading.focus();
+        await skipReading.click();
+        await expect(page.locator('#mail-reading-pane-landmark')).toBeFocused();
+    });
 });

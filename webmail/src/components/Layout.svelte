@@ -98,6 +98,7 @@
         MAIL_READING_PANE_LABEL,
         MAIL_READING_PANE_LANDMARK_ID,
         MAIL_SKIP_LINK_TEXT,
+        MAIL_SKIP_TO_READING_PANE_TEXT,
         composeCloseFocusLandmarkId,
         focusMailLandmarkById,
         focusMailReadingPaneLandmark,
@@ -2140,6 +2141,15 @@
         e?.preventDefault();
         focusMailMessageListLandmark();
     }
+
+    function focusReadingPaneSkipLandmark(e?: MouseEvent) {
+        e?.preventDefault();
+        focusMailReadingPaneLandmark();
+    }
+
+    const showReadingPaneSkipLink = $derived(
+        ui.selectedUid != null && (dockedReadingPane || readingFlyoutOpen)
+    );
 </script>
 
 <div class="shell" data-density={settings.density} data-testid="shell">
@@ -2149,6 +2159,14 @@
         data-testid="mail-skip-link"
         onclick={focusMessageListLandmark}
     >{MAIL_SKIP_LINK_TEXT}</a>
+    {#if showReadingPaneSkipLink}
+        <a
+            href={`#${MAIL_READING_PANE_LANDMARK_ID}`}
+            class="skip-link skip-link-reading-pane"
+            data-testid="mail-skip-reading-pane-link"
+            onclick={focusReadingPaneSkipLandmark}
+        >{MAIL_SKIP_TO_READING_PANE_TEXT}</a>
+    {/if}
     <header class="topbar" aria-label={MAIL_COMMAND_BAR_LABEL}>
         <!-- `settings.hideSidebar === true` means the rail is COLLAPSED, so
              the button's ACTION is "show" and its pressed state is false.
@@ -3089,6 +3107,9 @@
         transform: translateY(0);
         outline: 2px solid var(--accent);
         outline-offset: 2px;
+    }
+    .skip-link-reading-pane {
+        top: 48px;
     }
     .mail-landmark-list {
         grid-column: 1;
