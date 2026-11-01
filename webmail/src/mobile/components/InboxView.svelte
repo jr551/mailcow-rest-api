@@ -92,6 +92,8 @@
         type SearchCategory
     } from '../../lib/search-category';
     import { loadAddressBook, searchContacts, contactNameFor } from '../../lib/address-book.svelte';
+    import { translateNaturalLanguageSearch } from '../../lib/natural-language-search.client';
+    import { shouldTranslateNlSearchQuery } from '../../lib/natural-language-search';
     import {
         MAIL_COMMAND_BAR_LABEL,
         MAIL_MESSAGE_LIST_LABEL,
@@ -108,6 +110,9 @@
     let searchInput = $state('');
     let searchInputEl: HTMLInputElement | undefined = $state();
     let searchDebounce: ReturnType<typeof setTimeout> | null = null;
+    let searchResolveGen = 0;
+    let nlSearchResolving = $state(false);
+    let lastNlSearchTranslation = $state<string | null>(null);
     let searchPanelOpen = $state(false);
     let saveSearchFormOpen = $state(false);
     let saveSearchDraftName = $state('');
@@ -124,7 +129,10 @@
         return searchContacts(searchInput, 12);
     });
     const mobileSearchPlaceholder = $derived(
-        searchPlaceholderForCategory(mobileState.searchCategory, false)
+        searchPlaceholderForCategory(
+            mobileState.searchCategory,
+            !!(settings.naturalLanguageSearch && settings.aiFeatures)
+        )
     );
     const showMobileSearchPanel = $derived(
         shouldShowMobileSavedSearchPanel(
@@ -392,8 +400,10 @@
         applySearchFromInput();
     }
 
-    function applySearchFromInput() {
+    async function applySearchFromInput() {
+        const gen = ++searchResolveGen;
         if (!shouldRunMailSearch(mobileState.searchCategory)) {
+            lastNlSearchTranslation = null;
             mobileState.search = '';
             if (mobileState.searchScope === 'all') {
                 cancelGlobalSearch();
@@ -405,6 +415,27 @@
             return;
         }
         let q = searchInput.trim();
+        lastNlSearchTranslation = null;
+
+        if (
+            shouldTranslateNlSearchQuery(q, mobileState.searchCategory, {
+                aiFeatures: settings.aiFeatures,
+                naturalLanguageSearch: settings.naturalLanguageSearch
+            })
+        ) {
+            nlSearchResolving = true;
+            try {
+                const translated = await translateNaturalLanguageSearch(q);
+                if (gen !== searchResolveGen) return;
+                if (translated) {
+                    lastNlSearchTranslation = translated;
+                    q = translated;
+                }
+            } finally {
+                if (gen === searchResolveGen) nlSearchResolving = false;
+            }
+        }
+
         q = mailQueryForCategory(q, mobileState.searchCategory);
         mobileState.search = q;
         if (mobileState.searchScope === 'all') {
@@ -1051,6 +1082,17 @@
                 >{cat.label}</button>
             {/each}
         </div>
+        {#if nlSearchResolving}
+            <span class="msearch-nl-status muted small" data-testid="mobile-search-nl-pending">Translating…</span>
+        {:else if lastNlSearchTranslation}
+            <span
+                class="msearch-nl-status muted small"
+                data-testid="mobile-search-nl-hint"
+                title="Translated to tag syntax"
+            >
+                as {lastNlSearchTranslation}
+            </span>
+        {/if}
         <div class="msearch">
             <input
                 bind:this={searchInputEl}

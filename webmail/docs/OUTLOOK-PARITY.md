@@ -603,7 +603,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 54 (this PR)
+## Slice 54 (done in #141)
 
 - **`message-sender-sweep-automation.ts`**: builds **Sweep:** mail rules (always trash / always archive) and duplicate detection.
 - **`SenderSweepDialog.svelte`**: OWA-style Sweep dialog (one-time actions + optional automation checkboxes).
@@ -613,9 +613,19 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 55 (this PR)
+
+- **`natural-language-search.ts`**: **`shouldTranslateNlSearchQuery`** gate for mobile **Mail** tab (requires **`aiFeatures`** + **`naturalLanguageSearch`**, skips tag syntax).
+- **`InboxView.svelte`**: debounced translation via **`translateNaturalLanguageSearch`**; **Translating…** / **as …** hint under category tabs; placeholder matches desktop when NL is on.
+- **`SettingsView.svelte`**: **Natural-language search** toggle under AI (off by default).
+- Tests: unit (`natural-language-search.test.mjs`) + Playwright (`outlook-mobile-nl-search.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice55/85-mobile-nl-search-hint.png`.
+
+---
+
 ## Next planned slice
 
-Mobile Sweep dialog parity, rules management UI, or opt-in AI features (slice 55).
+Rules management UI, mobile Sweep dialog parity, or compose pop-out polish (slice 56+).
 
 ---
 
