@@ -4228,6 +4228,7 @@
                         <span class="muted">
                             Conversations collapse into one row showing the latest reply and a count.
                             Off shows every message as its own row, gmail's "newest first, no grouping" view.
+                            With grouping on, the reading-pane stack renders HTML message bodies with the same sanitized iframe view as the main message.
                         </span>
                     </div>
                     <label class="toggle compact">

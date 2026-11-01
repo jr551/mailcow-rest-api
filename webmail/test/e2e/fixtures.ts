@@ -98,7 +98,9 @@ export const detailFor997 = {
         'Hey!\n\n' +
         'Are you free for lunch on Friday? I was thinking we could try the new place on Main.\n\n' +
         'Sam',
-    html: null,
+    html:
+        '<p>Hey!</p><p>Are you free for lunch on <strong>Friday</strong>? ' +
+        'I was thinking we could try the new place on Main.</p><p>Sam</p>',
     attachments: [
         { id: '1', filename: 'lunch-menu.pdf', contentType: 'application/pdf', size: 52_400, disposition: 'attachment', related: false }
     ]
