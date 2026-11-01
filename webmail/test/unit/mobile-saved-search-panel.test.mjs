@@ -17,3 +17,8 @@ test('mobile saved search panel shows when focused with saved items only', () =>
 test('mobile saved search panel shows while naming a new saved search', () => {
     assert.equal(shouldShowMobileSavedSearchPanel(true, 0, false, true), true);
 });
+
+test('mobile saved search panel shows for People category matches (slice 53)', () => {
+    assert.equal(shouldShowMobileSavedSearchPanel(true, 0, false, false, true), true);
+    assert.equal(shouldShowMobileSavedSearchPanel(false, 0, false, false, true), false);
+});

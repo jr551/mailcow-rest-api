@@ -194,6 +194,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Search category Files](docs/assets/outlook-slice51/81-search-category-files.png)
 
+- **Mobile search categories** — the same **Mail | People | Files** tabs on the mobile inbox search bar; **People** opens compose to the contact you pick; **Files** adds **`has:attachment`** and shows **Attachments only**.
+
+![Mobile search category Files](docs/assets/outlook-slice53/83-mobile-search-category-files.png)
+
 ![Mobile saved searches panel](docs/assets/outlook-slice31/61-mobile-saved-searches-panel.png)
 
 - **Mobile colour categories** — long-press a message for **Categorize** (same OWA colour categories and `webmail.message-categories.v1` overlay as desktop). Rows show a left colour stripe when categorized.

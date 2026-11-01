@@ -19,7 +19,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 | **Reading pane** | `MessageDetail.svelte`, reply/forward, conversation stack when grouped, **inline quick reply** (slice 52) | Low–medium: richer HTML parity in main pane; stack HTML done (slice 42); pane position done (slice 3) |
 | **Conversation view** | List grouping via `threads.ts`; reading-pane stack via `conversation-view.ts` + `ConversationStack.svelte` | Low–medium: further OWA transcript polish |
 | **Compose** | `Compose.svelte` + `FloatingPanel.svelte`, TipTap | Medium: sensitivity labels; **undo send** (slice 12), **scheduled send** (#100), **Save draft** (slice 14) |
-| **Search** | Header search + tag syntax; **Mail / People / Files** category tabs (slice 51); **saved searches** (local) on desktop and mobile; **search refiners** on active queries (slice 50); optional **natural-language** translation when AI + provider configured | Medium: deeper People index vs OWA People app |
+| **Search** | Header search + tag syntax; **Mail / People / Files** category tabs (slice 51 desktop, slice 53 mobile); **saved searches** (local) on desktop and mobile; **search refiners** on active queries (slice 50); optional **natural-language** translation when AI + provider configured | Medium: deeper People index vs OWA People app |
 | **Settings shell** | `Settings.svelte` 3-column Outlook-like modal, 19 sections | Low–medium: content differs |
 | **AI features** | Master switch **`aiFeatures`**; defaults **off** for new profiles; every AI entry point hidden when off; optional **smart triage → OWA colour categories** on AI-sorted mail (slice 49) | Low — opt-in provider config remains in Settings |
 | **People / VIP** | VIP list in Settings; local address book | Medium vs OWA People app |
@@ -583,7 +583,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 52 (this PR)
+## Slice 52 (done in #139)
 
 - **`reading-pane-quick-reply.ts`**: reply subject/recipient helpers and quoted HTML body for inline sends.
 - **`ReadingPaneQuickReply.svelte`**: OWA-style footer under the reading pane (expand → type → Send / Discard / Open full reply).
@@ -593,9 +593,19 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 53 (this PR)
+
+- Reuses **`search-category.ts`** on mobile inbox search.
+- **`InboxView.svelte`**: **Mail | People | Files** tabs under the search field; People matches open compose via **`composePrefillTo`**; Files shows **Attachments only** scope chip.
+- **`mobile-saved-search-panel.ts`**: People matches keep the suggest panel open while typing.
+- Tests: unit (`mobile-saved-search-panel.test.mjs`) + Playwright (`outlook-mobile-search-category.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice53/83-mobile-search-category-files.png`.
+
+---
+
 ## Next planned slice
 
-Rules / sweep automation UI, compose pop-out window, mobile search category tabs, or opt-in AI features (slice 53).
+Rules / sweep automation UI, compose pop-out window, or opt-in AI features (slice 54).
 
 ---
 
