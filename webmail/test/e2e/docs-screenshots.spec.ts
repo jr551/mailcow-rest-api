@@ -51,8 +51,9 @@ const ASSET42 = 'docs/assets/outlook-slice42';
 const ASSET43 = 'docs/assets/outlook-slice43';
 const ASSET44 = 'docs/assets/outlook-slice44';
 const ASSET45 = 'docs/assets/outlook-slice45';
+const ASSET46 = 'docs/assets/outlook-slice46';
 const ASSET47 = 'docs/assets/outlook-slice47';
-for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET20, ASSET22, ASSET23, ASSET24, ASSET25, ASSET26, ASSET27, ASSET28, ASSET29, ASSET30, ASSET31, ASSET32, ASSET33, ASSET34, ASSET35, ASSET36, ASSET37, ASSET38, ASSET39, ASSET41, ASSET42, ASSET43, ASSET44, ASSET45, ASSET47]) mkdirSync(d, { recursive: true });
+for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET20, ASSET22, ASSET23, ASSET24, ASSET25, ASSET26, ASSET27, ASSET28, ASSET29, ASSET30, ASSET31, ASSET32, ASSET33, ASSET34, ASSET35, ASSET36, ASSET37, ASSET38, ASSET39, ASSET41, ASSET42, ASSET43, ASSET44, ASSET45, ASSET46, ASSET47]) mkdirSync(d, { recursive: true });
 
 const baseSettings = {
     aiFeatures: false,
@@ -970,6 +971,22 @@ test.describe('docs mobile (390×844 @2x)', () => {
         await page.keyboard.press('Escape');
         await expect(page.locator('#mail-message-list-landmark')).toBeFocused();
         await shot(page, `${ASSET44}/74-mobile-message-list-focused-after-esc.png`);
+    });
+
+    test('slice46 mobile message list focused after closing compose', async ({ page }) => {
+        await page.addInitScript((blob) => {
+            localStorage.setItem('webmail.theme', 'light');
+            localStorage.setItem('webmail.settings.v1', blob);
+        }, seedSettings());
+        await page.goto('/webmail/mobile/');
+        await page.fill('input[type="email"]', MOCK_USER);
+        await page.fill('input[type="password"]', MOCK_PASS);
+        await page.click('button:has-text("Sign in")');
+        await page.getByTestId('compose-btn').click();
+        await expect(page.getByTestId('compose-to')).toBeVisible();
+        await page.getByTestId('compose-close').click();
+        await expect(page.locator('#mail-message-list-landmark')).toBeFocused();
+        await shot(page, `${ASSET46}/76-mobile-compose-close-message-list-focused.png`);
     });
 
     test('slice39 mobile compose discard sheet', async ({ page }) => {

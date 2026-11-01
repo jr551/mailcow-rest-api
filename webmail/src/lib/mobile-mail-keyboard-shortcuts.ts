@@ -27,7 +27,7 @@ export const MOBILE_MAIL_KEYBOARD_SHORTCUT_ROWS: MailShortcutRow[] = [
     { keys: 'Insert', description: 'Flag / unflag message' },
     { keys: '/', description: 'Focus search' },
     { keys: '?', description: 'Show keyboard shortcuts' },
-    { keys: 'Esc', description: 'Close this sheet, leave search, go back from a message, and return focus to the message list' },
+    { keys: 'Esc', description: 'Close this sheet, leave search, go back from a message or compose, and return focus to the message list or reading pane' },
 ];
 
 type KeyLike = Pick<KeyboardEvent, 'key' | 'altKey' | 'shiftKey' | 'ctrlKey' | 'metaKey'>;

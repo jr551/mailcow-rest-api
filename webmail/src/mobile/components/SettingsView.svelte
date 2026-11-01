@@ -474,6 +474,9 @@
                 <p class="muted small" style="margin:8px 0 0;">
                     When you compose on mobile, screen readers get a dedicated <strong>Compose message</strong> region
                     with labelled field and action areas; focus moves to the <strong>To</strong> field when compose opens.
+                    Closing compose (close control, back, or <strong>Discard</strong> after send) returns focus to the
+                    <strong>Message list</strong> when you started from the inbox, or to the <strong>Reading pane</strong>
+                    when you were replying from a message (full-screen phone layout).
                 </p>
                 <ul class="landmark-list muted small" style="margin:4px 0 0;padding-left:18px;" data-testid="mobile-settings-compose-landmarks">
                     {#each MOBILE_COMPOSE_LANDMARK_ROWS as row}
