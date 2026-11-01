@@ -9,6 +9,7 @@ import {
     MAIL_READING_PANE_LABEL,
     MAIL_READING_PANE_LANDMARK_ID,
     MAIL_SKIP_LINK_TEXT,
+    MAIL_SKIP_TO_READING_PANE_TEXT,
     composeCloseFocusLandmarkId,
     mailLandmarkLabelSet,
     focusMailReadingPaneLandmark,
@@ -20,6 +21,11 @@ describe('mail-landmarks', () => {
         assert.match(MAIL_MESSAGE_LIST_LANDMARK_ID, /^mail-/);
         assert.match(MAIL_READING_PANE_LANDMARK_ID, /^mail-/);
         assert.notEqual(MAIL_MESSAGE_LIST_LANDMARK_ID, MAIL_READING_PANE_LANDMARK_ID);
+    });
+
+    it('documents skip links for list and reading pane (slice 48)', () => {
+        assert.ok(MAIL_SKIP_LINK_TEXT.includes('message list'));
+        assert.ok(MAIL_SKIP_TO_READING_PANE_TEXT.includes('reading pane'));
     });
 
     it('uses unique OWA-aligned region labels', () => {
