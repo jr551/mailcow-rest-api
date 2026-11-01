@@ -39,7 +39,7 @@ export const MAIL_KEYBOARD_SHORTCUT_ROWS: MailShortcutRow[] = [
     { keys: 'Alt+Shift+R', description: 'Reading pane on the right' },
     { keys: 'Alt+Shift+B', description: 'Reading pane at the bottom' },
     { keys: 'Alt+Shift+H', description: 'Hide reading pane' },
-    { keys: 'Esc', description: 'Close panel, clear selection, or close message' }
+    { keys: 'Esc', description: 'Close panel, clear selection, or close message (focus returns to the list)' }
 ];
 
 type KeyLike = Pick<KeyboardEvent, 'key' | 'altKey' | 'shiftKey' | 'ctrlKey' | 'metaKey'>;

@@ -24,7 +24,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 | **AI features** | Master switch **`aiFeatures`**; defaults **off** for new profiles; every AI entry point hidden when off | Low — opt-in provider config remains in Settings |
 | **People / VIP** | VIP list in Settings; local address book | Medium vs OWA People app |
 | **Deep links** | `#mail?folder=…&uid=…` hash URLs + **Copy link** in reading pane | Low–medium: no server-side permalink API yet |
-| **Accessibility** | Landmark regions + skip link (slice 17); mobile landmarks + skip link (slice 33); mobile compose landmarks + initial focus (slice 38); desktop + mobile reading-pane focus on open (slices 41 / 40) | Low–medium: deeper focus-order polish |
+| **Accessibility** | Landmark regions + skip link (slice 17); mobile landmarks + skip link (slice 33); mobile compose landmarks + initial focus (slice 38); desktop + mobile reading-pane focus on open (slices 41 / 40); desktop message-list focus on Esc (slice 43) | Low–medium: deeper focus-order polish |
 
 ---
 
@@ -475,7 +475,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 41 (this PR)
+## Slice 41 (done in #128)
 
 - **`mail-landmarks.ts`**: **`focusMailReadingPaneLandmark`** helper; reading-pane region copy mentions initial focus.
 - **`Layout.svelte`**: docked **Reading pane** `<main>` and hidden-layout flyout move focus when a message finishes loading.
@@ -485,9 +485,19 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 43 (this PR)
+
+- **`mail-landmarks.ts`**: **`focusMailMessageListLandmark`** helper; message-list region copy mentions Esc return focus.
+- **`Layout.svelte`**: **Esc** closes the reading pane (docked or hidden flyout) and moves focus back to the message list landmark; checkbox selection clear does the same.
+- **`Settings.svelte`** + **`mail-keyboard-shortcuts.ts`**: Accessibility and **?** help document Esc focus return.
+- Tests: unit (`mail-landmarks.test.mjs`) + Playwright (`outlook-message-list-focus-return.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice43/73-message-list-focused-after-esc.png`.
+
+---
+
 ## Next planned slice
 
-**Smart triage / categorise** (opt-in AI) or richer conversation HTML parity.
+**Smart triage / categorise** (opt-in AI) or richer conversation HTML parity (slice 42, PR #129).
 
 ---
 
