@@ -17,7 +17,8 @@ import {
     MAIL_SKIP_LINK_TEXT,
     MOBILE_APP_NAV_LABEL,
     MOBILE_LANDMARK_ROWS,
-    focusMobileReadingPaneLandmark
+    focusMobileReadingPaneLandmark,
+    focusMobileMessageListLandmark
 } from '../../src/lib/mobile-mail-landmarks.ts';
 
 describe('mobile-mail-landmarks', () => {
@@ -44,5 +45,12 @@ describe('mobile-mail-landmarks', () => {
     it('focusMobileReadingPaneLandmark uses the shared reading pane id', () => {
         assert.equal(MAIL_READING_PANE_LANDMARK_ID, 'mail-reading-pane-landmark');
         assert.equal(typeof focusMobileReadingPaneLandmark, 'function');
+    });
+
+    it('message list landmark copy mentions Esc return focus (slice 44)', () => {
+        const row = MOBILE_LANDMARK_ROWS.find((r) => r.region === MAIL_MESSAGE_LIST_LABEL);
+        assert.ok(row);
+        assert.match(row.description, /Esc/i);
+        assert.equal(typeof focusMobileMessageListLandmark, 'function');
     });
 });

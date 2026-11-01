@@ -468,6 +468,8 @@
                 <p class="muted small" style="margin:8px 0 0;">
                     When you open a message on mobile, focus moves to the <strong>Reading pane</strong> landmark
                     so screen readers land on the message body region (same pattern as compose focusing <strong>To</strong>).
+                    Press <kbd>Esc</kbd> or the back control to leave the message and return focus to the
+                    <strong>Message list</strong> landmark (full-screen phone layout; tablet split pane unchanged).
                 </p>
                 <p class="muted small" style="margin:8px 0 0;">
                     When you compose on mobile, screen readers get a dedicated <strong>Compose message</strong> region
