@@ -3233,7 +3233,8 @@
                         pane when a message is open. Opening a message moves focus into the reading pane
                         landmark (including the slide-over pane when reading pane layout is hidden).
                         Press <kbd>Esc</kbd> to close the message and return focus to the message list.
-                        Closing compose (Discard or after send) also returns focus to the message list.
+                        Closing compose (Discard or after send) returns focus to the message list for a
+                        new message, or to the reading pane when you were replying or forwarding.
                         When a message is open, a second skip link —
                         <strong>{MAIL_SKIP_TO_READING_PANE_TEXT}</strong> — appears after
                         <strong>{MAIL_SKIP_LINK_TEXT}</strong>. Press <kbd>Tab</kbd> once after load to reach the

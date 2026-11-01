@@ -10,6 +10,7 @@ import {
     MAIL_READING_PANE_LANDMARK_ID,
     MAIL_SKIP_LINK_TEXT,
     MAIL_SKIP_TO_READING_PANE_TEXT,
+    composeCloseFocusLandmarkId,
     mailLandmarkLabelSet,
     focusMailReadingPaneLandmark,
     focusMailMessageListLandmark
@@ -53,5 +54,23 @@ describe('mail-landmarks', () => {
         const listRow = MAIL_LANDMARK_ROWS.find((r) => r.region === MAIL_MESSAGE_LIST_LABEL);
         assert.ok(listRow?.description.includes('Esc'));
         assert.ok(listRow?.description.includes('compose'));
+    });
+
+    it('composeCloseFocusLandmarkId returns reading pane for reply with open message', () => {
+        assert.equal(
+            composeCloseFocusLandmarkId('reply', true, true),
+            MAIL_READING_PANE_LANDMARK_ID
+        );
+        assert.equal(
+            composeCloseFocusLandmarkId('forward', true, true),
+            MAIL_READING_PANE_LANDMARK_ID
+        );
+    });
+
+    it('composeCloseFocusLandmarkId returns message list for new compose or hidden pane', () => {
+        assert.equal(composeCloseFocusLandmarkId('new', true, true), MAIL_MESSAGE_LIST_LANDMARK_ID);
+        assert.equal(composeCloseFocusLandmarkId('reply', true, false), MAIL_MESSAGE_LIST_LANDMARK_ID);
+        assert.equal(composeCloseFocusLandmarkId('reply', false, true), MAIL_MESSAGE_LIST_LANDMARK_ID);
+        assert.equal(composeCloseFocusLandmarkId(undefined, true, true), MAIL_MESSAGE_LIST_LANDMARK_ID);
     });
 });

@@ -517,7 +517,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 ## Slice 45 (done in #132)
 
 - **`mail-landmarks.ts`**: message-list region copy mentions compose close focus return.
-- **`Layout.svelte`**: **`closeCompose`** clears compose state and moves focus to the message list landmark (Discard, send, schedule, and other compose exit paths).
+- **`Layout.svelte`**: **`closeCompose`** clears compose state and moves focus to the message list landmark for new mail (Discard, send, schedule, and other compose exit paths).
 - **`Settings.svelte`** + **`mail-keyboard-shortcuts.ts`**: Accessibility and **?** help document compose focus return.
 - Tests: unit (`mail-landmarks.test.mjs`) + Playwright (`outlook-compose-focus-return.spec.ts`) against API mocks.
 - Screenshot: `webmail/docs/assets/outlook-slice45/75-compose-close-message-list-focused.png`.
@@ -534,7 +534,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 47 (open in #134)
+## Slice 47 (done in #134)
 
 - **`mail-landmarks.ts`**: **`composeCloseFocusLandmarkId`** helper; reading-pane region copy mentions reply/forward compose close.
 - **`Layout.svelte`**: **`closeCompose`** returns focus to the **Reading pane** when dismissing reply, reply-all, or forward compose while a message remains open (new compose still returns to the list; slice 45).
