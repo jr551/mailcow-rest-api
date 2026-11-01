@@ -136,6 +136,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Skip to reading pane focused](docs/assets/outlook-slice48/78-skip-reading-pane-focused.png)
 
+- **Reading pane quick reply** — OWA-style inline reply box at the bottom of the message: click **Reply to …**, type, **Send** (respects undo-send delay), **Discard**, or **Open full reply** for the compose window.
+
+![Reading pane quick reply expanded](docs/assets/outlook-slice52/82-reading-pane-quick-reply-expanded.png)
+
 - **Reading pane focus** — opening a message moves keyboard focus to the **Reading pane** landmark (docked pane or hidden-layout slide-over). Press **Esc** to close the message and return focus to the **Message list**. Documented under **Settings → General → Accessibility**.
 
 ![Desktop reading pane focused](docs/assets/outlook-slice41/71-desktop-reading-pane-focused.png)

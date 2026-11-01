@@ -41,6 +41,7 @@
         getMailboxInfo,
         getLogins,
         apiUrl,
+        sendStub,
         ApiError,
         type MailboxInfo,
         type MessageListItem,
@@ -76,7 +77,7 @@
     import BulkBar from './BulkBar.svelte';
     import { getShortcuts, blockSender as apiBlockSender, bulkDeleteMessages, type Shortcut } from '../lib/api';
     import { shortcutsItems, embeddedShortcut, popupShortcut, safeShortcutUrl } from '../lib/shortcuts-store';
-    import { probeCapabilities, settings, setHideSidebar, setReadingPaneLayout } from '../lib/settings.svelte';
+    import { probeCapabilities, settings, setHideSidebar, setReadingPaneLayout, smtpAvailable, pickFromName } from '../lib/settings.svelte';
     import { imapFilterToken } from '../lib/list-quick-filters';
     import { cancelPendingSend } from '../lib/undo-send.svelte';
     import { translateNaturalLanguageSearch } from '../lib/natural-language-search.client';
@@ -126,6 +127,12 @@
         searchPlaceholderForCategory,
         type SearchCategory
     } from '../lib/search-category';
+    import { buildQuickReplySendPayload } from '../lib/reading-pane-quick-reply';
+    import { htmlToPlainText } from '../lib/reply-suggest.svelte';
+    import { undoSendEnabled } from '../lib/undo-send';
+    import { scheduleUndoSend } from '../lib/undo-send.svelte';
+    import { playSent } from '../lib/sounds.svelte';
+    import { trackSent } from '../lib/sent-status.svelte';
     import type { MessageDetail as MessageDetailType } from '../lib/api';
 
     // Page size resolves dynamically from settings.pageSize. 'unlimited'
@@ -1449,6 +1456,59 @@
         ui.composeOpen = false;
         ui.composeContext = null;
         requestAnimationFrame(() => focusMailLandmarkById(focusId));
+    }
+
+    let quickReplySending = $state(false);
+
+    async function sendReadingPaneQuickReply(d: MessageDetailType, plainText: string) {
+        if (quickReplySending) return;
+        if (!smtpAvailable()) {
+            showToast('error', 'Configure outgoing mail (SMTP) in Settings before sending.');
+            return;
+        }
+        const from = authState.activeUser || '';
+        const payload = buildQuickReplySendPayload(d, plainText, from, pickFromName(from), htmlToPlainText);
+        if (!payload) return;
+        quickReplySending = true;
+        const sentSubject = payload.subject;
+        const toLabel = payload.to.join(', ');
+        try {
+            const undoSec = settings.undoSendSeconds;
+            if (undoSendEnabled(undoSec)) {
+                scheduleUndoSend({
+                    seconds: undoSec,
+                    payload,
+                    sentSubject,
+                    toLabel,
+                    composeContext: { replyTo: d, mode: 'reply' },
+                    restore: {
+                        to: toLabel,
+                        cc: '',
+                        bcc: '',
+                        subject: sentSubject,
+                        body: payload.html,
+                        from: payload.from || from,
+                        trackOpens: false,
+                        attachments: []
+                    },
+                    onScheduled: () => {}
+                });
+                return;
+            }
+            const r = await sendStub(payload);
+            playSent();
+            if (r?.messageId) {
+                trackSent({ messageId: r.messageId, subject: sentSubject, to: toLabel });
+                showToast('info', 'Sending… we\'ll let you know when it\'s delivered.');
+            } else {
+                showToast('success', 'Message sent');
+            }
+        } catch (err) {
+            const detail = err instanceof ApiError ? (err.detail || err.title) : (err as Error).message;
+            showToast('error', detail || 'Send failed');
+        } finally {
+            quickReplySending = false;
+        }
     }
 
     function archiveFolderName(): string {
@@ -2836,6 +2896,8 @@
                 onArchive={archiveMessage}
                 onMove={moveTo}
                 onAi={() => (ui.aiPanelOpen = true)}
+                onQuickReplySend={sendReadingPaneQuickReply}
+                {quickReplySending}
             />
             </main>
             {/if}
@@ -2875,6 +2937,8 @@
                     onArchive={archiveMessage}
                     onMove={moveTo}
                     onAi={() => (ui.aiPanelOpen = true)}
+                    onQuickReplySend={sendReadingPaneQuickReply}
+                    {quickReplySending}
                 />
             </main>
         {/if}

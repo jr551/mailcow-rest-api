@@ -31,6 +31,7 @@
     import type { Attachment, MessageDetail } from '../lib/api';
     import MenuSubmenu, { type SubmenuItem } from './MenuSubmenu.svelte';
     import ConversationStack from './ConversationStack.svelte';
+    import ReadingPaneQuickReply from './ReadingPaneQuickReply.svelte';
     import { copyMailDeepLinkToClipboard } from '../lib/mail-deep-link';
 
     interface Props {
@@ -41,8 +42,20 @@
         onArchive: (uid: number) => void;
         onMove: (uid: number, dest: string) => void;
         onAi: () => void;
+        onQuickReplySend?: (detail: MessageDetail, plainText: string) => void | Promise<void>;
+        quickReplySending?: boolean;
     }
-    let { onReply, onReplyAll, onForward, onTrash, onArchive, onMove, onAi }: Props = $props();
+    let {
+        onReply,
+        onReplyAll,
+        onForward,
+        onTrash,
+        onArchive,
+        onMove,
+        onAi,
+        onQuickReplySend,
+        quickReplySending = false
+    }: Props = $props();
 
     let showRaw = $state<'auto' | 'text' | 'html'>('auto');
     let moveOpen = $state(false);
@@ -2157,6 +2170,14 @@
                     {/each}
                 </ul>
             </section>
+        {/if}
+        {#if !_isSms && onQuickReplySend}
+            <ReadingPaneQuickReply
+                detail={d}
+                sending={quickReplySending}
+                onSend={(plain) => onQuickReplySend(d, plain)}
+                onOpenFullCompose={() => onReply(d)}
+            />
         {/if}
         </div>
         {/key}

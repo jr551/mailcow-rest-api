@@ -16,7 +16,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 | **Folder pane** | `Sidebar.svelte` tree, **Favorites** pin list, drag-drop move, shortcuts row | Medium: no folder groups |
 | **Message list** | `MessageList.svelte`, density, **Outlook Filter / Sort** menus, **colour categories**, **pin / snooze**, **Sweep**, **Quick steps** on selection | Low–medium: richer row chrome |
 | **Focused / Other** | `focused-inbox.ts` + INBOX tabs | Low–medium: optional AI refinement later |
-| **Reading pane** | `MessageDetail.svelte`, reply/forward, conversation stack when grouped | Low–medium: richer HTML parity in main pane; stack HTML done (slice 42); pane position done (slice 3) |
+| **Reading pane** | `MessageDetail.svelte`, reply/forward, conversation stack when grouped, **inline quick reply** (slice 52) | Low–medium: richer HTML parity in main pane; stack HTML done (slice 42); pane position done (slice 3) |
 | **Conversation view** | List grouping via `threads.ts`; reading-pane stack via `conversation-view.ts` + `ConversationStack.svelte` | Low–medium: further OWA transcript polish |
 | **Compose** | `Compose.svelte` + `FloatingPanel.svelte`, TipTap | Medium: sensitivity labels; **undo send** (slice 12), **scheduled send** (#100), **Save draft** (slice 14) |
 | **Search** | Header search + tag syntax; **Mail / People / Files** category tabs (slice 51 desktop, slice 53 mobile); **saved searches** (local) on desktop and mobile; **search refiners** on active queries (slice 50); optional **natural-language** translation when AI + provider configured | Medium: deeper People index vs OWA People app |
@@ -583,6 +583,16 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 52 (done in #139)
+
+- **`reading-pane-quick-reply.ts`**: reply subject/recipient helpers and quoted HTML body for inline sends.
+- **`ReadingPaneQuickReply.svelte`**: OWA-style footer under the reading pane (expand → type → Send / Discard / Open full reply).
+- **`Layout.svelte`**: sends via **`sendStub`** with the same undo-send delay as compose when enabled.
+- Tests: unit (`reading-pane-quick-reply.test.mjs`) + Playwright (`outlook-reading-pane-quick-reply.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice52/82-reading-pane-quick-reply-expanded.png`.
+
+---
+
 ## Slice 53 (this PR)
 
 - Reuses **`search-category.ts`** on mobile inbox search.
@@ -595,7 +605,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ## Next planned slice
 
-Rules / sweep automation UI, reading-pane inline quick reply (slice 52), or opt-in AI features not yet built (slice 54+).
+Rules / sweep automation UI, compose pop-out window, or opt-in AI features (slice 54).
 
 ---
 
