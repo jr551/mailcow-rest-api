@@ -1,4 +1,5 @@
 import type { Mailbox, MessageDetail, MessageListItem } from '../../lib/api';
+import type { SearchCategory } from '../../lib/search-category';
 import type { ComposeRestoreSnapshot } from '../../lib/undo-send';
 import { settings } from '../../lib/settings.svelte';
 import { vibrate } from './native-bridge';
@@ -16,6 +17,8 @@ export interface MobileState {
     messagesLoading: boolean;
     messagesError: string | null;
     search: string;
+    /** OWA Mail | People | Files tabs (slice 53). */
+    searchCategory: SearchCategory;
     /** 'all' aggregates results across every folder; rows carry .mailbox. */
     searchScope: 'folder' | 'all';
     selectedUid: number | null;
@@ -69,6 +72,7 @@ const createInitial = (): MobileState => ({
     messagesLoading: false,
     messagesError: null,
     search: '',
+    searchCategory: 'mail',
     searchScope: 'folder',
     selectedUid: null,
     detail: null,
