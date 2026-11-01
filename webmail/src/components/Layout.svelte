@@ -98,6 +98,8 @@
         MAIL_READING_PANE_LABEL,
         MAIL_READING_PANE_LANDMARK_ID,
         MAIL_SKIP_LINK_TEXT,
+        composeCloseFocusLandmarkId,
+        focusMailLandmarkById,
         focusMailReadingPaneLandmark,
         focusMailMessageListLandmark
     } from '../lib/mail-landmarks';
@@ -1389,9 +1391,16 @@
     }
 
     function closeCompose() {
+        const ctx = ui.composeContext;
+        const readingPaneVisible = dockedReadingPane || readingFlyoutOpen;
+        const focusId = composeCloseFocusLandmarkId(
+            ctx?.mode,
+            ui.selectedUid != null,
+            readingPaneVisible
+        );
         ui.composeOpen = false;
         ui.composeContext = null;
-        requestAnimationFrame(() => focusMailMessageListLandmark());
+        requestAnimationFrame(() => focusMailLandmarkById(focusId));
     }
 
     function archiveFolderName(): string {
