@@ -1388,6 +1388,12 @@
         ui.composeContext = { replyTo: replyTo || null, mode };
     }
 
+    function closeCompose() {
+        ui.composeOpen = false;
+        ui.composeContext = null;
+        requestAnimationFrame(() => focusMailMessageListLandmark());
+    }
+
     function archiveFolderName(): string {
         return ui.mailboxes.find((m) => m.specialUse === '\\Archive')?.path || 'Archive';
     }
@@ -2775,7 +2781,7 @@
     {/if}
 
     {#if ui.composeOpen}
-        <Compose onClose={() => { ui.composeOpen = false; ui.composeContext = null; }} />
+        <Compose onClose={closeCompose} />
     {/if}
 
     {#if ui.settingsOpen}

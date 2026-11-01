@@ -25,7 +25,7 @@ export const MAIL_LANDMARK_ROWS = [
     },
     {
         region: MAIL_MESSAGE_LIST_LABEL,
-        description: 'Messages in the selected folder; focus returns here when you close a message with Esc'
+        description: 'Messages in the selected folder; focus returns here when you close a message with Esc or close compose'
     },
     {
         region: MAIL_READING_PANE_LABEL,
