@@ -220,6 +220,9 @@ export interface Settings {
     /** When true (and AI + provider configured), selected text in Compose
      *  can be rewritten with tone presets (Professional / Casual / etc.). */
     aiRewriteCompose: boolean;
+    /** When true (and AI + provider configured), AI-sorted mail can apply
+     *  Outlook colour categories from triage results in one click. */
+    aiSmartTriageCategories: boolean;
 }
 
 
@@ -327,7 +330,8 @@ export function sanitizeSettings(raw: unknown): Settings {
         linkSafetyCheck: parsed.linkSafetyCheck !== false,
         naturalLanguageSearch: parsed.naturalLanguageSearch === true,
         aiThreadSummary: parsed.aiThreadSummary === true,
-        aiRewriteCompose: parsed.aiRewriteCompose === true
+        aiRewriteCompose: parsed.aiRewriteCompose === true,
+        aiSmartTriageCategories: parsed.aiSmartTriageCategories === true
     };
 }
 
@@ -719,6 +723,11 @@ export function setAiThreadSummary(on: boolean) {
 
 export function setAiRewriteCompose(on: boolean) {
     state.aiRewriteCompose = on;
+    persist(state);
+}
+
+export function setAiSmartTriageCategories(on: boolean) {
+    state.aiSmartTriageCategories = on;
     persist(state);
 }
 

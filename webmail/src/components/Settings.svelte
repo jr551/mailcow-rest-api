@@ -60,7 +60,7 @@
         setSpamSuggest, setSpamSuggestConfidenceFloor, setSpamSweepBatchSize, setAiSortSweepSpam,
         setVipAddresses, setPreSendCheck, setComposeHistorySummary, setUndoSendSeconds, setAiSuggestReply,
         aiAvailable, resolveCustomBaseUrl, resolveCustomModel, extractChatText,
-        setCalendarTicker, setCalendarTickerTitles, setWeatherChipOutlook, setLinkSafetyCheck, setNaturalLanguageSearch, setAiThreadSummary, setAiRewriteCompose, setReadingPaneLayout
+        setCalendarTicker, setCalendarTickerTitles, setWeatherChipOutlook, setLinkSafetyCheck, setNaturalLanguageSearch, setAiThreadSummary, setAiRewriteCompose, setAiSmartTriageCategories, setReadingPaneLayout
     } from '../lib/settings.svelte';
     import { warmupTesseract, teardownTesseract } from '../lib/tesseract-ocr';
     import { linkCheckConfigured } from '../lib/virustotal';
@@ -2448,6 +2448,37 @@
                                         data-testid="settings-ai-rewrite-compose"
                                     />
                                     <span>{settings.aiRewriteCompose ? 'On' : 'Off'}</span>
+                                </label>
+                            </div>
+                        {/if}
+                    </div>
+
+                    <div class="card">
+                        <h4><Icon name="sparkles" size={13} /> Smart triage categories</h4>
+                        {#if !settings.aiFeatures}
+                            <p class="muted small" data-testid="settings-ai-smart-triage-categories-ai-off">
+                                Unavailable while AI features are off. When enabled, AI-sorted mail can map triage
+                                buckets to Outlook colour categories in one click.
+                            </p>
+                        {:else}
+                            <div class="form-row bare">
+                                <div class="row-text">
+                                    <strong>Apply colour categories from AI triage</strong>
+                                    <span class="muted">
+                                        After AI sort, use <strong>Apply colour categories</strong> to tag visible
+                                        messages with Outlook colour categories (family → purple, human → red, and so on).
+                                        Off by default; nothing is changed until you click apply.
+                                    </span>
+                                </div>
+                                <label class="toggle">
+                                    <input
+                                        type="checkbox"
+                                        checked={settings.aiSmartTriageCategories}
+                                        disabled={!settings.aiFeatures || !aiAvailable()}
+                                        onchange={(e) => setAiSmartTriageCategories((e.currentTarget as HTMLInputElement).checked)}
+                                        data-testid="settings-ai-smart-triage-categories"
+                                    />
+                                    <span>{settings.aiSmartTriageCategories ? 'On' : 'Off'}</span>
                                 </label>
                             </div>
                         {/if}
