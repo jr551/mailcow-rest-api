@@ -16,8 +16,8 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 | **Folder pane** | `Sidebar.svelte` tree, **Favorites** pin list, drag-drop move, shortcuts row | Medium: no folder groups |
 | **Message list** | `MessageList.svelte`, density, **Outlook Filter / Sort** menus, **colour categories**, **pin / snooze**, **Sweep**, **Quick steps** on selection | Low–medium: richer row chrome |
 | **Focused / Other** | `focused-inbox.ts` + INBOX tabs | Low–medium: optional AI refinement later |
-| **Reading pane** | `MessageDetail.svelte`, reply/forward, conversation stack when grouped | Low–medium: richer HTML parity; pane position done (slice 3) |
-| **Conversation view** | List grouping via `threads.ts`; reading-pane stack via `conversation-view.ts` + `ConversationStack.svelte` | Low–medium: richer HTML parity |
+| **Reading pane** | `MessageDetail.svelte`, reply/forward, conversation stack when grouped | Low–medium: richer HTML parity in main pane; stack HTML done (slice 42); pane position done (slice 3) |
+| **Conversation view** | List grouping via `threads.ts`; reading-pane stack via `conversation-view.ts` + `ConversationStack.svelte` | Low–medium: further OWA transcript polish |
 | **Compose** | `Compose.svelte` + `FloatingPanel.svelte`, TipTap | Medium: sensitivity labels; **undo send** (slice 12), **scheduled send** (#100), **Save draft** (slice 14) |
 | **Search** | Header search + tag syntax; **saved searches** (local) on desktop and mobile; optional **natural-language** translation when AI + provider configured | Medium: no unified People/Files search |
 | **Settings shell** | `Settings.svelte` 3-column Outlook-like modal, 19 sections | Low–medium: content differs |
@@ -485,6 +485,15 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 42 (done in #129)
+
+- **`conversation-message-html.ts`**: sanitized iframe srcdoc for HTML bodies inside the conversation stack.
+- **`ConversationStack.svelte`**: expanded siblings with `html` render in a sandboxed iframe (same sanitizer as the main reading pane); plain-text-only messages keep the `<pre>` fallback.
+- Tests: unit (`conversation-message-html.test.mjs`) + Playwright (`outlook-conversation-html.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice42/72-conversation-stack-html.png`.
+
+---
+
 ## Slice 43 (this PR)
 
 - **`mail-landmarks.ts`**: **`focusMailMessageListLandmark`** helper; message-list region copy mentions Esc return focus.
@@ -497,7 +506,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ## Next planned slice
 
-**Smart triage / categorise** (opt-in AI) or richer conversation HTML parity (slice 42, PR #129).
+**Smart triage / categorise** (opt-in AI) or further keyboard / focus-order polish (slice 44).
 
 ---
 

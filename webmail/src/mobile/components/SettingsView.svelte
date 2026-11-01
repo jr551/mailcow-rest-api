@@ -402,7 +402,7 @@
             <div class="ios-row toggle-row">
                 <div class="toggle-info">
                     <span class="row-label">Group threads</span>
-                    <span class="muted small">Collapse conversations into one row; open a thread to see the Outlook-style stack on mobile</span>
+                    <span class="muted small">Collapse conversations into one row; open a thread to see the Outlook-style stack (HTML bodies render in the stack, same as desktop)</span>
                 </div>
                 <Toggle checked={settings.groupThreads} label="Group threads" onToggle={() => setGroupThreads(!settings.groupThreads)} />
             </div>

@@ -47,8 +47,9 @@ const ASSET37 = 'docs/assets/outlook-slice37';
 const ASSET38 = 'docs/assets/outlook-slice38';
 const ASSET39 = 'docs/assets/outlook-slice39';
 const ASSET41 = 'docs/assets/outlook-slice41';
+const ASSET42 = 'docs/assets/outlook-slice42';
 const ASSET43 = 'docs/assets/outlook-slice43';
-for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET20, ASSET22, ASSET23, ASSET24, ASSET25, ASSET26, ASSET27, ASSET28, ASSET29, ASSET30, ASSET31, ASSET32, ASSET33, ASSET34, ASSET35, ASSET36, ASSET37, ASSET38, ASSET39, ASSET41, ASSET43]) mkdirSync(d, { recursive: true });
+for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET20, ASSET22, ASSET23, ASSET24, ASSET25, ASSET26, ASSET27, ASSET28, ASSET29, ASSET30, ASSET31, ASSET32, ASSET33, ASSET34, ASSET35, ASSET36, ASSET37, ASSET38, ASSET39, ASSET41, ASSET42, ASSET43]) mkdirSync(d, { recursive: true });
 
 const baseSettings = {
     aiFeatures: false,
@@ -561,6 +562,18 @@ test.describe('docs desktop (1440×900 @2x)', () => {
         await page.getByTestId('conversation-expand-997').click();
         await expect(page.getByTestId('conversation-attachments-997')).toContainText('lunch-menu.pdf');
         await shot(page, `${ASSET30}/60-conversation-attachment-chips.png`);
+    });
+
+    test('slice42 conversation stack HTML body', async ({ page }) => {
+        await page.addInitScript((blob) => {
+            localStorage.setItem('webmail.theme', 'dark');
+            localStorage.setItem('webmail.settings.v1', blob);
+        }, seedSettings({ groupThreads: true }));
+        await login(page);
+        await page.getByTestId('msg-row-999').click();
+        await page.getByTestId('conversation-expand-997').click();
+        await expect(page.getByTestId('conversation-html-997')).toBeVisible();
+        await shot(page, `${ASSET42}/72-conversation-stack-html.png`);
     });
 });
 

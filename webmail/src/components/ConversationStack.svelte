@@ -11,7 +11,12 @@
         conversationAttachmentEntries,
         conversationAttachmentHint
     } from '../lib/conversation-attachments';
+    import {
+        buildConversationMessageSrcDoc,
+        conversationMessageHasHtml
+    } from '../lib/conversation-message-html';
     import { formatFullDate, formatAddressList } from '../lib/format';
+    import { effectiveTheme } from '../lib/theme.svelte';
     import Avatar from './Avatar.svelte';
     import Icon from './Icon.svelte';
 
@@ -140,7 +145,20 @@
                                     {/each}
                                 </ul>
                             {/if}
-                            <pre class="conv-text">{detail.text || viewText(detail) || '(no text body)'}</pre>
+                            {#if conversationMessageHasHtml(detail)}
+                                <iframe
+                                    class="conv-html-frame"
+                                    title="Message body"
+                                    sandbox="allow-same-origin"
+                                    srcdoc={buildConversationMessageSrcDoc(
+                                        detail.html!,
+                                        effectiveTheme()
+                                    )}
+                                    data-testid={`conversation-html-${item.uid}`}
+                                ></iframe>
+                            {:else}
+                                <pre class="conv-text">{detail.text || viewText(detail) || '(no text body)'}</pre>
+                            {/if}
                         {/if}
                     </div>
                 {:else}
@@ -258,6 +276,14 @@
         font: inherit;
         font-size: 14px;
         line-height: 1.5;
+    }
+    .conv-html-frame {
+        display: block;
+        width: 100%;
+        min-height: 48px;
+        border: 0;
+        border-radius: 6px;
+        background: var(--bg-surface);
     }
     .conv-loading {
         padding: 8px 0;
