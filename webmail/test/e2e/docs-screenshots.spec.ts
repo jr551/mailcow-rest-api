@@ -54,8 +54,9 @@ const ASSET45 = 'docs/assets/outlook-slice45';
 const ASSET46 = 'docs/assets/outlook-slice46';
 const ASSET47 = 'docs/assets/outlook-slice47';
 const ASSET48 = 'docs/assets/outlook-slice48';
+const ASSET49 = 'docs/assets/outlook-slice49';
 const ASSET50 = 'docs/assets/outlook-slice50';
-for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET20, ASSET22, ASSET23, ASSET24, ASSET25, ASSET26, ASSET27, ASSET28, ASSET29, ASSET30, ASSET31, ASSET32, ASSET33, ASSET34, ASSET35, ASSET36, ASSET37, ASSET38, ASSET39, ASSET41, ASSET42, ASSET43, ASSET44, ASSET45, ASSET46, ASSET47, ASSET48, ASSET50]) mkdirSync(d, { recursive: true });
+for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET20, ASSET22, ASSET23, ASSET24, ASSET25, ASSET26, ASSET27, ASSET28, ASSET29, ASSET30, ASSET31, ASSET32, ASSET33, ASSET34, ASSET35, ASSET36, ASSET37, ASSET38, ASSET39, ASSET41, ASSET42, ASSET43, ASSET44, ASSET45, ASSET46, ASSET47, ASSET48, ASSET49, ASSET50]) mkdirSync(d, { recursive: true });
 
 const baseSettings = {
     aiFeatures: false,
@@ -522,6 +523,17 @@ test.describe('docs desktop (1440×900 @2x)', () => {
         await page.getByTestId('compose-discard').click();
         await expect(page.locator('#mail-reading-pane-landmark')).toBeFocused();
         await shot(page, `${ASSET47}/77-compose-close-reading-pane-focused.png`);
+    });
+
+    test('slice49 AI smart triage apply colour categories banner', async ({ page }) => {
+        await page.addInitScript((blob) => {
+            localStorage.setItem('webmail.theme', 'light');
+            localStorage.setItem('webmail.settings.v1', blob);
+        }, seedSettings({ aiFeatures: true, aiSmartTriageCategories: true }));
+        await login(page);
+        await page.getByTestId('filter-ai-sorted').click();
+        await expect(page.getByTestId('ai-smart-triage-apply-banner')).toBeVisible({ timeout: 20_000 });
+        await shot(page, `${ASSET49}/79-ai-smart-triage-apply-banner.png`);
     });
 
     test('slice50 search refiners under list header', async ({ page }) => {
