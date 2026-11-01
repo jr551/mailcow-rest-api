@@ -57,7 +57,8 @@ const ASSET48 = 'docs/assets/outlook-slice48';
 const ASSET49 = 'docs/assets/outlook-slice49';
 const ASSET50 = 'docs/assets/outlook-slice50';
 const ASSET51 = 'docs/assets/outlook-slice51';
-for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET20, ASSET22, ASSET23, ASSET24, ASSET25, ASSET26, ASSET27, ASSET28, ASSET29, ASSET30, ASSET31, ASSET32, ASSET33, ASSET34, ASSET35, ASSET36, ASSET37, ASSET38, ASSET39, ASSET41, ASSET42, ASSET43, ASSET44, ASSET45, ASSET46, ASSET47, ASSET48, ASSET49, ASSET50, ASSET51]) mkdirSync(d, { recursive: true });
+const ASSET52 = 'docs/assets/outlook-slice52';
+for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET20, ASSET22, ASSET23, ASSET24, ASSET25, ASSET26, ASSET27, ASSET28, ASSET29, ASSET30, ASSET31, ASSET32, ASSET33, ASSET34, ASSET35, ASSET36, ASSET37, ASSET38, ASSET39, ASSET41, ASSET42, ASSET43, ASSET44, ASSET45, ASSET46, ASSET47, ASSET48, ASSET49, ASSET50, ASSET51, ASSET52]) mkdirSync(d, { recursive: true });
 
 const baseSettings = {
     aiFeatures: false,
@@ -561,6 +562,43 @@ test.describe('docs desktop (1440×900 @2x)', () => {
         await page.waitForTimeout(450);
         await expect(page.getByTestId('search-files-scope')).toBeVisible();
         await shot(page, `${ASSET51}/81-search-category-files.png`);
+    });
+
+    test('slice52 reading pane quick reply expanded', async ({ page }) => {
+        await page.route(/\/health$/, (route) => {
+            route.fulfill({
+                status: 200,
+                contentType: 'application/json',
+                body: JSON.stringify({
+                    ok: true,
+                    cache: 0,
+                    pool: 0,
+                    capabilities: { ai: true, ocr: true, smtp: true, drive: true }
+                })
+            });
+        });
+        await page.route('**/imap-rest/health', (route) => {
+            route.fulfill({
+                status: 200,
+                contentType: 'application/json',
+                body: JSON.stringify({
+                    ok: true,
+                    cache: 0,
+                    pool: 0,
+                    capabilities: { ai: true, ocr: true, smtp: true, drive: true }
+                })
+            });
+        });
+        await page.addInitScript((blob) => {
+            localStorage.setItem('webmail.theme', 'light');
+            localStorage.setItem('webmail.settings.v1', blob);
+        }, seedSettings({ undoSendSeconds: 0 }));
+        await login(page);
+        await page.getByTestId('msg-row-1001').click();
+        await page.getByTestId('reading-pane-quick-reply-trigger').click();
+        await page.getByTestId('reading-pane-quick-reply-input').fill('Thanks — looks great!');
+        await expect(page.getByTestId('reading-pane-quick-reply-send')).toBeVisible();
+        await shot(page, `${ASSET52}/82-reading-pane-quick-reply-expanded.png`);
     });
 
     test('slice18 follow-up flag row label', async ({ page }) => {
