@@ -613,6 +613,16 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 55 (done in #142)
+
+- **`natural-language-search.ts`**: **`shouldTranslateNlSearchQuery`** gate for mobile **Mail** tab (requires **`aiFeatures`** + **`naturalLanguageSearch`**, skips tag syntax).
+- **`InboxView.svelte`**: debounced translation via **`translateNaturalLanguageSearch`**; **Translating…** / **as …** hint under category tabs; placeholder matches desktop when NL is on.
+- **`SettingsView.svelte`**: **Natural-language search** toggle under AI (off by default).
+- Tests: unit (`natural-language-search.test.mjs`) + Playwright (`outlook-mobile-nl-search.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice55/85-mobile-nl-search-hint.png`.
+
+---
+
 ## Slice 56 (this PR)
 
 - Reuses **`SenderSweepDialog.svelte`** on `/webmail/mobile/` (same one-time + automation UX as desktop slice 54).

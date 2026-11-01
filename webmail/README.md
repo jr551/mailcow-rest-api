@@ -200,6 +200,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Mobile search category Files](docs/assets/outlook-slice53/83-mobile-search-category-files.png)
 
+- **Mobile natural-language search (opt-in)** — with **AI features** on and **Settings → Natural-language search** enabled, plain-language queries on the mobile **Mail** tab translate to tag syntax via your configured provider (same client as desktop). Off by default.
+
+![Mobile natural-language search hint](docs/assets/outlook-slice55/85-mobile-nl-search-hint.png)
+
 ![Mobile saved searches panel](docs/assets/outlook-slice31/61-mobile-saved-searches-panel.png)
 
 - **Mobile colour categories** — long-press a message for **Categorize** (same OWA colour categories and `webmail.message-categories.v1` overlay as desktop). Rows show a left colour stripe when categorized.

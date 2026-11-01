@@ -1,5 +1,7 @@
 /** Outlook-style mail search tag syntax (IMAP REST `search` param). */
 
+import type { SearchCategory } from './search-category';
+
 const TAG_PREFIX = /^(from|to|cc|subject|body|has|is|before|after|larger|smaller):/i;
 
 const TAG_ANYWHERE = /\b(from|to|cc|subject|body|has|is|before|after|larger|smaller):/i;
@@ -35,6 +37,23 @@ export function parseNlSearchResponse(text: string): string | null {
     } catch {
         return null;
     }
+}
+
+export interface NlSearchGate {
+    aiFeatures: boolean;
+    naturalLanguageSearch: boolean;
+}
+
+/** Whether to call the NL translator (Mail tab only; opt-in AI). */
+export function shouldTranslateNlSearchQuery(
+    query: string,
+    category: SearchCategory,
+    gate: NlSearchGate
+): boolean {
+    const q = query.trim();
+    if (!q || category !== 'mail') return false;
+    if (!gate.aiFeatures || !gate.naturalLanguageSearch) return false;
+    return !looksLikeStructuredMailSearch(q);
 }
 
 export const NL_SEARCH_SYSTEM = [

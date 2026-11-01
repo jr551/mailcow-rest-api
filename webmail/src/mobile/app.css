@@ -283,6 +283,11 @@ body {
     color: var(--accent);
     border-color: var(--accent);
 }
+.msearch-nl-status {
+    display: block;
+    padding: 2px 16px 6px;
+    font-size: 12px;
+}
 .msearch-files-scope {
     font-size: 12px;
     font-weight: 600;
