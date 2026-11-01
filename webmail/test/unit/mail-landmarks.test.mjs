@@ -46,5 +46,6 @@ describe('mail-landmarks', () => {
     it('documents Esc return focus on the message list region', () => {
         const listRow = MAIL_LANDMARK_ROWS.find((r) => r.region === MAIL_MESSAGE_LIST_LABEL);
         assert.ok(listRow?.description.includes('Esc'));
+        assert.ok(listRow?.description.includes('compose'));
     });
 });

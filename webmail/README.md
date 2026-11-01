@@ -136,6 +136,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Message list focused after Esc](docs/assets/outlook-slice43/73-message-list-focused-after-esc.png)
 
+- **Compose focus return** — closing compose with **Discard** (or after send) moves keyboard focus back to the **Message list** landmark, matching OWA when you dismiss the compose window.
+
+![Message list focused after closing compose](docs/assets/outlook-slice45/75-compose-close-message-list-focused.png)
+
 - **Follow-up flags** — right-click **Flag** to set **Today**, **Tomorrow**, **This week**, or **No date**; the list shows a follow-up hint (e.g. “Follow up today”). Due dates stay in this browser; `\Flagged` syncs with IMAP.
 
 ![Follow-up today on message row](docs/assets/outlook-slice18/47-follow-up-today-row.png)
