@@ -178,6 +178,10 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Saved searches menu](docs/assets/outlook-slice29/59-saved-searches-menu.png)
 
+- **Search refiners** — while a search is active, OWA-style chips under the message list header toggle tag refiners (`has:attachment`, `is:unread`, …) on the query without retyping.
+
+![Search refiners](docs/assets/outlook-slice50/80-search-refiners-active.png)
+
 ![Mobile saved searches panel](docs/assets/outlook-slice31/61-mobile-saved-searches-panel.png)
 
 - **Mobile colour categories** — long-press a message for **Categorize** (same OWA colour categories and `webmail.message-categories.v1` overlay as desktop). Rows show a left colour stripe when categorized.

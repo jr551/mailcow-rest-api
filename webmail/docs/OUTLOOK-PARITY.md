@@ -19,7 +19,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 | **Reading pane** | `MessageDetail.svelte`, reply/forward, conversation stack when grouped | Low–medium: richer HTML parity in main pane; stack HTML done (slice 42); pane position done (slice 3) |
 | **Conversation view** | List grouping via `threads.ts`; reading-pane stack via `conversation-view.ts` + `ConversationStack.svelte` | Low–medium: further OWA transcript polish |
 | **Compose** | `Compose.svelte` + `FloatingPanel.svelte`, TipTap | Medium: sensitivity labels; **undo send** (slice 12), **scheduled send** (#100), **Save draft** (slice 14) |
-| **Search** | Header search + tag syntax; **saved searches** (local) on desktop and mobile; optional **natural-language** translation when AI + provider configured | Medium: no unified People/Files search |
+| **Search** | Header search + tag syntax; **saved searches** (local) on desktop and mobile; **search refiners** on active queries (slice 50); optional **natural-language** translation when AI + provider configured | Medium: no unified People/Files search |
 | **Settings shell** | `Settings.svelte` 3-column Outlook-like modal, 19 sections | Low–medium: content differs |
 | **AI features** | Master switch **`aiFeatures`**; defaults **off** for new profiles; every AI entry point hidden when off | Low — opt-in provider config remains in Settings |
 | **People / VIP** | VIP list in Settings; local address book | Medium vs OWA People app |
@@ -544,7 +544,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 48 (this PR)
+## Slice 48 (done in #135)
 
 - **`mail-landmarks.ts`**: **`MAIL_SKIP_TO_READING_PANE_TEXT`** constant for the second skip target.
 - **`Layout.svelte`**: when a message is open and the reading pane is visible (docked or hidden-layout flyout), shows **Skip to reading pane** after **Skip to message list** (keyboard focus only, slice 17 pattern).
@@ -554,9 +554,18 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 50 (this PR)
+
+- **`search-refiners.ts`**: OWA-style refiner chips (**Has attachments**, **Unread**, **Flagged**, **Read**) toggle IMAP tag tokens on the active query.
+- **`MessageList.svelte`**: refiner row under the list header when a search is active; **`Layout.svelte`**: applies refinements immediately (no debounce).
+- Tests: unit (`search-refiners.test.mjs`) + Playwright (`outlook-search-refiners.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice50/80-search-refiners-active.png`.
+
+---
+
 ## Next planned slice
 
-**Smart triage / categorise** (opt-in AI) or further keyboard / focus-order polish (slice 49).
+Mobile search refiners (pairs with slice 50), rules quick-create from reading pane, or conversation transcript polish (slice 51).
 
 ---
 
