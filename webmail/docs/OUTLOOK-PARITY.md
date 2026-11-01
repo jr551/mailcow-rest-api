@@ -24,7 +24,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 | **AI features** | Master switch **`aiFeatures`**; defaults **off** for new profiles; every AI entry point hidden when off | Low — opt-in provider config remains in Settings |
 | **People / VIP** | VIP list in Settings; local address book | Medium vs OWA People app |
 | **Deep links** | `#mail?folder=…&uid=…` hash URLs + **Copy link** in reading pane | Low–medium: no server-side permalink API yet |
-| **Accessibility** | Landmark regions + skip link (slice 17); mobile landmarks + skip link (slice 33); mobile compose landmarks + initial focus (slice 38); desktop + mobile reading-pane focus on open (slices 41 / 40); mobile message-list focus on Esc (slice 44) | Low–medium: deeper focus-order polish |
+| **Accessibility** | Landmark regions + skip link (slice 17); mobile landmarks + skip link (slice 33); mobile compose landmarks + initial focus (slice 38); desktop + mobile reading-pane focus on open (slices 41 / 40); desktop + mobile message-list focus on Esc (slices 43 / 44) | Low–medium: deeper focus-order polish |
 
 ---
 
@@ -494,6 +494,16 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 43 (done in #130)
+
+- **`mail-landmarks.ts`**: **`focusMailMessageListLandmark`** helper; message-list region copy mentions Esc return focus.
+- **`Layout.svelte`**: **Esc** closes the reading pane (docked or hidden flyout) and moves focus back to the message list landmark; checkbox selection clear does the same.
+- **`Settings.svelte`** + **`mail-keyboard-shortcuts.ts`**: Accessibility and **?** help document Esc focus return.
+- Tests: unit (`mail-landmarks.test.mjs`) + Playwright (`outlook-message-list-focus-return.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice43/73-message-list-focused-after-esc.png`.
+
+---
+
 ## Slice 44 (this PR)
 
 - **`mobile-mail-landmarks.ts`**: message-list region copy mentions Esc return focus; **`focusMobileMessageListLandmark`** reused after navigation.
@@ -506,7 +516,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ## Next planned slice
 
-**Smart triage / categorise** (opt-in AI) or desktop message-list Esc focus (slice 43, PR #130) and further keyboard polish.
+**Smart triage / categorise** (opt-in AI) or further keyboard / focus-order polish (slice 45).
 
 ---
 

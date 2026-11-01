@@ -25,7 +25,7 @@ export const MAIL_LANDMARK_ROWS = [
     },
     {
         region: MAIL_MESSAGE_LIST_LABEL,
-        description: 'Messages in the selected folder'
+        description: 'Messages in the selected folder; focus returns here when you close a message with Esc'
     },
     {
         region: MAIL_READING_PANE_LABEL,
@@ -40,4 +40,9 @@ export function mailLandmarkLabelSet(): Set<string> {
 /** Move screen-reader / keyboard focus into the opened message (parity slice 41). */
 export function focusMailReadingPaneLandmark(): void {
     document.getElementById(MAIL_READING_PANE_LANDMARK_ID)?.focus();
+}
+
+/** Return focus to the message list after Esc closes the reading pane (parity slice 43). */
+export function focusMailMessageListLandmark(): void {
+    document.getElementById(MAIL_MESSAGE_LIST_LANDMARK_ID)?.focus();
 }
