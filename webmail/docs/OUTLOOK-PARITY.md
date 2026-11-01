@@ -595,7 +595,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ## Next planned slice
 
-Mobile search category tabs, rules / sweep automation UI, or opt-in AI features (slice 53).
+Rules / sweep automation UI, compose pop-out window, mobile search category tabs, or opt-in AI features (slice 53).
 
 ---
 
