@@ -105,6 +105,9 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 ![Pinned message row](docs/assets/outlook-slice9/38-pinned-message-row.png)
 
 - **Sweep** — right-click **Sweep…** on a message to open the OWA-style Sweep dialog: one-time delete all, keep only the latest, or move all to Archive (server `from:` search), plus optional **Always move future messages** rules to Deleted Items or Archive (server-side mail rules; applies to new mail only).
+- **Mail rules list filters** — **Settings → Rules** adds OWA-style **All rules / Sweep / Other** tabs on the server-side rules list, a **Sweep** badge on rules created from Sweep, and empty-state hints when a filter has no matches.
+
+![Mail rules Sweep filter](docs/assets/outlook-slice57/87-mail-rules-sweep-filter.png)
 
 ![Sender sweep dialog with automation](docs/assets/outlook-slice54/84-sender-sweep-automation-dialog.png)
 

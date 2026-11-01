@@ -613,7 +613,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 55 (this PR)
+## Slice 55 (done in #142)
 
 - **`natural-language-search.ts`**: **`shouldTranslateNlSearchQuery`** gate for mobile **Mail** tab (requires **`aiFeatures`** + **`naturalLanguageSearch`**, skips tag syntax).
 - **`InboxView.svelte`**: debounced translation via **`translateNaturalLanguageSearch`**; **Translating…** / **as …** hint under category tabs; placeholder matches desktop when NL is on.
@@ -623,9 +623,19 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 57 (this PR)
+
+- **`mail-rules-management.ts`**: OWA-style **All / Sweep / Other** filter chips and empty-state hints for the rules list.
+- **`message-sender-sweep-automation.ts`**: **`isSweepAutomationMailRule`** identifies rules created via Sweep (`Sweep:` prefix).
+- **`Settings.svelte`**: filter tabs on **Settings → Rules**, **Sweep** badge on automation rules.
+- Tests: unit (`mail-rules-management.test.mjs`) + Playwright (`outlook-mail-rules-management.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice57/87-mail-rules-sweep-filter.png`.
+
+---
+
 ## Next planned slice
 
-Rules management UI, mobile Sweep dialog parity, or compose pop-out polish (slice 56+).
+Compose pop-out polish, accessibility focus order, or opt-in AI draft/rewrite improvements (slice 58+).
 
 ---
 

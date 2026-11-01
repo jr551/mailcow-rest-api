@@ -61,7 +61,8 @@ const ASSET52 = 'docs/assets/outlook-slice52';
 const ASSET53 = 'docs/assets/outlook-slice53';
 const ASSET54 = 'docs/assets/outlook-slice54';
 const ASSET55 = 'docs/assets/outlook-slice55';
-for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET20, ASSET22, ASSET23, ASSET24, ASSET25, ASSET26, ASSET27, ASSET28, ASSET29, ASSET30, ASSET31, ASSET32, ASSET33, ASSET34, ASSET35, ASSET36, ASSET37, ASSET38, ASSET39, ASSET41, ASSET42, ASSET43, ASSET44, ASSET45, ASSET46, ASSET47, ASSET48, ASSET49, ASSET50, ASSET51, ASSET52, ASSET53, ASSET54, ASSET55]) mkdirSync(d, { recursive: true });
+const ASSET57 = 'docs/assets/outlook-slice57';
+for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET20, ASSET22, ASSET23, ASSET24, ASSET25, ASSET26, ASSET27, ASSET28, ASSET29, ASSET30, ASSET31, ASSET32, ASSET33, ASSET34, ASSET35, ASSET36, ASSET37, ASSET38, ASSET39, ASSET41, ASSET42, ASSET43, ASSET44, ASSET45, ASSET46, ASSET47, ASSET48, ASSET49, ASSET50, ASSET51, ASSET52, ASSET53, ASSET54, ASSET55, ASSET57]) mkdirSync(d, { recursive: true });
 
 const baseSettings = {
     aiFeatures: false,
@@ -616,6 +617,41 @@ test.describe('docs desktop (1440×900 @2x)', () => {
         await expect(page.getByTestId('sender-sweep-dialog')).toBeVisible();
         await page.getByTestId('sender-sweep-automation-trash').check();
         await shot(page, `${ASSET54}/84-sender-sweep-automation-dialog.png`);
+    });
+
+    test('slice57 mail rules sweep filter', async ({ page }) => {
+        await page.addInitScript((blob) => {
+            localStorage.setItem('webmail.theme', 'light');
+            localStorage.setItem('webmail.settings.v1', blob);
+        }, seedSettings());
+        await login(page);
+        await page.evaluate(async () => {
+            await fetch('/v1/me/mail-rules', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: 'Sweep: Trash mail from billing@acme.example',
+                    condition: { type: 'from-contains', value: 'billing@acme.example' },
+                    action: { type: 'fileinto', folder: 'Trash' }
+                })
+            });
+            await fetch('/v1/me/mail-rules', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: 'Copy alerts to audit',
+                    condition: { type: 'from-contains', value: 'alerts.example' },
+                    action: { type: 'copy', to: 'audit@elsewhere.example' }
+                })
+            });
+        });
+        await page.click('[data-testid=settings-btn]');
+        await page.click('[data-testid=settings-tab-mail-rules]');
+        await page.locator('[data-testid=mail-rules-block]').scrollIntoViewIfNeeded();
+        await page.getByTestId('mail-rules-filter-sweep').click();
+        await expect(page.getByTestId('rule-sweep-badge')).toBeVisible();
+        await settleForScreenshot(page);
+        await shot(page, `${ASSET57}/87-mail-rules-sweep-filter.png`);
     });
 
     test('slice18 follow-up flag row label', async ({ page }) => {

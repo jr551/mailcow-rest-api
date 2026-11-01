@@ -7,7 +7,14 @@ import { normalizeSenderAddress } from './message-sender-sweep';
 
 export type SenderSweepAutomationKind = 'always-trash' | 'always-archive';
 
-const AUTOMATION_PREFIX = 'Sweep: ';
+export const SWEEP_AUTOMATION_NAME_PREFIX = 'Sweep: ';
+
+const AUTOMATION_PREFIX = SWEEP_AUTOMATION_NAME_PREFIX;
+
+/** True when the rule was created via Sweep automation (desktop or mobile). */
+export function isSweepAutomationMailRule(rule: Pick<MailRule, 'name'>): boolean {
+    return (rule.name || '').startsWith(SWEEP_AUTOMATION_NAME_PREFIX);
+}
 
 export function sweepAutomationRuleTitle(sender: string, kind: SenderSweepAutomationKind): string {
     const who = sender.trim() || 'sender';
