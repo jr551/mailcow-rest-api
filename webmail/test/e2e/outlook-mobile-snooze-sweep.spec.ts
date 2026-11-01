@@ -55,10 +55,11 @@ test('mobile action sheet snooze submenu screenshot', async ({ page }) => {
 test('mobile sweep keep latest removes older messages from sender', async ({ page }) => {
     await loginMobile(page);
     await expect(page.getByTestId(`msg-row-${JORDAN_OLDER}`)).toBeVisible();
-    page.once('dialog', (d) => d.accept());
     await openActionSheet(page, JORDAN_NEWER);
     await page.getByTestId('mobile-sweep-trigger').click();
-    await page.getByTestId('mobile-sweep-item-keep-latest').click();
+    await expect(page.getByTestId('sender-sweep-dialog')).toBeVisible();
+    await page.getByTestId('sender-sweep-action-keep-latest').check();
+    await page.getByTestId('sender-sweep-apply').click();
     await expect(page.getByTestId(`msg-row-${JORDAN_OLDER}`)).toHaveCount(0);
     await expect(page.getByTestId(`msg-row-${JORDAN_NEWER}`)).toBeVisible();
 });

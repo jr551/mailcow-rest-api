@@ -177,7 +177,9 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Mobile keyboard shortcuts help](docs/assets/outlook-slice25/55-mobile-keyboard-shortcuts-help.png)
 
-- **Mobile Snooze & Sweep** — long-press a message for **Snooze** presets (same local overlay as desktop) or **Sweep** bulk actions for the sender (delete all / keep latest / archive all).
+- **Mobile Snooze & Sweep** — long-press a message for **Snooze** presets (same local overlay as desktop) or **Sweep…** to open the OWA-style Sweep dialog (one-time bulk actions plus optional **Always move future messages** mail rules, same as desktop).
+
+![Mobile sender Sweep automation dialog](docs/assets/outlook-slice56/86-mobile-sender-sweep-automation-dialog.png)
 
 ![Mobile snooze menu](docs/assets/outlook-slice26/56-mobile-snooze-menu.png)
 
