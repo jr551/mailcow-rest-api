@@ -136,7 +136,7 @@ Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
 ![Message list focused after Esc](docs/assets/outlook-slice43/73-message-list-focused-after-esc.png)
 
-- **Compose focus return** — closing compose with **Discard** (or after send) moves keyboard focus back to the **Message list** landmark, matching OWA when you dismiss the compose window.
+- **Compose focus return** — closing compose with **Discard** (or after send) moves keyboard focus back to the **Message list** landmark for a new message, or to the **Reading pane** when you were replying or forwarding (pairs with mobile slice 46).
 
 ![Message list focused after closing compose](docs/assets/outlook-slice45/75-compose-close-message-list-focused.png)
 
