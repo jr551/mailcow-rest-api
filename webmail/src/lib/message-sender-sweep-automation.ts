@@ -2,7 +2,8 @@
 // future mail from the same sender (Deleted Items / Archive). Pure builders
 // and duplicate detection — UI lives in SenderSweepDialog.svelte.
 
-import type { MailRule, MailRuleInput } from './api';
+import type { MailRule, MailRuleInput, MailRuleLeafCondition } from './api';
+import { isCompoundMailRuleCondition } from './api';
 import { normalizeSenderAddress } from './message-sender-sweep';
 
 export type SenderSweepAutomationKind = 'always-trash' | 'always-archive';
@@ -29,14 +30,21 @@ export function buildSenderSweepAutomationRule(
     };
 }
 
+function leafFromContains(c: MailRuleLeafCondition): string | null {
+    if (c.type !== 'from-contains') return null;
+    return normalizeSenderAddress(c.value);
+}
+
 function ruleSender(rule: MailRule): string | null {
     const c = rule.condition;
-    if ('conditions' in c && Array.isArray(c.conditions)) {
-        const leaf = c.conditions.find((x) => x.type === 'from-contains');
-        return leaf ? normalizeSenderAddress(leaf.value) : null;
+    if (isCompoundMailRuleCondition(c)) {
+        for (const leaf of c.conditions) {
+            const from = leafFromContains(leaf);
+            if (from) return from;
+        }
+        return null;
     }
-    if (c.type === 'from-contains') return normalizeSenderAddress(c.value);
-    return null;
+    return leafFromContains(c);
 }
 
 export function findExistingSweepAutomation(
