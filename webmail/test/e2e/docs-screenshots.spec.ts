@@ -59,8 +59,8 @@ const ASSET50 = 'docs/assets/outlook-slice50';
 const ASSET51 = 'docs/assets/outlook-slice51';
 const ASSET52 = 'docs/assets/outlook-slice52';
 const ASSET53 = 'docs/assets/outlook-slice53';
-const ASSET55 = 'docs/assets/outlook-slice55';
-for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET20, ASSET22, ASSET23, ASSET24, ASSET25, ASSET26, ASSET27, ASSET28, ASSET29, ASSET30, ASSET31, ASSET32, ASSET33, ASSET34, ASSET35, ASSET36, ASSET37, ASSET38, ASSET39, ASSET41, ASSET42, ASSET43, ASSET44, ASSET45, ASSET46, ASSET47, ASSET48, ASSET49, ASSET50, ASSET51, ASSET52, ASSET53, ASSET55]) mkdirSync(d, { recursive: true });
+const ASSET54 = 'docs/assets/outlook-slice54';
+for (const d of [DOCS, ASSET1, ASSET2, ASSET3, ASSET5, ASSET6, ASSET7, ASSET8, ASSET9, ASSET10, ASSET11, ASSET12, ASSET13, ASSET14, ASSET15, ASSET16, ASSET17, ASSET18, ASSET19, ASSET20, ASSET22, ASSET23, ASSET24, ASSET25, ASSET26, ASSET27, ASSET28, ASSET29, ASSET30, ASSET31, ASSET32, ASSET33, ASSET34, ASSET35, ASSET36, ASSET37, ASSET38, ASSET39, ASSET41, ASSET42, ASSET43, ASSET44, ASSET45, ASSET46, ASSET47, ASSET48, ASSET49, ASSET50, ASSET51, ASSET52, ASSET53, ASSET54]) mkdirSync(d, { recursive: true });
 
 const baseSettings = {
     aiFeatures: false,
@@ -302,15 +302,16 @@ test.describe('docs desktop (1440×900 @2x)', () => {
         await shot(page, `${ASSET9}/38-pinned-message-row.png`);
     });
 
-    test('sender sweep context submenu', async ({ page }) => {
+    test('sender sweep dialog with automation', async ({ page }) => {
         await page.addInitScript((blob) => {
             localStorage.setItem('webmail.theme', 'light');
             localStorage.setItem('webmail.settings.v1', blob);
         }, seedSettings());
         await login(page);
         await page.getByTestId('msg-row-1017').click({ button: 'right' });
-        await page.getByTestId('ctx-sweep-trigger').hover();
-        await expect(page.getByTestId('ctx-sweep-item-keep-latest')).toBeVisible();
+        await page.getByTestId('ctx-sweep-trigger').click();
+        await expect(page.getByTestId('sender-sweep-dialog')).toBeVisible();
+        await page.getByTestId('sender-sweep-automation-trash').check();
         await shot(page, `${ASSET10}/39-sender-sweep-menu.png`);
     });
 
@@ -603,6 +604,19 @@ test.describe('docs desktop (1440×900 @2x)', () => {
         await shot(page, `${ASSET52}/82-reading-pane-quick-reply-expanded.png`);
     });
 
+    test('slice54 sender sweep dialog automation', async ({ page }) => {
+        await page.addInitScript((blob) => {
+            localStorage.setItem('webmail.theme', 'light');
+            localStorage.setItem('webmail.settings.v1', blob);
+        }, seedSettings());
+        await login(page);
+        await page.getByTestId('msg-row-1017').click({ button: 'right' });
+        await page.getByTestId('ctx-sweep-trigger').click();
+        await expect(page.getByTestId('sender-sweep-dialog')).toBeVisible();
+        await page.getByTestId('sender-sweep-automation-trash').check();
+        await shot(page, `${ASSET54}/84-sender-sweep-automation-dialog.png`);
+    });
+
     test('slice18 follow-up flag row label', async ({ page }) => {
         await page.addInitScript((blob) => {
             localStorage.setItem('webmail.theme', 'light');
@@ -876,23 +890,6 @@ test.describe('docs mobile (390×844 @2x)', () => {
         await expect(page.getByTestId('mobile-search-files-scope')).toBeVisible();
         await settleForScreenshot(page);
         await shot(page, `${ASSET53}/83-mobile-search-category-files.png`);
-    });
-
-    test('slice55 mobile natural-language search hint', async ({ page }) => {
-        await page.addInitScript((blob) => {
-            localStorage.setItem('webmail.theme', 'light');
-            localStorage.setItem('webmail.settings.v1', blob);
-        }, seedSettings({ aiFeatures: true, naturalLanguageSearch: true, useCustomLlm: true }));
-        await page.goto('/webmail/mobile/');
-        await page.fill('input[type="email"]', MOCK_USER);
-        await page.fill('input[type="password"]', MOCK_PASS);
-        await page.click('button:has-text("Sign in")');
-        await page.getByTestId('mobile-search-input').fill('invoices from acme billing');
-        await expect(page.getByTestId('mobile-search-nl-hint')).toContainText('from:billing@acme.example', {
-            timeout: 8000
-        });
-        await settleForScreenshot(page);
-        await shot(page, `${ASSET55}/85-mobile-nl-search-hint.png`);
     });
 
     test('slice32 mobile category stripe', async ({ page }) => {

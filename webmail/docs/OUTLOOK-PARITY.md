@@ -14,12 +14,12 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 |------------------|-------|--------------|
 | **App chrome / command bar** | Outlook skin default (`skins.svelte.ts`), top search, account menu, app rail (Mail / Calendar / AI / Drive) | Medium: rail is broader than OWA; unify launcher later |
 | **Folder pane** | `Sidebar.svelte` tree, **Favorites** pin list, drag-drop move, shortcuts row | Medium: no folder groups |
-| **Message list** | `MessageList.svelte`, density, **Outlook Filter / Sort** menus, **colour categories**, **pin / snooze**, **Sweep**, **Quick steps** on selection | Low–medium: richer row chrome |
+| **Message list** | `MessageList.svelte`, density, **Outlook Filter / Sort** menus, **colour categories**, **pin / snooze**, **Sweep** dialog + automation rules (slice 54), **Quick steps** on selection | Low–medium: richer row chrome |
 | **Focused / Other** | `focused-inbox.ts` + INBOX tabs | Low–medium: optional AI refinement later |
 | **Reading pane** | `MessageDetail.svelte`, reply/forward, conversation stack when grouped, **inline quick reply** (slice 52) | Low–medium: richer HTML parity in main pane; stack HTML done (slice 42); pane position done (slice 3) |
 | **Conversation view** | List grouping via `threads.ts`; reading-pane stack via `conversation-view.ts` + `ConversationStack.svelte` | Low–medium: further OWA transcript polish |
 | **Compose** | `Compose.svelte` + `FloatingPanel.svelte`, TipTap | Medium: sensitivity labels; **undo send** (slice 12), **scheduled send** (#100), **Save draft** (slice 14) |
-| **Search** | Header search + tag syntax; **Mail / People / Files** category tabs (slice 51 desktop, slice 53 mobile); **saved searches** (local) on desktop and mobile; **search refiners** on active queries (slice 50); optional **natural-language** translation when AI + provider configured (desktop slice 5, mobile slice 55) | Medium: deeper People index vs OWA People app |
+| **Search** | Header search + tag syntax; **Mail / People / Files** category tabs (slice 51 desktop, slice 53 mobile); **saved searches** (local) on desktop and mobile; **search refiners** on active queries (slice 50); optional **natural-language** translation when AI + provider configured | Medium: deeper People index vs OWA People app |
 | **Settings shell** | `Settings.svelte` 3-column Outlook-like modal, 19 sections | Low–medium: content differs |
 | **AI features** | Master switch **`aiFeatures`**; defaults **off** for new profiles; every AI entry point hidden when off; optional **smart triage → OWA colour categories** on AI-sorted mail (slice 49) | Low — opt-in provider config remains in Settings |
 | **People / VIP** | VIP list in Settings; local address book | Medium vs OWA People app |
@@ -603,19 +603,19 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 55 (this PR)
+## Slice 54 (this PR)
 
-- **`natural-language-search.ts`**: **`shouldTranslateNlSearchQuery`** gate for mobile **Mail** tab (requires **`aiFeatures`** + **`naturalLanguageSearch`**, skips tag syntax).
-- **`InboxView.svelte`**: debounced translation via **`translateNaturalLanguageSearch`**; **Translating…** / **as …** hint under category tabs; placeholder matches desktop when NL is on.
-- **`SettingsView.svelte`**: **Natural-language search** toggle under AI (off by default).
-- Tests: unit (`natural-language-search.test.mjs`) + Playwright (`outlook-mobile-nl-search.spec.ts`) against API mocks.
-- Screenshot: `webmail/docs/assets/outlook-slice55/85-mobile-nl-search-hint.png`.
+- **`message-sender-sweep-automation.ts`**: builds **Sweep:** mail rules (always trash / always archive) and duplicate detection.
+- **`SenderSweepDialog.svelte`**: OWA-style Sweep dialog (one-time actions + optional automation checkboxes).
+- **`MessageList.svelte`**: context menu **Sweep…** opens the dialog; one-time bulk move unchanged under the hood.
+- Tests: unit (`message-sender-sweep-automation.test.mjs`) + Playwright (`outlook-sender-sweep-automation.spec.ts`, updated `outlook-sender-sweep.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice54/84-sender-sweep-automation-dialog.png`.
 
 ---
 
 ## Next planned slice
 
-Sweep automation dialog (slice 54), mobile sweep dialog parity, or rules management UI (slice 56+).
+Mobile Sweep dialog parity, rules management UI, or opt-in AI features (slice 55).
 
 ---
 
