@@ -53,4 +53,10 @@ describe('mobile-mail-landmarks', () => {
         assert.match(row.description, /Esc/i);
         assert.equal(typeof focusMobileMessageListLandmark, 'function');
     });
+
+    it('message list landmark copy mentions compose close focus return (slice 46)', () => {
+        const row = MOBILE_LANDMARK_ROWS.find((r) => r.region === MAIL_MESSAGE_LIST_LABEL);
+        assert.ok(row);
+        assert.match(row.description, /closing compose/i);
+    });
 });

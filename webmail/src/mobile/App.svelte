@@ -27,7 +27,7 @@
     import { resolveMobileMailShortcut } from '../lib/mobile-mail-keyboard-shortcuts';
     import { dispatchMobileMailShortcut } from './lib/mail-shortcut-handlers.svelte';
     import { startMobileScheduledSendFlusher } from './lib/compose-schedule-send.svelte';
-    import { focusMobileMessageListLandmark } from '../lib/mobile-mail-landmarks';
+    import { focusMobileMessageListLandmark, focusMobileReadingPaneLandmark } from '../lib/mobile-mail-landmarks';
 
     let mobileShortcutHelpOpen = $state(false);
 
@@ -60,11 +60,20 @@
     let prevMobileView = $state(mobileState.view);
 
     // Phone full-screen reader: Esc / back returns to the list with focus on its landmark (slice 44).
+    // Leaving compose returns focus to the list or reading pane (slice 46; pairs with desktop slice 45).
     $effect(() => {
         const view = mobileState.view;
         const split = tabletMailSplit;
         if (prevMobileView === 'message' && view === 'inbox' && !split) {
             requestAnimationFrame(() => focusMobileMessageListLandmark());
+        } else if (prevMobileView === 'compose' && view !== 'compose') {
+            requestAnimationFrame(() => {
+                if (view === 'message' && !split) {
+                    focusMobileReadingPaneLandmark();
+                } else if (view === 'inbox') {
+                    focusMobileMessageListLandmark();
+                }
+            });
         }
         prevMobileView = view;
     });
