@@ -19,7 +19,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 | **Reading pane** | `MessageDetail.svelte`, reply/forward, conversation stack when grouped | Low–medium: richer HTML parity in main pane; stack HTML done (slice 42); pane position done (slice 3) |
 | **Conversation view** | List grouping via `threads.ts`; reading-pane stack via `conversation-view.ts` + `ConversationStack.svelte` | Low–medium: further OWA transcript polish |
 | **Compose** | `Compose.svelte` + `FloatingPanel.svelte`, TipTap | Medium: sensitivity labels; **undo send** (slice 12), **scheduled send** (#100), **Save draft** (slice 14) |
-| **Search** | Header search + tag syntax; **saved searches** (local) on desktop and mobile; optional **natural-language** translation when AI + provider configured | Medium: no unified People/Files search |
+| **Search** | Header search + tag syntax; **Mail / People / Files** category tabs (slice 51); **saved searches** (local) on desktop and mobile; optional **natural-language** translation when AI + provider configured | Medium: search refiners (slice 50) and deeper People index still pending |
 | **Settings shell** | `Settings.svelte` 3-column Outlook-like modal, 19 sections | Low–medium: content differs |
 | **AI features** | Master switch **`aiFeatures`**; defaults **off** for new profiles; every AI entry point hidden when off; optional **smart triage → OWA colour categories** on AI-sorted mail (slice 49) | Low — opt-in provider config remains in Settings |
 | **People / VIP** | VIP list in Settings; local address book | Medium vs OWA People app |
@@ -554,7 +554,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 49 (this PR)
+## Slice 49 (done in #136)
 
 - **`ai-smart-triage-categories.ts`**: maps AI sort **`InboxCategory`** buckets to Outlook **`MessageCategoryId`** colours; builds apply plan skipping messages that already have a category.
 - **`settings.aiSmartTriageCategories`**: default **off**; toggle in Settings → AI (requires `aiFeatures` + configured provider).
@@ -564,9 +564,19 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 51 (this PR)
+
+- **`search-category.ts`**: OWA-style **Mail | People | Files** tabs; Files adds `has:attachment` to the active query.
+- **`Layout.svelte`**: category tabs in the command-bar search; People results open compose with a one-shot **`prefillTo`** recipient.
+- **`MessageList.svelte`**: **Attachments only** scope chip when Files search is active.
+- Tests: unit (`search-category.test.mjs`) + Playwright (`outlook-search-category.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice51/81-search-category-files.png`.
+
+---
+
 ## Next planned slice
 
-Rules / sweep automation, compose pop-out, search refiners, or further OWA conversation polish (slice 50).
+Search refiners on active queries (slice 50, PR #137), mobile search category tabs, or rules / sweep automation UI (slice 52).
 
 ---
 

@@ -1,6 +1,7 @@
 // Top-level UI state shared across components.
 
 import type { Mailbox, MessageDetail, MessageListItem } from './api';
+import type { SearchCategory } from './search-category';
 import type { CalEvent } from './calendar.svelte';
 import { parseMailDeepLinkHash } from './mail-deep-link';
 import { playError } from './sounds.svelte';
@@ -18,6 +19,8 @@ export interface UiState {
     /** When 'all', the message list is an aggregated search across every
      *  folder; rows carry a `mailbox` field. 'folder' is the default. */
     searchScope: 'folder' | 'all';
+    /** OWA-style search mode: mail (default), people (address book), files (attachments). */
+    searchCategory: SearchCategory;
     selectedUid: number | null;
     detail: MessageDetail | null;
     detailLoading: boolean;
@@ -32,6 +35,8 @@ export interface UiState {
         mode?: 'new' | 'reply' | 'replyAll' | 'forward';
         /** Plain-text draft to place above the quoted reply body (one-shot). */
         draftPlain?: string;
+        /** One-shot To: prefill when opening new mail from People search. */
+        prefillTo?: string;
         /** Restores an in-progress message after undo send (one-shot). */
         restore?: {
             to: string;
@@ -129,6 +134,7 @@ const initial: UiState = {
     messagesError: null,
     search: session.search || '',
     searchScope: 'folder',
+    searchCategory: 'mail',
     selectedUid: deepLinkAtBoot?.uid ?? session.selectedUid ?? null,
     detail: null,
     detailLoading: false,

@@ -113,12 +113,19 @@
     import { playNotify, playClick, playShred, primeAudio, sounds, setMuted } from '../lib/sounds.svelte';
     import { pwa, promptInstall } from '../lib/pwa.svelte';
     import { loadTakeover } from '../lib/takeover.svelte';
-    import { recordEnvelope, loadAddressBook } from '../lib/address-book.svelte';
+    import { recordEnvelope, loadAddressBook, searchContacts, contactNameFor } from '../lib/address-book.svelte';
     import { ensureCountry, geoipCache, flagEmoji } from '../lib/geoip.svelte';
     import { myAvatars } from '../lib/avatars.svelte';
     import Avatar from './Avatar.svelte';
     import { sentStatusState, resumePolling, dismissSent, clearOldSent } from '../lib/sent-status.svelte';
     import { isVoiceAvailable, isSttAvailable, voicePrefs } from '../lib/voice.svelte';
+    import {
+        OWA_SEARCH_CATEGORIES,
+        mailQueryForCategory,
+        shouldRunMailSearch,
+        searchPlaceholderForCategory,
+        type SearchCategory
+    } from '../lib/search-category';
     import type { MessageDetail as MessageDetailType } from '../lib/api';
 
     // Page size resolves dynamically from settings.pageSize. 'unlimited'
@@ -150,6 +157,7 @@
     let saveSearchFormOpen = $state(false);
 
     const canSaveCurrentSearch = $derived.by(() => {
+        if (ui.searchCategory === 'people') return false;
         const q = (searchInput || ui.search || '').trim();
         return q.length > 0;
     });
@@ -185,12 +193,18 @@
     const showSearchDropdown = $derived(
         searchSuggestOpen
         && (
-            visibleTags.length > 0
+            ui.searchCategory === 'people'
+            || visibleTags.length > 0
             || savedMailSearches.items.length > 0
             || canSaveCurrentSearch
             || saveSearchFormOpen
         )
     );
+
+    const peopleSearchResults = $derived.by(() => {
+        if (ui.searchCategory !== 'people') return [];
+        return searchContacts(searchInput, 12);
+    });
 
     function insertTag(key: string) {
         const v = searchInput;
@@ -1033,10 +1047,11 @@
     );
     const searchPlaceholder = $derived(
         ui.app === 'mail'
-            ? settings.naturalLanguageSearch && settings.aiFeatures
-                ? 'Search mail — plain language or from:alice…'
-                : 'Search — try from:alice or has:attachment…'
-            : 'Search mail — from:alice, has:attachment…'
+            ? searchPlaceholderForCategory(
+                ui.searchCategory,
+                !!(settings.naturalLanguageSearch && settings.aiFeatures)
+            )
+            : searchPlaceholderForCategory('mail', false)
     );
 
     function onSearchChange(value: string) {
@@ -1046,13 +1061,38 @@
         searchDebounce = setTimeout(() => void applySearchFromInput(), 300);
     }
 
+    function setSearchCategory(category: SearchCategory) {
+        if (ui.searchCategory === category) return;
+        ui.searchCategory = category;
+        searchSuggestOpen = true;
+        if (searchDebounce) clearTimeout(searchDebounce);
+        void applySearchFromInput();
+    }
+
+    function composeToContact(address: string) {
+        searchSuggestOpen = false;
+        ui.composeOpen = true;
+        ui.composeContext = { replyTo: null, mode: 'new', prefillTo: address };
+    }
+
     async function applySearchFromInput() {
         const gen = ++searchResolveGen;
+        if (!shouldRunMailSearch(ui.searchCategory)) {
+            ui.search = '';
+            if (ui.searchScope === 'all') {
+                cancelGlobalSearch();
+                ui.searchScope = 'folder';
+            }
+            refreshMessages({ resetPage: true });
+            return;
+        }
+
         let q = searchInput.trim();
         lastNlSearchTranslation = null;
 
         if (
             q &&
+            ui.searchCategory === 'mail' &&
             settings.naturalLanguageSearch &&
             settings.aiFeatures &&
             !looksLikeStructuredMailSearch(q)
@@ -1070,6 +1110,7 @@
             }
         }
 
+        q = mailQueryForCategory(q, ui.searchCategory);
         ui.search = q;
         if (ui.searchScope === 'all') {
             cancelGlobalSearch();
@@ -2234,6 +2275,26 @@
                 aria-label={searchLabel}
                 data-testid="search-input"
             />
+            <div
+                class="search-category-tabs"
+                role="tablist"
+                aria-label="Search category"
+                data-testid="search-category-tabs"
+            >
+                {#each OWA_SEARCH_CATEGORIES as cat (cat.id)}
+                    <button
+                        type="button"
+                        role="tab"
+                        class="search-category-tab"
+                        class:active={ui.searchCategory === cat.id}
+                        aria-selected={ui.searchCategory === cat.id}
+                        onclick={() => setSearchCategory(cat.id)}
+                        data-testid={`search-category-${cat.id}`}
+                    >
+                        {cat.label}
+                    </button>
+                {/each}
+            </div>
             {#if nlSearchResolving}
                 <span class="search-nl-status muted small" data-testid="search-nl-pending">Translating…</span>
             {:else if lastNlSearchTranslation}
@@ -2241,7 +2302,7 @@
                     as {lastNlSearchTranslation}
                 </span>
             {/if}
-            {#if (ui.search || '').trim()}
+            {#if (ui.search || '').trim() && ui.searchCategory !== 'people'}
                 {#if ui.searchScope === 'all'}
                     <button
                         type="button"
@@ -2277,7 +2338,27 @@
                     }}
                     data-testid="search-suggest"
                 >
-                    {#if savedMailSearches.items.length > 0}
+                    {#if ui.searchCategory === 'people'}
+                        <div class="search-suggest-hint">People</div>
+                        {#if peopleSearchResults.length === 0}
+                            <p class="search-people-empty muted small">No matching contacts — try a name or email.</p>
+                        {:else}
+                            {#each peopleSearchResults as contact (contact.address)}
+                                <button
+                                    type="button"
+                                    class="search-suggest-chip search-people-chip"
+                                    onmousedown={(e) => e.preventDefault()}
+                                    onclick={() => composeToContact(contact.address)}
+                                    data-testid="search-people-result"
+                                >
+                                    <span class="search-suggest-label">
+                                        {contact.name || contactNameFor(contact.address) || contact.address}
+                                    </span>
+                                    <span class="search-suggest-sample">{contact.address}</span>
+                                </button>
+                            {/each}
+                        {/if}
+                    {:else if savedMailSearches.items.length > 0}
                         <div class="search-suggest-hint">Saved searches</div>
                         {#each savedMailSearches.items as saved (saved.id)}
                             <div class="search-saved-row">
@@ -2308,6 +2389,7 @@
                             </div>
                         {/each}
                     {/if}
+                    {#if ui.searchCategory !== 'people'}
                     {#if saveSearchFormOpen}
                         <div class="search-save-form" data-testid="search-save-form">
                             <label class="search-save-label" for="search-save-name">Name this search</label>
@@ -2351,6 +2433,7 @@
                                 <span class="search-suggest-sample">{tag.sample}</span>
                             </button>
                         {/each}
+                    {/if}
                     {/if}
                 </div>
             {/if}
@@ -3249,15 +3332,43 @@
         max-width: 920px;
         display: flex;
         align-items: center;
-        gap: 10px;
+        flex-wrap: wrap;
+        gap: 6px 10px;
         background: var(--bg-base);
         border: 1px solid var(--border-subtle);
         /* OWA's field is a full pill, not a rounded rectangle. */
         border-radius: 999px;
-        padding: 0 14px;
+        padding: 6px 14px 8px;
         color: var(--text-tertiary);
         transition: border-color var(--transition-fast), background var(--transition-fast);
         position: relative;
+    }
+    .search-category-tabs {
+        flex: 1 1 100%;
+        display: flex;
+        gap: 4px;
+        padding-left: 22px;
+    }
+    .search-category-tab {
+        font-size: 11px;
+        font-weight: 600;
+        padding: 2px 10px;
+        border-radius: 999px;
+        border: 1px solid transparent;
+        background: transparent;
+        color: var(--text-secondary);
+        cursor: pointer;
+    }
+    .search-category-tab:hover {
+        background: var(--bg-hover);
+    }
+    .search-category-tab.active {
+        background: var(--accent-soft, rgba(0, 120, 212, 0.12));
+        color: var(--accent, #0078d4);
+        border-color: var(--accent, #0078d4);
+    }
+    .search-people-empty {
+        margin: 4px 8px 8px;
     }
     /* Suggestions float beneath the search input. Show on focus until
        the user blurs (with a tiny grace period so a click can register
