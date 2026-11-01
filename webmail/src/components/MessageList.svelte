@@ -62,6 +62,7 @@
     import Icon from './Icon.svelte';
     import { buildThreads, type Thread } from '../lib/threads';
     import { sortInboxClient, type InboxSortRanking } from '../lib/sort-inbox-client';
+    import { buildSmartTriageCategoryAssignments } from '../lib/ai-smart-triage-categories';
     import type { MessageListItem } from '../lib/api';
     import { playSortDone, playClick } from '../lib/sounds.svelte';
     import { runSpamSweep, bulkMove, findArchiveFolder, findTrashFolder, type SweepCandidate } from '../lib/spam-sweep';
@@ -1194,6 +1195,48 @@
         ui.selected = new Set(uidsForCategory(cat));
     }
 
+    let smartTriageApplyBusy = $state(false);
+
+    async function applySmartTriageOwaCategories() {
+        if (!onSetCategory || smartTriageApplyBusy || aiRankings.length === 0) return;
+        const assignments = buildSmartTriageCategoryAssignments({
+            rankings: aiRankings,
+            resolveEffectiveInboxCategory: (uid) => {
+                const m = ui.messages.find((x) => x.uid === uid);
+                if (!m) return null;
+                const isNotice = isNotificationMessage({
+                    from: m.envelope.from,
+                    subject: m.envelope.subject,
+                    notificationSenders: capabilities.server?.notificationSenders,
+                    smsSenders: capabilities.server?.smsSenders
+                });
+                const vipMatch = isVipAddress([
+                    m.envelope.from?.[0]?.address,
+                    ...((m.envelope.to || []).map((a) => a.address)),
+                    ...((m.envelope.cc || []).map((a) => a.address))
+                ]);
+                return effectiveCategory(m.uid, vipMatch, isNotice);
+            },
+            flagsForUid: (uid) => ui.messages.find((m) => m.uid === uid)?.flags
+        });
+        if (assignments.length === 0) {
+            showToast('info', 'No new colour categories to apply.');
+            return;
+        }
+        smartTriageApplyBusy = true;
+        try {
+            for (const a of assignments) {
+                await onSetCategory(a.uid, a.owaCategory);
+            }
+            showToast(
+                'success',
+                `Applied ${assignments.length} colour categor${assignments.length === 1 ? 'y' : 'ies'}.`
+            );
+        } finally {
+            smartTriageApplyBusy = false;
+        }
+    }
+
     /** One-click bulk action over an entire AI-sort category — Archive,
      *  Trash, or Mark-read for every visible message in that bucket.
      *  Powers the per-category action buttons next to each quick-chip.
@@ -1733,6 +1776,21 @@
                     </span>
                 {/if}
             {/each}
+            {#if settings.aiSmartTriageCategories && onSetCategory}
+                <div class="ai-sort-suggest smart-triage-apply" role="region" data-testid="ai-smart-triage-apply-banner">
+                    <Icon name="sparkles" size={12} />
+                    <span>Map AI triage buckets to Outlook colour categories on visible mail.</span>
+                    <button
+                        type="button"
+                        class="suggest-btn primary"
+                        disabled={smartTriageApplyBusy}
+                        onclick={applySmartTriageOwaCategories}
+                        data-testid="ai-smart-triage-apply-categories"
+                    >
+                        {smartTriageApplyBusy ? 'Applying…' : 'Apply colour categories'}
+                    </button>
+                </div>
+            {/if}
         {/if}
     </nav>
 

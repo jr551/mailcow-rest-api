@@ -21,7 +21,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 | **Compose** | `Compose.svelte` + `FloatingPanel.svelte`, TipTap | Medium: sensitivity labels; **undo send** (slice 12), **scheduled send** (#100), **Save draft** (slice 14) |
 | **Search** | Header search + tag syntax; **saved searches** (local) on desktop and mobile; optional **natural-language** translation when AI + provider configured | Medium: no unified People/Files search |
 | **Settings shell** | `Settings.svelte` 3-column Outlook-like modal, 19 sections | Low–medium: content differs |
-| **AI features** | Master switch **`aiFeatures`**; defaults **off** for new profiles; every AI entry point hidden when off | Low — opt-in provider config remains in Settings |
+| **AI features** | Master switch **`aiFeatures`**; defaults **off** for new profiles; every AI entry point hidden when off; optional **smart triage → OWA colour categories** on AI-sorted mail (slice 49) | Low — opt-in provider config remains in Settings |
 | **People / VIP** | VIP list in Settings; local address book | Medium vs OWA People app |
 | **Deep links** | `#mail?folder=…&uid=…` hash URLs + **Copy link** in reading pane | Low–medium: no server-side permalink API yet |
 | **Accessibility** | Landmark regions + skip link (slice 17); mobile landmarks + skip link (slice 33); mobile compose landmarks + initial focus (slice 38); desktop + mobile reading-pane focus on open (slices 41 / 40); desktop + mobile message-list focus on Esc (slices 43 / 44); desktop compose close returns focus to list or reading pane (slices 45 / 47); mobile compose close returns focus to list or reading pane (slice 46) | Low–medium: deeper focus-order polish |
@@ -534,7 +534,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
-## Slice 47 (this PR)
+## Slice 47 (done in #134)
 
 - **`mail-landmarks.ts`**: **`composeCloseFocusLandmarkId`** helper; reading-pane region copy mentions reply/forward compose close.
 - **`Layout.svelte`**: **`closeCompose`** returns focus to the **Reading pane** when dismissing reply, reply-all, or forward compose while a message remains open (new compose still returns to the list; slice 45).
@@ -544,9 +544,26 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ---
 
+## Slice 48 (open in #135)
+
+- **`mail-landmarks.ts`**: **`MAIL_SKIP_TO_READING_PANE_TEXT`**; **`Layout.svelte`**: second skip link when the reading pane is visible.
+- Screenshot: `webmail/docs/assets/outlook-slice48/78-skip-reading-pane-focused.png`.
+
+---
+
+## Slice 49 (this PR)
+
+- **`ai-smart-triage-categories.ts`**: maps AI sort **`InboxCategory`** buckets to Outlook **`MessageCategoryId`** colours; builds apply plan skipping messages that already have a category.
+- **`settings.aiSmartTriageCategories`**: default **off**; toggle in Settings → AI (requires `aiFeatures` + configured provider).
+- **`MessageList.svelte`**: on **AI sorted** filter, **Apply colour categories** runs **`onSetCategory`** for each planned message (mocks-only tests).
+- Tests: unit (`ai-smart-triage-categories.test.mjs`) + Playwright (`outlook-ai-smart-triage-categories.spec.ts`) against API mocks.
+- Screenshot: `webmail/docs/assets/outlook-slice49/79-ai-smart-triage-apply-banner.png`.
+
+---
+
 ## Next planned slice
 
-**Smart triage / categorise** (opt-in AI) or further keyboard / focus-order polish (slice 48).
+Further keyboard / focus-order polish or mobile **Skip to reading pane** (pairs with slice 48).
 
 ---
 
