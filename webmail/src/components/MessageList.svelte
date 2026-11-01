@@ -62,6 +62,12 @@
     import Icon from './Icon.svelte';
     import { buildThreads, type Thread } from '../lib/threads';
     import { sortInboxClient, type InboxSortRanking } from '../lib/sort-inbox-client';
+    import {
+        OWA_SEARCH_REFINERS,
+        refinerIsActive,
+        showSearchRefiners,
+        toggleSearchRefinerToken
+    } from '../lib/search-refiners';
     import { buildSmartTriageCategoryAssignments } from '../lib/ai-smart-triage-categories';
     import type { MessageListItem } from '../lib/api';
     import { playSortDone, playClick } from '../lib/sounds.svelte';
@@ -104,13 +110,15 @@
          *  Layout — a second callback would have meant a second copy of that
          *  flow, which is the rot this file just shed. */
         onBlockSender?: (uid: number, pattern?: string) => void;
+        /** Apply an updated search query from OWA-style refiners (slice 50). */
+        onSearchRefine?: (query: string) => void;
     }
     let {
         onSelect, onStar, onFollowUpFlag, onSetCategory, onUnread, onTrash, onArchive,
         onPageChange, onMarkFolderRead, onSummariseAndMarkRead, onLoadMore,
         effectivePageSize = 25, appendingMore = false,
         scanState = null,
-        onMove, onBlockSender
+        onMove, onBlockSender, onSearchRefine
     }: Props = $props();
 
     const categorySubmenuItems: SubmenuItem[] = categoryMenuItems().map((item) => ({
@@ -1495,6 +1503,21 @@
         </div>
     </header>
 
+    {#if showSearchRefiners(ui.search) && onSearchRefine}
+        <nav class="search-refiners" aria-label="Refine search" data-testid="search-refiners">
+            {#each OWA_SEARCH_REFINERS as refiner (refiner.id)}
+                <button
+                    type="button"
+                    class="search-refiner-chip"
+                    class:active={refinerIsActive(ui.search, refiner)}
+                    aria-pressed={refinerIsActive(ui.search, refiner)}
+                    onclick={() => onSearchRefine(toggleSearchRefinerToken(ui.search, refiner.token))}
+                    data-testid={`search-refiner-${refiner.id}`}
+                >{refiner.label}</button>
+            {/each}
+        </nav>
+    {/if}
+
     {#if showInboxTabs}
         <nav class="inbox-tabs" aria-label="Inbox view" data-testid="inbox-tabs">
             <button
@@ -2651,6 +2674,30 @@
         font-size: 11px;
         font-weight: 600;
         color: var(--accent, #0078d4);
+    }
+    .search-refiners {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        padding: 0 12px 8px;
+        border-bottom: 1px solid var(--border-subtle);
+    }
+    .search-refiner-chip {
+        font-size: 12px;
+        padding: 4px 10px;
+        border-radius: 999px;
+        border: 1px solid var(--border-subtle);
+        background: var(--bg-surface);
+        color: var(--text-secondary);
+        cursor: pointer;
+    }
+    .search-refiner-chip:hover {
+        background: var(--bg-hover);
+    }
+    .search-refiner-chip.active {
+        border-color: var(--accent);
+        background: color-mix(in srgb, var(--accent) 12%, transparent);
+        color: var(--text-primary);
     }
     .list-meta {
         display: flex;
