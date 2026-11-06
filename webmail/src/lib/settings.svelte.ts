@@ -833,16 +833,18 @@ function assignIfChanged<K extends keyof typeof capState>(key: K, next: (typeof 
 
 export async function probeCapabilities(): Promise<void> {
     try {
-        const [aiRes, healthRes, configRes, ttsRes] = await Promise.all([
+        const session = getSession();
+        const [aiRes, capRes, configRes, ttsRes] = await Promise.all([
             fetch(apiUrl('/v1/ai/capabilities')),
-            fetch(apiUrl('/health')),
+            fetch(apiUrl('/v1/capabilities'), {
+                headers: session ? { authorization: bearerHeader(session) } : {}
+            }),
             getAiConfig().catch(() => null),
             getTtsConfig().catch(() => null)
         ]);
         if (aiRes.ok) assignIfChanged('caps', await aiRes.json());
-        if (healthRes.ok) {
-            const h = await healthRes.json();
-            assignIfChanged('server', h.capabilities || { ai: false, ocr: false, smtp: false, drive: false });
+        if (capRes.ok) {
+            assignIfChanged('server', await capRes.json());
         }
         if (configRes) {
             if (assignIfChanged('aiConfig', configRes)) saveCachedAiConfig(configRes);

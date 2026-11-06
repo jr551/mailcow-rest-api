@@ -81,6 +81,28 @@ test('openapi.json and the Swagger UI require authentication', async () => {
     }
 });
 
+test('the authenticated capability inventory replaces the public one', async () => {
+    const { app, cache } = await makeApp();
+    try {
+        const anon = await app.inject({ method: 'GET', url: '/v1/capabilities' });
+        assert.equal(anon.statusCode, 401);
+
+        const { token } = cache.createSession('reader@example.com', 'mailbox-pass', 'hash');
+        const ok = await app.inject({
+            method: 'GET',
+            url: '/v1/capabilities',
+            headers: { authorization: `Bearer ${token}` }
+        });
+        assert.equal(ok.statusCode, 200);
+        const body = JSON.parse(ok.body);
+        assert.equal(typeof body.smtp, 'boolean');
+        assert.ok(Array.isArray(body.notificationSenders));
+        assert.ok(Array.isArray(body.smsSenders));
+    } finally {
+        await app.close();
+    }
+});
+
 test('401 bodies are generic — no missing-vs-invalid oracle', async () => {
     const { app } = await makeApp();
     try {

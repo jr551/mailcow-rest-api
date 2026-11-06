@@ -854,6 +854,22 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         version: pkg.version
     }));
 
+    // The webmail needs the feature inventory to style notification/SMS
+    // sender cards. It used to read it from the public /health payload; that
+    // told an anonymous stranger which integrations are enabled and named
+    // operator addresses. Same data, now behind mailbox auth.
+    app.get('/v1/capabilities', {
+        schema: { tags: ['system'], summary: 'Authenticated feature inventory' }
+    }, async () => ({
+        ai: !!config.ai.apiKey,
+        ocr: !!config.ocr.apiKey,
+        smtp: !!config.smtp.host,
+        imageProxy: true,
+        drive: config.s3.enabled,
+        notificationSenders: config.notification.senders,
+        smsSenders: config.notification.smsSenders
+    }));
+
     await app.register(sessionRoutes, { cache, imap: imapCfg, sessionTtlMs: config.session.ttlMs, appPasswords: appPasswordStore, webhookInboxes: webhookInboxStore, outboundWebhooks: outboundWebhookStore });
     await app.register(mailboxRoutes, { pool, imapCache });
     await app.register(addressBookRoutes, { pool });
