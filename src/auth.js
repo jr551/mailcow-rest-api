@@ -71,19 +71,12 @@ async function verifyWithDovecot(imap, user, pass) {
     }
 }
 
-// URLs served by @fastify/swagger-ui (registered with routePrefix='/') and the
-// canonical /openapi.json. These must bypass auth so the docs page loads.
-const SWAGGER_PUBLIC_URLS = new Set([
-    '/', '/index.html', '/json', '/yaml', '/openapi.json',
-    '/uiConfig', '/initOAuth', '/oauth2-redirect.html'
-]);
-
-function isSwaggerPath(url) {
-    if (!url) return false;
-    const path = url.split('?')[0];
-    if (SWAGGER_PUBLIC_URLS.has(path)) return true;
-    return path.startsWith('/static/');
-}
+// The API contract and the Swagger UI are operator material, not public
+// material: they name every privileged route and the admin-token scheme.
+// They now sit behind the same mailbox authentication as the rest of the
+// API. A browser that authenticates the HTML page caches the Basic
+// credentials for the realm, so the UI's own asset and /openapi.json
+// requests continue to work.
 
 // The webmail SPA assets are public — auth is enforced on the API calls the
 // SPA makes. Anything under /webmail/ is asset-only.
@@ -166,7 +159,6 @@ function createAuthHook({
         // and kill the real request that follows.
         if (req.method === 'OPTIONS') return;
         if (req.routeOptions?.config?.public) return;
-        if (isSwaggerPath(req.url)) return;
         if (isWebmailPath(req.url)) return;
 
         // Try Bearer session token first
@@ -192,7 +184,7 @@ function createAuthHook({
             }
             if (!session) {
                 reply.header('WWW-Authenticate', 'Bearer realm="imap-rest"');
-                throw unauthorized('Invalid or expired session token');
+                throw unauthorized();
             }
             req.creds = { user: session.user, pass: session.pass, hash: session.hash };
             // The presented token is carried on req.session so the session
@@ -207,7 +199,7 @@ function createAuthHook({
         const creds = parseBasicAuth(req.headers.authorization);
         if (!creds) {
             reply.header('WWW-Authenticate', 'Bearer realm="imap-rest"');
-            throw unauthorized('Missing credentials');
+            throw unauthorized();
         }
 
         // MCP clients and curl send Basic auth, so an app password has to work

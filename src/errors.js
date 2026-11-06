@@ -27,7 +27,7 @@ function fromImapError(err) {
     const text = err.responseText || err.message || String(err);
 
     if (code === 'AUTHENTICATIONFAILED' || /authentication\s*fail/i.test(text)) {
-        return unauthorized('IMAP authentication failed');
+        return unauthorized();
     }
     // Dovecot phrases this as "Mailbox doesn't exist: <name>", which the
     // old "does not exist" pattern missed — so asking for a folder that

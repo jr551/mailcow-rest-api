@@ -32,7 +32,7 @@ test('build(): corrupt disposable cache files must not prevent startup', async (
     const cache = createCache({ filePath: ':memory:', ttlValidMs: 60_000, ttlInvalidMs: 500, pruneIntervalMs: 0 });
     const app = await build({ cache, ocrCache: undefined });
     try {
-        const res = await app.inject({ method: 'GET', url: '/openapi.json' });
+        const res = await app.inject({ method: 'GET', url: '/health' });
         assert.equal(res.statusCode, 200);
     } finally {
         await app.close();

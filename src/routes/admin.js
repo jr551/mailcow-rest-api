@@ -59,8 +59,9 @@ module.exports = async function adminRoutes(app, { adminSettings, appPasswordSto
         const token = parseBearer(req.headers.authorization);
         if (!token || !secretEquals(token, config.admin.token)) {
             reply.header('WWW-Authenticate', 'Bearer realm="imap-rest-admin"');
-            throw unauthorized('Invalid admin token');
+            throw unauthorized();
         }
+        req.adminAuthenticated = true;
     });
 
     app.get('/v1/admin/settings', {

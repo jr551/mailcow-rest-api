@@ -11,13 +11,18 @@ async function buildBare() {
         ttlInvalidMs: 10_000,
         pruneIntervalMs: 0
     });
-    return build({ cache, ocrCache: null });
+    const app = await build({ cache, ocrCache: null });
+    // The docs surface is operator material: every request needs a mailbox
+    // session, exactly as a browser that authenticated the HTML page would
+    // have.
+    const { token } = cache.createSession('swagger@example.com', 'mailbox-pass', 'hash');
+    return { app, auth: { authorization: `Bearer ${token}` } };
 }
 
-test('GET / serves Swagger UI HTML', async () => {
-    const app = await buildBare();
+test('GET / serves Swagger UI HTML to an authenticated operator', async () => {
+    const { app, auth } = await buildBare();
     try {
-        const res = await app.inject({ method: 'GET', url: '/' });
+        const res = await app.inject({ method: 'GET', url: '/', headers: auth });
         assert.equal(res.statusCode, 200);
         assert.match(res.headers['content-type'], /text\/html/);
         assert.match(res.body, /swagger-ui/i);
@@ -27,9 +32,9 @@ test('GET / serves Swagger UI HTML', async () => {
 });
 
 test('GET /openapi.json serves the spec', async () => {
-    const app = await buildBare();
+    const { app, auth } = await buildBare();
     try {
-        const res = await app.inject({ method: 'GET', url: '/openapi.json' });
+        const res = await app.inject({ method: 'GET', url: '/openapi.json', headers: auth });
         assert.equal(res.statusCode, 200);
         assert.match(res.headers['content-type'], /application\/json/);
         const doc = JSON.parse(res.body);
@@ -42,22 +47,27 @@ test('GET /openapi.json serves the spec', async () => {
     }
 });
 
-test('GET / and /openapi.json do not require auth', async () => {
-    const app = await buildBare();
+test('GET / and /openapi.json require auth', async () => {
+    const { app, auth } = await buildBare();
     try {
-        const a = await app.inject({ method: 'GET', url: '/' });
-        const b = await app.inject({ method: 'GET', url: '/openapi.json' });
-        assert.equal(a.statusCode, 200);
-        assert.equal(b.statusCode, 200);
+        const anonUi = await app.inject({ method: 'GET', url: '/' });
+        const anonSpec = await app.inject({ method: 'GET', url: '/openapi.json' });
+        assert.equal(anonUi.statusCode, 401);
+        assert.equal(anonSpec.statusCode, 401);
+
+        const ui = await app.inject({ method: 'GET', url: '/', headers: auth });
+        const spec = await app.inject({ method: 'GET', url: '/openapi.json', headers: auth });
+        assert.equal(ui.statusCode, 200);
+        assert.equal(spec.statusCode, 200);
     } finally {
         await app.close();
     }
 });
 
 test('OpenAPI description includes MCP setup snippet', async () => {
-    const app = await buildBare();
+    const { app, auth } = await buildBare();
     try {
-        const res = await app.inject({ method: 'GET', url: '/openapi.json' });
+        const res = await app.inject({ method: 'GET', url: '/openapi.json', headers: auth });
         const doc = JSON.parse(res.body);
         assert.match(doc.info.description, /Model Context Protocol/);
         assert.match(doc.info.description, /imap-rest-mcp/);
@@ -70,9 +80,9 @@ test('OpenAPI description includes MCP setup snippet', async () => {
 });
 
 test('OpenAPI doc tags routes for grouping', async () => {
-    const app = await buildBare();
+    const { app, auth } = await buildBare();
     try {
-        const res = await app.inject({ method: 'GET', url: '/openapi.json' });
+        const res = await app.inject({ method: 'GET', url: '/openapi.json', headers: auth });
         const doc = JSON.parse(res.body);
         assert.deepEqual(doc.paths['/v1/mailboxes'].get.tags, ['mailboxes']);
         assert.deepEqual(doc.paths['/health'].get.tags, ['system']);
@@ -82,12 +92,13 @@ test('OpenAPI doc tags routes for grouping', async () => {
 });
 
 test('OpenAPI doc includes forwarded public base URL for proxied Swagger try-it-out', async () => {
-    const app = await buildBare();
+    const { app, auth } = await buildBare();
     try {
         const res = await app.inject({
             method: 'GET',
             url: '/openapi.json',
             headers: {
+                ...auth,
                 host: 'mail.example.test',
                 'x-forwarded-proto': 'https',
                 'x-forwarded-host': 'mail.example.test',

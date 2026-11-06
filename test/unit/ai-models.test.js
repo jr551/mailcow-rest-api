@@ -167,8 +167,10 @@ test('GET /v1/ai/models requires auth', async () => {
 test('GET /v1/ai/models is documented in the OpenAPI spec', async () => {
     const app = await makeApp();
     try {
-        const res = await app.inject({ method: 'GET', url: '/openapi.json' });
-        const doc = JSON.parse(res.body);
+        // The document itself is auth-gated now; ask the app for the spec
+        // directly instead of fetching it anonymously.
+        await app.ready();
+        const doc = app.swagger();
         assert.ok(doc.paths['/v1/ai/models'], 'ai models route in spec');
     } finally {
         await app.close();

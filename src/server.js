@@ -387,6 +387,32 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         });
     }
 
+    // Security headers on every API/SPA response. The CSP is deliberately
+    // narrow: it blocks framing, plugin/object embedding and <base> hijacks
+    // without changing how the built Svelte bundle loads its own scripts and
+    // styles. A full script-src policy needs a nonce/hash pass over the SPA
+    // and is not attempted here.
+    app.addHook('onSend', async (req, reply) => {
+        reply.header('X-Content-Type-Options', 'nosniff');
+        reply.header('Referrer-Policy', 'no-referrer');
+        reply.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(), usb=()');
+        reply.header('Cross-Origin-Opener-Policy', 'same-origin');
+        reply.header('Cross-Origin-Resource-Policy', 'same-site');
+        reply.header('X-Frame-Options', 'SAMEORIGIN');
+        reply.header('Content-Security-Policy', "frame-ancestors 'self'; object-src 'none'; base-uri 'self'");
+        // Host-scoped; ignored by browsers on plain HTTP. No subdomain of
+        // userapi exists, so includeSubDomains cannot strand an HTTP service.
+        reply.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+        // Do not advertise the rate-limit budget before the caller has
+        // authenticated: it lets an anonymous client pace itself just under
+        // the limit.
+        if (!req.creds && !req.adminAuthenticated) {
+            reply.removeHeader('x-ratelimit-limit');
+            reply.removeHeader('x-ratelimit-remaining');
+            reply.removeHeader('x-ratelimit-reset');
+        }
+    });
+
     // IP allowlist runs before auth so blocked IPs never trigger an IMAP LOGIN.
     app.addHook('onRequest', createIpAllowHook({ allowlist: config.security.ipAllowlist }));
 
@@ -771,8 +797,10 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         return problem404(`Route ${req.method} ${req.url} not found`);
     });
 
-    // Expose the OpenAPI document at the canonical /openapi.json path.
-    app.get('/openapi.json', { config: { public: true, rateLimit: false }, schema: { hide: true } }, async (req) => {
+    // Expose the OpenAPI document at the canonical /openapi.json path. It is
+    // NOT public: the document maps every privileged route and names the
+    // admin-token scheme, so it requires the same authentication as the API.
+    app.get('/openapi.json', { rateLimit: false, schema: { hide: true } }, async (req) => {
         const doc = app.swagger();
         return {
             ...doc,
@@ -818,24 +846,12 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         schema: { tags: ['system'], summary: 'Liveness/health check' }
     }, async () => ({
         ok: true,
-        // Lets the SPA notice it's running a stale build and self-refresh.
-        version: pkg.version,
-        cache: cache ? cache.size() : null,
-        pool: pool.count(),
-        capabilities: {
-            ai: !!config.ai.apiKey,
-            ocr: !!config.ocr.apiKey,
-            smtp: !!config.smtp.host,
-            imageProxy: true,
-            drive: config.s3.enabled,
-            // Lower-cased addresses whose mail the webmail should render
-            // as a notification card. The list is operator-defined via
-            // NOTIFICATION_SENDERS. Empty array when nothing is configured.
-            notificationSenders: config.notification.senders,
-            // SMS-gateway senders — extra strict treatment (no-reply,
-            // phone icon). Operator-defined via SMS_SENDERS.
-            smsSenders: config.notification.smsSenders
-        }
+        // The SPA needs the running version to notice a stale cached shell
+        // and refresh itself. Everything else that used to be here (pool
+        // sizing, enabled integrations, operator addresses) told an
+        // unauthenticated stranger how the private deployment is put
+        // together, so it is no longer returned.
+        version: pkg.version
     }));
 
     await app.register(sessionRoutes, { cache, imap: imapCfg, sessionTtlMs: config.session.ttlMs, appPasswords: appPasswordStore, webhookInboxes: webhookInboxStore, outboundWebhooks: outboundWebhookStore });

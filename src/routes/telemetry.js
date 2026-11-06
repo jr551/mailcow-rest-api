@@ -19,7 +19,7 @@ function clip(s, max = MAX_FIELD_CHARS) {
     return s.length > max ? s.slice(0, max) + `…(+${s.length - max})` : s;
 }
 
-// The POST endpoint is public and appends up to 64 KB a call, so the log
+// The POST endpoint is public and appends up to 32 KB a call, so the log
 // is attacker-growable. Two consequences to defend against:
 //
 //  * /recent used to readFile() the whole thing just to take the last N
@@ -74,6 +74,27 @@ async function readTail(file, maxBytes) {
 }
 
 
+const config = require('../config');
+
+// A browser on someone else's page must not be able to use a visitor as a
+// log-writing proxy. Reports from our own SPA carry the API host as Origin;
+// the pre-login surface is same-origin too. Requests with no Origin (curl,
+// sendBeacon on some browsers) are left to the per-IP limiter and body cap.
+function isAllowedOrigin(req) {
+    const origin = req.headers.origin;
+    if (!origin) return true;
+    try {
+        const parsed = new URL(origin);
+        const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').toLowerCase();
+        if (host && parsed.host.toLowerCase() === host) return true;
+        if (config.apiCors.origins.includes(origin)) return true;
+        return parsed.protocol === 'https:' &&
+            config.apiCors.wildcardApex.some((apex) => parsed.hostname.endsWith(`.${apex}`));
+    } catch {
+        return false;
+    }
+}
+
 module.exports = async function telemetryRoutes(app, { logPath }) {
     const target = logPath || path.join('/data', 'error.log');
     try {
@@ -127,7 +148,7 @@ module.exports = async function telemetryRoutes(app, { logPath }) {
         // Public so unauthenticated SPAs (login surface) can still
         // report their own crashes. The auth hook skips public routes, so
         // entries are written without an owner.
-        config: { public: true, rateLimit: { max: 60, timeWindow: '1 minute' } },
+        config: { public: true, rateLimit: { max: 10, timeWindow: '1 minute' } },
         schema: {
             tags: ['system'],
             summary: 'Submit a client-side error for the operator log',
@@ -139,6 +160,14 @@ module.exports = async function telemetryRoutes(app, { logPath }) {
         },
         bodyLimit: MAX_BODY_BYTES
     }, async (req, reply) => {
+        if (!isAllowedOrigin(req)) {
+            return reply.code(403).type('application/problem+json').send({
+                type: 'about:blank',
+                title: 'Forbidden',
+                status: 403,
+                detail: 'Origin not allowed'
+            });
+        }
         const b = req.body || {};
         const entry = {
             ts: new Date().toISOString(),

@@ -7,7 +7,7 @@ Turns a mailcow mailbox into a REST + OpenAPI surface for automation, MCP client
 | Path | What you get |
 |---|---|
 | `/v1/*` | 🔌 REST API — IMAP, SMTP, Sieve, CalDAV, mailcow's own DB |
-| `/` | 📖 Swagger UI (`/openapi.json` for the raw spec) |
+| `/` | 📖 Swagger UI (`/openapi.json` for the raw spec) — mailbox auth required |
 | `/webmail/` | 📧 Bundled webmail (`/webmail/mobile/` for the PWA) |
 | `/v1/admin/*` | 🛠️ Operator settings, when `ADMIN_TOKEN` is set |
 
@@ -154,11 +154,15 @@ The Swagger UI is the source of truth for schemas and response examples. This ro
 
 **Public and docs**
 
+`/` and `/openapi.json` require the same mailbox authentication as the API
+(Basic auth in a browser, or a bearer session). The API contract names every
+privileged route and the admin-token scheme, so it is not anonymous.
+
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/` | Swagger UI |
-| `GET` | `/openapi.json` | Raw OpenAPI 3.1 document |
-| `GET` | `/health` | Liveness/health check |
+| `GET` | `/` | Swagger UI (auth required) |
+| `GET` | `/openapi.json` | Raw OpenAPI 3.1 document (auth required) |
+| `GET` | `/health` | Liveness/health check (`{"ok":true,"version":"…"}` only) |
 | `GET` | `/webmail/` | Bundled webmail SPA (`/webmail/mobile/` for the mobile PWA) |
 
 **Admin**

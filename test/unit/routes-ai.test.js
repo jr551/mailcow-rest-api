@@ -156,8 +156,9 @@ test('GET /webmail (no trailing slash) redirects to /webmail/ when dist exists',
 test('OpenAPI doc lists ai tag and routes', async () => {
     const app = await makeApp();
     try {
-        const res = await app.inject({ method: 'GET', url: '/openapi.json' });
-        const doc = JSON.parse(res.body);
+        // The document is auth-gated now; ask the app directly.
+        await app.ready();
+        const doc = app.swagger();
         const tags = doc.tags.map(t => t.name);
         assert.ok(tags.includes('ai'), 'ai tag declared');
         assert.ok(doc.paths['/v1/ai/summarize'], 'ai summarize route in spec');
