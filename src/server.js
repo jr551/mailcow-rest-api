@@ -395,7 +395,11 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
     app.addHook('onSend', async (req, reply) => {
         reply.header('X-Content-Type-Options', 'nosniff');
         reply.header('Referrer-Policy', 'no-referrer');
-        reply.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(), usb=()');
+        // `self` (not `()`) for camera/microphone: the webmail is served from
+        // this origin and its voice-chat path calls getUserMedia. An empty
+        // allowlist blocks it even after the user grants permission. Third
+        // parties are still denied because the origin allowlist is explicit.
+        reply.header('Permissions-Policy', 'camera=(self), microphone=(self), geolocation=(), payment=(), usb=()');
         reply.header('Cross-Origin-Opener-Policy', 'same-origin');
         reply.header('Cross-Origin-Resource-Policy', 'same-site');
         reply.header('X-Frame-Options', 'SAMEORIGIN');

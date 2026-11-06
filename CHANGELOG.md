@@ -3,6 +3,30 @@
 All notable changes to this project are documented here. Version numbers follow
 [Semantic Versioning](https://semver.org/) and match `package.json`.
 
+## v0.28.2 — security follow-up
+
+Fixes from the independent review of the 2026-11-06 hardening release.
+
+- `Permissions-Policy` allows camera and microphone for the webmail's own
+  origin (`self`) instead of denying them everywhere, which had broken voice
+  chat even after the user granted permission.
+- The public telemetry sink no longer trusts a client-supplied
+  `X-Forwarded-Host` when deciding whether a browser origin is same-origin.
+- The Swagger UI is reachable from a browser again: document requests now get
+  a Basic challenge instead of a Bearer-only 401.
+- Security tests tightened: the rate-limit strip is checked from a
+  non-loopback address, the telemetry spoof is covered, and the permissions
+  assertion no longer locks in the microphone regression.
+
+## v0.28.0 / v0.28.1 — public-surface hardening
+
+- `/openapi.json`, the Swagger UI and `/` require mailbox authentication;
+  `/health` returns liveness and version only.
+- 401 bodies unified; anonymous `x-ratelimit-*` headers stripped; baseline
+  security headers and CSP added to the API host.
+- `/v1/capabilities` (authenticated) replaces the feature inventory that the
+  webmail used to read from `/health`.
+
 ## v0.27.0 — Outlook.com-style webmail
 
 ### Webmail (Outlook.com parity, #83–#86)

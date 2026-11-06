@@ -48,7 +48,9 @@ test('security headers are on every response, including /health', async () => {
         const res = await app.inject({ method: 'GET', url: '/health' });
         assert.equal(res.headers['x-content-type-options'], 'nosniff');
         assert.equal(res.headers['referrer-policy'], 'no-referrer');
-        assert.match(res.headers['permissions-policy'], /camera=\(\)/);
+        assert.match(res.headers['permissions-policy'], /camera=\(self\)/);
+        assert.match(res.headers['permissions-policy'], /microphone=\(self\)/);
+        assert.match(res.headers['permissions-policy'], /geolocation=\(\)/);
         assert.match(res.headers['content-security-policy'], /frame-ancestors 'self'/);
         assert.match(res.headers['strict-transport-security'], /max-age=31536000/);
         assert.equal(res.headers['x-frame-options'], 'SAMEORIGIN');
@@ -67,6 +69,18 @@ test('openapi.json and the Swagger UI require authentication', async () => {
         assert.equal(unauth.statusCode, 401);
         assert.equal(JSON.parse(unauth.body).detail, 'Invalid credentials');
         assert.equal((await app.inject({ method: 'GET', url: '/' })).statusCode, 401);
+
+        // A browser navigation must get a Basic challenge, or the Swagger UI
+        // can never prompt for the mailbox credentials it requires. An API
+        // call keeps the Bearer challenge.
+        const browser = await app.inject({
+            method: 'GET',
+            url: '/',
+            headers: { accept: 'text/html,application/xhtml+xml' }
+        });
+        assert.equal(browser.statusCode, 401);
+        assert.match(browser.headers['www-authenticate'], /^Basic realm="imap-rest"/);
+        assert.match(unauth.headers['www-authenticate'], /^Bearer realm="imap-rest"/);
 
         const { token } = cache.createSession('reader@example.com', 'mailbox-pass', 'hash');
         const ok = await app.inject({
@@ -127,6 +141,24 @@ test('401 bodies are generic — no missing-vs-invalid oracle', async () => {
     }
 });
 
+test('an anonymous non-loopback caller gets no rate-limit budget', async () => {
+    const { app } = await makeApp();
+    try {
+        // inject() is loopback by default and the limiter allowlists loopback,
+        // so the /health assertion above would pass even without the strip.
+        const res = await app.inject({
+            method: 'GET',
+            url: '/v1/mailboxes',
+            remoteAddress: '203.0.113.9'
+        });
+        assert.equal(res.statusCode, 401);
+        assert.equal(res.headers['x-ratelimit-limit'], undefined);
+        assert.equal(res.headers['x-ratelimit-remaining'], undefined);
+    } finally {
+        await app.close();
+    }
+});
+
 test('telemetry refuses a foreign browser origin but accepts its own', async () => {
     const { app } = await makeApp();
     try {
@@ -137,6 +169,21 @@ test('telemetry refuses a foreign browser origin but accepts its own', async () 
             payload: { message: 'probe' }
         });
         assert.equal(foreign.statusCode, 403);
+
+        // A client-supplied X-Forwarded-Host must not turn a foreign origin
+        // into "same origin" (Janitor review, 2026-11-06).
+        const spoofed = await app.inject({
+            method: 'POST',
+            url: '/v1/telemetry/error',
+            headers: {
+                origin: 'https://evil.example',
+                'x-forwarded-host': 'evil.example',
+                host: 'userapi.delivering.email',
+                'content-type': 'application/json'
+            },
+            payload: { message: 'probe' }
+        });
+        assert.equal(spoofed.statusCode, 403);
 
         const own = await app.inject({
             method: 'POST',

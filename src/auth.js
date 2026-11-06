@@ -86,6 +86,15 @@ function isWebmailPath(url) {
     return path === '/webmail' || path.startsWith('/webmail/');
 }
 
+// A browser navigating to the Swagger UI only offers a credential prompt for
+// a Basic challenge. A Bearer-only 401 leaves the page looking broken, so the
+// operator cannot reach the UI at all. Challenge Basic for document requests;
+// API clients (Accept: application/json, no Accept) keep the Bearer challenge.
+function wantsBrowserChallenge(req) {
+    if (req.method !== 'GET' && req.method !== 'HEAD') return false;
+    return String(req.headers.accept || '').includes('text/html');
+}
+
 // Fastify onRequest hook factory. Populates `req.creds = { user, pass, hash }`.
 // Supports Bearer (session token or app password), Basic auth, and Basic auth
 // whose password is an app password — auto-detected from the header.
@@ -198,7 +207,12 @@ function createAuthHook({
         // Fall back to Basic auth
         const creds = parseBasicAuth(req.headers.authorization);
         if (!creds) {
-            reply.header('WWW-Authenticate', 'Bearer realm="imap-rest"');
+            reply.header(
+                'WWW-Authenticate',
+                wantsBrowserChallenge(req)
+                    ? 'Basic realm="imap-rest", charset="UTF-8"'
+                    : 'Bearer realm="imap-rest"'
+            );
             throw unauthorized();
         }
 

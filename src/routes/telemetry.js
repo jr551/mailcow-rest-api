@@ -85,8 +85,16 @@ function isAllowedOrigin(req) {
     if (!origin) return true;
     try {
         const parsed = new URL(origin);
-        const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').toLowerCase();
-        if (host && parsed.host.toLowerCase() === host) return true;
+        // A client can set X-Forwarded-Host itself; trusting it alone let a
+        // page on evil.example pair that header with a matching Origin and
+        // write telemetry (Janitor review, 2026-11-06). Same-origin now
+        // requires the Origin host to match BOTH the proxy-derived hostname
+        // and the Host header the browser actually sent. nginx sets both to
+        // $host, so the webmail's own reports still pass.
+        const forwarded = String(req.hostname || '').toLowerCase();
+        const sentHost = String(req.headers.host || '').toLowerCase();
+        const originHost = parsed.host.toLowerCase();
+        if (forwarded && sentHost && originHost === forwarded && originHost === sentHost) return true;
         if (config.apiCors.origins.includes(origin)) return true;
         return parsed.protocol === 'https:' &&
             config.apiCors.wildcardApex.some((apex) => parsed.hostname.endsWith(`.${apex}`));
