@@ -169,7 +169,8 @@ test('push store: subscriptions per user are capped, re-subscribing an existing 
 });
 
 test('push sender: every send is given a timeout', async () => {
-    const webpush = require('web-push');
+    const { mutableWebPush } = require('../helpers/webpush-mutable');
+    const webpush = mutableWebPush();
     const origSend = webpush.sendNotification;
     const { sendPush } = require('../../src/push-sender');
     let seen;
