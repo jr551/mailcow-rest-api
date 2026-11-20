@@ -9,7 +9,8 @@
 // SSRF check and POSTing to whatever the name resolved to at send time.
 
 // VAPID keys must be in env before src/config is required (it snapshots env).
-const webpush = require('web-push');
+const { mutableWebPush } = require('../helpers/webpush-mutable');
+const webpush = mutableWebPush();
 const { publicKey, privateKey } = webpush.generateVAPIDKeys();
 process.env.VAPID_PUBLIC_KEY = publicKey;
 process.env.VAPID_PRIVATE_KEY = privateKey;

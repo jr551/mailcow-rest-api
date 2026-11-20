@@ -13,7 +13,8 @@ const state = {
 };
 const ssrfGuard = require('../../src/utils/ssrf-guard');
 ssrfGuard.createPinnedHttpsAgent = (endpoint) => state.agentFor(endpoint);
-const webpush = require('web-push');
+const { mutableWebPush } = require('../helpers/webpush-mutable');
+const webpush = mutableWebPush();
 webpush.sendNotification = (sub, payload, opts) => state.send(sub, payload, opts);
 const imapModule = require('../../src/imap');
 imapModule.withClient = (pool, creds, fn) => fn({

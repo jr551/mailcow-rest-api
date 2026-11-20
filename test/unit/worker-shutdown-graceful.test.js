@@ -163,7 +163,8 @@ test('push sender: stop() waits for the in-flight send and its watermark write',
     const state = { send: async () => {}, unseen: 0 };
     const ssrfGuard = require('../../src/utils/ssrf-guard');
     ssrfGuard.createPinnedHttpsAgent = async () => null;
-    const webpush = require('web-push');
+    const { mutableWebPush } = require('../helpers/webpush-mutable');
+    const webpush = mutableWebPush();
     webpush.sendNotification = (sub, payload, opts) => state.send(sub, payload, opts);
     const imapModule = require('../../src/imap');
     imapModule.withClient = (pool, creds, fn) => fn({
