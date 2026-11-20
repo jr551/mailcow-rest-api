@@ -3,6 +3,19 @@
 All notable changes to this project are documented here. Version numbers follow
 [Semantic Versioning](https://semver.org/) and match `package.json`.
 
+## v0.28.3 — dependency refresh
+
+- All direct dependencies in the API and webmail trees updated to their latest
+  release within the current major, including Fastify 5.12.8, imapflow 2.12.2,
+  nodemailer 10.6.1, undici 8.13.0, Svelte 5.59.1, Tiptap 3.35.0, tldraw 5.6.2
+  and Vite 8.3.8.
+- `web-push` upgraded to 4.0.0 (ESM-only). Runtime behaviour is unchanged; the
+  push tests now stub it through a mutable module cache copy.
+- TypeScript stays on 6.x because `svelte-check` 4 peers on TypeScript 5 or 6.
+  Dependabot now ignores TypeScript major bumps for the webmail tree until that
+  peer range widens.
+- `npm audit` reports no vulnerabilities in either tree.
+
 ## v0.28.2 — security follow-up
 
 Fixes from the independent review of the 2026-11-06 hardening release.
