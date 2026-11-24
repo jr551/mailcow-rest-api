@@ -19,7 +19,6 @@ test('reading pane stacks a grouped thread with older message collapsed', async 
             density: 'comfortable',
             listFilter: 'all',
             groupThreads: true,
-            inboxTab: 'focused',
             phishingScan: false,
             useCustomLlm: false,
             llm: { kind: 'openai', preset: '', apiKey: '', baseUrl: '', model: '' }

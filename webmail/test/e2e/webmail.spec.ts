@@ -1324,8 +1324,8 @@ test('AI Sorted filter buckets humans first, then ranks by danger level with glo
     await expect(firstRow).toHaveAttribute('data-testid', 'msg-row-999');
     await expect(firstRow).toHaveClass(/ai-cat-human/);
 
-    // Sam's thread should outrank bulk mail on the focused tab; invoice stays in Other.
-    await expect(page.getByTestId('msg-row-1000')).toHaveCount(0);
+    // The invoice stays in the single inbox list, ranked below Sam's thread.
+    await expect(page.getByTestId('msg-row-1000')).toBeVisible();
 
     // Screenshot the AI-sorted inbox
     await page.screenshot({ path: `${SCREEN_DIR}/15-ai-sorted-dark.png`, fullPage: true });

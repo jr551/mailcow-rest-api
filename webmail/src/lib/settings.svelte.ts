@@ -28,8 +28,6 @@ export interface LlmConfig {
 
 export type Density = 'comfortable' | 'compact';
 export type ListFilter = 'all' | 'unread' | 'starred' | 'attachments' | 'ai-sorted';
-export type { InboxTab } from './focused-inbox';
-import type { InboxTab } from './focused-inbox';
 export type { ReadingPaneLayout } from './reading-pane-layout';
 import { sanitizeReadingPaneLayout, type ReadingPaneLayout } from './reading-pane-layout';
 
@@ -53,8 +51,6 @@ export interface Settings {
     aiFeatures: boolean;
     density: Density;
     listFilter: ListFilter;
-    /** INBOX-only tab: Focused vs Other (Outlook parity). Default Focused. */
-    inboxTab: InboxTab;
     /** Reading pane placement — right (default), bottom, or hidden (flyout when opened). */
     readingPaneLayout: ReadingPaneLayout;
     /** User-supplied system prompt for the AI surface. Empty → use the built-in default. */
@@ -231,7 +227,6 @@ export function sanitizeSettings(raw: unknown): Settings {
         aiFeatures: parsed.aiFeatures === true,
         density: parsed.density === 'compact' ? 'compact' : 'comfortable',
         listFilter: (['all', 'unread', 'starred', 'attachments', 'ai-sorted'] as const).find((f) => f === parsed.listFilter) ?? 'all',
-        inboxTab: parsed.inboxTab === 'other' ? 'other' : 'focused',
         readingPaneLayout: sanitizeReadingPaneLayout(parsed.readingPaneLayout),
         aiSystemPrompt: str(parsed.aiSystemPrompt),
         accountChipDisplay: parsed.accountChipDisplay === 'name' ? 'name' : 'email',
@@ -460,12 +455,6 @@ export function setReadingPaneLayout(layout: ReadingPaneLayout) {
     state.readingPaneLayout = sanitizeReadingPaneLayout(layout);
     persist(state);
 }
-
-export function setInboxTab(tab: InboxTab) {
-    state.inboxTab = tab;
-    persist(state);
-}
-
 
 export function setAiSystemPrompt(prompt: string) {
     state.aiSystemPrompt = prompt;

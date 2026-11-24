@@ -15,7 +15,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 | **App chrome / command bar** | Outlook skin default (`skins.svelte.ts`), top search, account menu, app rail (Mail / Calendar / AI / Drive) | Medium: rail is broader than OWA; unify launcher later |
 | **Folder pane** | `Sidebar.svelte` tree, drag-drop move, shortcuts row | Medium: no Favorites pin list separate from tree; no groups |
 | **Message list** | `MessageList.svelte`, density, filters (All/Unread/Starred/Attachments), optional AI sort | Medium: no quick categories/colour tags |
-| **Focused / Other** | `focused-inbox.ts` + INBOX tabs | Low–medium: optional AI refinement later |
+| **Focused / Other** | Removed in v0.29.0 — the INBOX is a single list | — |
 | **Reading pane** | `MessageDetail.svelte`, reply/forward, conversation stack when grouped | Low–medium: richer HTML parity; pane position done (slice 3) |
 | **Conversation view** | List grouping via `threads.ts`; reading-pane stack via `conversation-view.ts` + `ConversationStack.svelte` | Medium: attachments per message in stack; richer HTML parity |
 | **Compose** | `Compose.svelte` + `FloatingPanel.svelte`, TipTap | Medium: no scheduled send, undo send, sensitivity labels |
@@ -31,7 +31,7 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ### P0 — Layout & mail core (no AI required)
 
-1. **Focused / Other inbox tabs** on INBOX (deterministic rules; optional AI refinement later) — **slice 1 (done)**.
+1. ~~**Focused / Other inbox tabs** on INBOX~~ — slice 1, **removed in v0.29.0**; the INBOX is a single list again.
 2. **Reading-pane conversation view**: stack thread messages in `MessageDetail` when `groupThreads` is on — **slice 2 (done)**.
 3. **Reading pane layout** setting: right (default) / bottom / hidden (OWA “Reading pane”) — **slice 3 (this PR)**.
 4. **Favorites** above folder tree (pinned folders, localStorage).
@@ -56,19 +56,19 @@ Testing: mocks/fixtures and Playwright; no live mailcow or real credentials.
 
 ### P4 — Polish & mobile
 
-14. Mobile: Focused/Other + conversation reader parity.
+14. Mobile: conversation reader parity.
 15. Deep links and shareable message URLs.
 16. Accessibility pass (pane landmarks, tab order vs OWA).
 
 ---
 
-## Slice 1 (merged)
+## Slice 1 (merged, then removed in v0.29.0)
 
-- **`webmail/src/lib/focused-inbox.ts`**: classify messages into Focused vs Other without AI.
-- **`MessageList.svelte`**: Outlook-style **Focused | Other** tabs when viewing INBOX (hidden during search or other folders).
-- **`settings.inboxTab`**: persisted preference (`focused` | `other`).
-- Tests: unit (`focused-inbox.test.mjs`) + Playwright (`outlook-focused-inbox.spec.ts`) against API mocks.
-- Screenshots: `webmail/docs/assets/outlook-slice1/26-inbox-focused-tab.png`, `27-inbox-other-tab.png` (regenerate with `npm run docs:screenshots` in `webmail/`).
+Focused / Other INBOX tabs (`focused-inbox.ts`, `settings.inboxTab`) shipped in
+v0.27.0 and were removed in v0.29.0: the INBOX is a single list again, and a
+legacy `inboxTab` key in stored or synced settings is dropped on load.
+Regression coverage: unit (`inbox-single-list.test.mjs`) + Playwright
+(`inbox-single-list.spec.ts`).
 
 ---
 

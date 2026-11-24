@@ -9,16 +9,14 @@ import { mkdirSync } from 'node:fs';
 import { applyMocks, login, messages, MOCK_USER } from './fixtures';
 
 const DOCS = 'docs/screenshots';
-const ASSET1 = 'docs/assets/outlook-slice1';
 const ASSET2 = 'docs/assets/outlook-slice2';
 const ASSET3 = 'docs/assets/outlook-slice3';
-for (const d of [DOCS, ASSET1, ASSET2, ASSET3]) mkdirSync(d, { recursive: true });
+for (const d of [DOCS, ASSET2, ASSET3]) mkdirSync(d, { recursive: true });
 
 const baseSettings = {
     aiFeatures: false,
     density: 'comfortable',
     listFilter: 'all',
-    inboxTab: 'focused',
     readingPaneLayout: 'right',
     groupThreads: true,
     useCustomLlm: false,
@@ -52,7 +50,6 @@ test.describe('docs desktop (1440×900 @2x)', () => {
             localStorage.setItem('webmail.settings.v1', blob);
         }, seedSettings());
         await login(page);
-        await expect(page.getByTestId('inbox-tabs')).toBeVisible();
         await page.getByTestId('msg-row-1001').click();
         await expect(page.getByTestId('detail-subject')).toContainText('Welcome');
         await shot(page, `${DOCS}/outlook-inbox.png`);
@@ -150,19 +147,6 @@ test.describe('docs desktop (1440×900 @2x)', () => {
         await page.getByTestId('ai-tools-btn').click();
         await expect(page.getByTestId('ai-panel')).toBeVisible();
         await shot(page, `${DOCS}/desktop-ai-panel.png`);
-    });
-
-    test('Focused and Other tabs', async ({ page }) => {
-        await page.addInitScript((blob) => {
-            localStorage.setItem('webmail.theme', 'dark');
-            localStorage.setItem('webmail.settings.v1', blob);
-        }, seedSettings());
-        await login(page);
-        await page.getByTestId('msg-row-1001').click();
-        await shot(page, `${ASSET1}/26-inbox-focused-tab.png`);
-        await page.getByTestId('inbox-tab-other').click();
-        await page.getByTestId('msg-row-1000').click();
-        await shot(page, `${ASSET1}/27-inbox-other-tab.png`);
     });
 
     test('conversation stack', async ({ page }) => {

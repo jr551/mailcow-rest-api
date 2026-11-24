@@ -66,12 +66,9 @@ The lookup is a server call to `GET /v1/link-check?url=…` (VirusTotal, with th
 
 Recent releases add Outlook-on-the-web behaviour without requiring AI:
 
-- **Focused / Other** — on INBOX only, rule-based tabs (`focused-inbox.ts`); your choice is stored in `settings.inboxTab`. See [`docs/OUTLOOK-PARITY.md`](docs/OUTLOOK-PARITY.md).
 - **Conversation stacking** — when **Settings → Mail → Group messages by conversation** is on, the reading pane shows a stacked transcript for multi-message threads (`ConversationStack.svelte`).
 - **Reading pane position** — **right** (default), **bottom**, or **hidden** (list full width; opening a message uses a flyout). Change it in **Settings → Mail → Reading pane**, the layout control in the message list header, or with **Alt+Shift+R** (right), **Alt+Shift+B** (bottom), or **Alt+Shift+H** (hidden).
 - **AI features off by default** — new profiles load with **Settings → AI → AI features** off. Turn it on when you want the assistant, AI sort, link safety, compose helpers, and related surfaces. The mail UI is fully usable with AI disabled.
-
-![Focused inbox tab](docs/assets/outlook-slice1/26-inbox-focused-tab.png)
 
 ![Reading pane at bottom](docs/assets/outlook-slice3/30-reading-pane-bottom.png)
 
@@ -95,7 +92,7 @@ Global shortcuts are listed under **Settings → General → Keyboard shortcuts*
 
 ## What it includes
 
-- Desktop mailbox UI: folders, search, filters, **Focused / Other** INBOX tabs, message detail, **conversation stacking**, **reading pane layout** (right / bottom / hidden), attachments, compose, reply, forward, right-click context menu and multi-select.
+- Desktop mailbox UI: folders, search, filters, message detail, **conversation stacking**, **reading pane layout** (right / bottom / hidden), attachments, compose, reply, forward, right-click context menu and multi-select.
 - Calendar and drive views backed by the REST API.
 - Optional AI workflows (off by default): summarising, drafting, inbox sorting, action extraction, translation, phishing checks, link-safety checks and TTS when you enable **AI features** in Settings and configure a provider.
 - Tracking, sender policy, blocked recipients, shortcuts, density, theme, and PWA install surfaces.
