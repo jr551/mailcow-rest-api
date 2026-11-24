@@ -3,6 +3,17 @@
 All notable changes to this project are documented here. Version numbers follow
 [Semantic Versioning](https://semver.org/) and match `package.json`.
 
+## v0.29.0 — single-list inbox
+
+- **Focused / Other inbox tabs removed.** The INBOX is one list again: bulk
+  and personal mail are no longer split by the rule-based classifier, and
+  the Focused/Other tab bar, filter, and empty-state are gone from the
+  message list. The `settings.inboxTab` preference is deleted; a legacy
+  value in stored or IMAP-synced settings is dropped on load, so a profile
+  last left on Other now simply sees all of its mail.
+- Docs and screenshots refreshed for the single-list inbox; the Outlook
+  parity roadmap records slice 1 as removed.
+
 ## v0.28.3 — dependency refresh
 
 - All direct dependencies in the API and webmail trees updated to their latest
