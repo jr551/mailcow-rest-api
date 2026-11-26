@@ -13,6 +13,12 @@ process.env.RATE_LIMIT_ENABLED = 'true';
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const telemetryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'security-telemetry-'));
+process.env.TELEMETRY_LOG_PATH = path.join(telemetryDir, 'error.log');
+process.on('exit', () => { try { fs.rmSync(telemetryDir, { recursive: true, force: true }); } catch { /* noop */ } });
 const { build } = require('../../src/server');
 const { createCache } = require('../../src/cache');
 

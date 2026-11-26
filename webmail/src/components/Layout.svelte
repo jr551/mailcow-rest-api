@@ -471,25 +471,28 @@
         return authState.activeUser || '';
     }
 
+    let mailboxSeq = 0;
     async function refreshMailboxes() {
         // Stale-while-revalidate: render cached list instantly if present
         // (allow stale entries — folder structure rarely changes, so a
         // 30-day-old list is still better than blank), then refetch in
         // the background and replace.
-        const cached = cache.getMailboxes(currentUser(), { allowStale: true });
+        const user = currentUser();
+        const seq = ++mailboxSeq;
+        const cached = cache.getMailboxes(user, { allowStale: true });
         if (cached && cached.length) ui.mailboxes = cached;
         ui.mailboxesLoading = true;
         const fresh = await listMailboxes({ counts: true }).catch((err) => {
-            if (err instanceof ApiError && err.status === 401) setSession(null);
+            if (seq === mailboxSeq && currentUser() === user && err instanceof ApiError && err.status === 401) setSession(null);
             return null;
         });
         try {
-            if (fresh) {
+            if (fresh && seq === mailboxSeq && currentUser() === user) {
                 ui.mailboxes = fresh;
-                cache.putMailboxes(currentUser(), fresh);
+                cache.putMailboxes(user, fresh);
             }
         } finally {
-            ui.mailboxesLoading = false;
+            if (seq === mailboxSeq) ui.mailboxesLoading = false;
         }
     }
 
@@ -521,6 +524,7 @@
     }
 
     let refreshSeq = 0;
+    let detailSeq = 0;
     async function refreshMessages(opts: { resetPage?: boolean; force?: boolean } = {}) {
         if (opts.resetPage) ui.messagesPage = 0;
         const search = effectiveSearch();
@@ -758,15 +762,17 @@
                     }
                 })
             );
-            if (ui.selectedUid === uid && ui.conversationStack?.threadId === threadId) {
+            if (currentUser() === user && ui.selectedUid === uid && ui.conversationStack?.threadId === threadId) {
                 ui.conversationDetails = details;
             }
         } finally {
-            if (ui.selectedUid === uid) ui.conversationLoading = false;
+            if (currentUser() === user && ui.selectedUid === uid) ui.conversationLoading = false;
         }
     }
 
-    async function selectMessage(uid: number) {
+    async function selectMessage(uid: number, mailbox?: string) {
+        const seq = ++detailSeq;
+        const user = currentUser();
         ui.selectedUid = uid;
         ui.detail = null;
         ui.detailError = null;
@@ -780,14 +786,28 @@
         ui.aiActionsError = null;
         ui.aiTranslateError = null;
 
-        // In global-search mode the row carries its own folder; switch
-        // selectedPath so the rest of the detail/cache/flag flow targets
-        // the right mailbox. We *don't* clear ui.search — the user is
-        // mid-investigation and may want to step back to the result list.
-        const row = ui.messages.find((m) => m.uid === uid);
-        if (ui.searchScope === 'all' && row?.mailbox && ui.selectedPath !== row.mailbox) {
+        // A global-search row carries its source folder. Opening it exits the
+        // aggregate view and scopes the list to that folder, so later row and
+        // bulk actions cannot confuse UIDs from different mailboxes.
+        const row = ui.messages.find((m) => m.uid === uid && (!mailbox || m.mailbox === mailbox));
+        if (ui.searchScope === 'all' && row?.mailbox) {
             ui.selectedPath = row.mailbox;
+            ui.searchScope = 'folder';
+            clearSelection();
+            // Remove aggregated rows immediately. Until the folder-scoped
+            // refresh lands they still carry ambiguous UIDs, and the mutation
+            // guard no longer applies once scope is 'folder'.
+            ui.messages = [];
+            ui.messagesTotal = 0;
+            messagesShownFor = null;
+            void refreshMessages({ resetPage: true });
         }
+        const reqPath = ui.selectedPath;
+        const stillWanted = () =>
+            seq === detailSeq
+            && currentUser() === user
+            && ui.selectedPath === reqPath
+            && ui.selectedUid === uid;
 
         // Short-circuit for the AI conversations folder — never render
         // the JSON body in the mail viewer (it shows blank). Match by
@@ -798,10 +818,10 @@
         // stored message, which is boring but not a dead end — and the
         // flag is the user's call to make.
         if (settings.aiFeatures
-            && (ui.selectedPath === '.AI Conversations' || ui.selectedPath === 'AI Conversations')) {
-            const row = ui.messages.find((m) => m.uid === uid);
+            && (reqPath === '.AI Conversations' || reqPath === 'AI Conversations')) {
             const wantTitle = (row?.envelope?.subject || '').trim();
             const ai = await import('../lib/ai-threads.svelte');
+            if (!stillWanted()) return;
             const match = ai.aiState.threads.find((t) => t.title === wantTitle)
                 ?? ai.aiState.threads.find((t) => t.title.replace(/^[\p{Emoji_Presentation}\p{Extended_Pictographic}]\s*/u, '') === wantTitle);
             if (match) ai.selectThread(match.id);
@@ -809,18 +829,19 @@
             return;
         }
 
-        // Render cached body instantly if we have it.
-        const cachedBody = await cache.getMessageBody(currentUser(), ui.selectedPath, uid);
-        if (cachedBody) {
-            ui.detail = cachedBody;
-        } else {
-            ui.detailLoading = true;
-        }
-
+        let cachedBody: MessageDetailBody | null = null;
+        ui.detailLoading = true;
         try {
-            const fresh = await getMessage(ui.selectedPath, uid);
+            // Render a cached body instantly, but still revalidate after the
+            // await: an account switch may have happened while reading it.
+            cachedBody = (await cache.getMessageBody(user, reqPath, uid)) ?? null;
+            if (!stillWanted()) return;
+            if (cachedBody) ui.detail = cachedBody;
+
+            const fresh = await getMessage(reqPath, uid);
+            if (!stillWanted()) return;
             ui.detail = fresh;
-            cache.putMessageBody(currentUser(), ui.selectedPath, uid, fresh);
+            cache.putMessageBody(user, reqPath, uid, fresh);
             recordEnvelope(fresh.envelope.from);
             recordEnvelope(fresh.envelope.to);
             recordEnvelope(fresh.envelope.cc);
@@ -831,21 +852,22 @@
             });
             if (fresh.flags && !fresh.flags.includes('\\Seen')) {
                 try {
-                    const r = await modifyFlags(ui.selectedPath, uid, { add: ['\\Seen'] });
+                    const r = await modifyFlags(reqPath, uid, { add: ['\\Seen'] });
+                    if (!stillWanted()) return;
                     fresh.flags = r.flags;
-                    const li = ui.messages.find((m) => m.uid === uid);
+                    const li = ui.messages.find((m) => m.uid === uid && (!m.mailbox || m.mailbox === reqPath));
                     if (li) li.flags = r.flags;
                     // The list cache is now stale — drop it so next switch refetches.
-                    cache.invalidatePath(currentUser(), ui.selectedPath);
+                    cache.invalidatePath(user, reqPath);
                 } catch { /* non-fatal */ }
             }
         } catch (err) {
-            if (!cachedBody) ui.detailError = describe(err, 'Failed to load message');
+            if (stillWanted() && !cachedBody) ui.detailError = describe(err, 'Failed to load message');
         } finally {
-            ui.detailLoading = false;
+            if (seq === detailSeq) ui.detailLoading = false;
         }
-        if (ui.detail && ui.selectedPath) {
-            void loadConversationStackForSelection(ui.selectedPath, uid);
+        if (stillWanted() && ui.detail && reqPath) {
+            void loadConversationStackForSelection(reqPath, uid);
         }
     }
 
@@ -867,16 +889,35 @@
     }
 
     function resetMailState() {
+        // Invalidate every in-flight mail request before clearing the view.
+        // Without this, a slow response from the account being left can land
+        // in the next account's UI (or its cache bucket) after the switch.
+        mailboxSeq++;
+        refreshSeq++;
+        detailSeq++;
+        cancelGlobalSearch();
+        cancelScan();
+        searchInput = '';
+        mailboxInfo = null;
+        lastLoginWarning = null;
+        lastLoginDismissed = false;
         Object.assign(ui, {
             mailboxes: [],
             messages: [],
             selectedUid: null,
+            selected: new Set<number>(),
+            undo: null,
             detail: null,
+            detailLoading: false,
+            detailError: null,
             conversationStack: null,
             conversationDetails: {},
             conversationLoading: false,
             search: '',
-            messagesPage: 0
+            searchScope: 'folder',
+            messagesPage: 0,
+            messagesLoading: false,
+            messagesError: null
         });
     }
 
@@ -887,27 +928,15 @@
         const user = currentUser();
         if (user) cache.clearAllForUser(user).catch(() => {});
         // Drop just the active account; if other accounts are signed in, the
-        // app stays mounted and switches to one of them.
+        // account-change effect below resets and refreshes into the next one.
         setSession(null);
         try { sessionStorage.setItem('webmail.logout.recent', String(Date.now())); } catch { /* noop */ }
-        resetMailState();
-        // If another session remains, refresh into it; otherwise App.svelte
-        // routes to the login screen.
-        if (authState.activeUser) {
-            refreshMailboxes();
-            refreshMessages({ resetPage: true });
-        }
     }
 
     async function switchAccount(user: string) {
         if (user === authState.activeUser) return;
         switchTo(user);
         accountMenuOpen = false;
-        // Reset UI; cache is user-bucketed so stale-while-revalidate makes
-        // the swap feel instant when both accounts have been visited recently.
-        resetMailState();
-        await refreshMailboxes();
-        await refreshMessages({ resetPage: true });
     }
 
     function addAnotherAccount() {
@@ -916,16 +945,29 @@
     }
 
     async function signOutAccount(user: string) {
-        const wasActive = user === authState.activeUser;
         cache.clearAllForUser(user).catch(() => {});
         removeSession(user);
         accountMenuOpen = false;
-        if (wasActive && authState.activeUser) {
-            resetMailState();
-            await refreshMailboxes();
-            await refreshMessages({ resetPage: true });
-        }
+        // If another account is now active, the account-change effect below
+        // resets and refreshes the shared mail state.
     }
+
+    // Adding an account does not remount Layout, so an explicit account
+    // identity watcher is required. It also covers sign-out-with-another-
+    // session and programmatic switches through one code path.
+    let observedUser = currentUser();
+    $effect(() => {
+        const user = currentUser();
+        if (user === observedUser) return;
+        observedUser = user;
+        resetMailState();
+        if (user) {
+            void refreshMailboxes();
+            void refreshMessages({ resetPage: true });
+            void loadMailboxInfo();
+            void checkLastLogin();
+        }
+    });
 
     // The global field only ever searches mail — there is no calendar,
     // drive or chat index behind it. Rather than let the label imply
@@ -973,6 +1015,9 @@
     async function searchAllFolders() {
         const q = (ui.search || '').trim();
         if (!q) return;
+        const user = currentUser();
+        clearSelection();
+        ui.undo = null;
         cancelScan();          // pause the per-folder crawler
         cancelGlobalSearch();  // re-entrant safety
         ui.searchScope = 'all';
@@ -1000,7 +1045,7 @@
 
         try {
             for (let i = 0; i < folders.length; i++) {
-                if (ctrl.signal.aborted) break;
+                if (ctrl.signal.aborted || currentUser() !== user) break;
                 const path = folders[i];
                 try {
                     // First page is enough to surface most hits without
@@ -1013,7 +1058,7 @@
                         search: q,
                         include: 'attachments'
                     });
-                    if (ctrl.signal.aborted) break;
+                    if (ctrl.signal.aborted || currentUser() !== user) break;
                     for (const msg of r.messages) {
                         const key = `${path}\u0000${msg.uid}`;
                         if (seenKey.has(key)) continue;
@@ -1031,7 +1076,7 @@
                 globalScanState = { scanned: i + 1, total: folders.length, reason: 'global-search' };
             }
         } finally {
-            ui.messagesLoading = false;
+            if (currentUser() === user) ui.messagesLoading = false;
             if (globalSearchAbort === ctrl) globalSearchAbort = null;
             // Leave scanState visible briefly so the user sees the final
             // count, then clear it.
@@ -1047,7 +1092,14 @@
         refreshMessages({ resetPage: true });
     }
 
+    function guardAggregateMutation(): boolean {
+        if (ui.searchScope !== 'all') return false;
+        showToast('info', 'Open the message first to manage it in its folder.');
+        return true;
+    }
+
     async function toggleStar(uid: number) {
+        if (guardAggregateMutation()) return;
         const li = ui.messages.find((m) => m.uid === uid);
         if (!li) return;
         const isFlagged = li.flags.includes('\\Flagged');
@@ -1061,6 +1113,7 @@
     }
 
     async function toggleUnread(uid: number) {
+        if (guardAggregateMutation()) return;
         const li = ui.messages.find((m) => m.uid === uid);
         if (!li) return;
         const seen = li.flags.includes('\\Seen');
@@ -1086,6 +1139,7 @@
     }
 
     async function trashMessage(uid: number) {
+        if (guardAggregateMutation()) return;
         const trashBox = trashFolderName();
         const from = ui.selectedPath;
         try {
@@ -1101,6 +1155,7 @@
     }
 
     async function moveTo(uid: number, destPath: string) {
+        if (guardAggregateMutation()) return;
         const from = ui.selectedPath;
         try {
             await moveMessage(from, uid, destPath);
@@ -1115,6 +1170,7 @@
     // Moves a batch one at a time (keeps the IMAP client linear), skipping
     // failures, then reloads the folder. Bulk moves are not undoable.
     async function moveMany(uids: number[], dest: string) {
+        if (guardAggregateMutation()) return;
         const from = ui.selectedPath;
         ui.undo = null;
         for (const uid of uids) {
@@ -1194,6 +1250,7 @@
      * webhook's own `keep` setting's business, not this action's.
      */
     async function blockSenderForUid(uid: number, pattern?: string) {
+        if (guardAggregateMutation()) return;
         const m = ui.messages.find((x) => x.uid === uid);
         const addr = pattern || m?.envelope?.from?.[0]?.address;
         if (!addr) {
@@ -1302,6 +1359,7 @@
     }
 
     async function archiveMessage(uid: number) {
+        if (guardAggregateMutation()) return;
         const dest = archiveFolderName();
         const from = ui.selectedPath;
         try {
@@ -1315,6 +1373,7 @@
     }
 
     async function performUndo() {
+        if (guardAggregateMutation()) return;
         const u = ui.undo;
         if (!u) return;
         ui.undo = null;
@@ -1332,6 +1391,7 @@
     // Bulk actions
 
     async function bulkMark(seen: boolean) {
+        if (guardAggregateMutation()) return;
         const ids = [...ui.selected];
         if (!ids.length) return;
         for (const uid of ids) {
@@ -1347,6 +1407,7 @@
     }
 
     async function bulkArchive() {
+        if (guardAggregateMutation()) return;
         const ids = [...ui.selected];
         if (!ids.length) return;
         clearSelection();
@@ -1355,6 +1416,7 @@
     }
 
     async function bulkTrash() {
+        if (guardAggregateMutation()) return;
         const ids = [...ui.selected];
         if (!ids.length) return;
         const dest = trashFolderName();
@@ -1415,6 +1477,7 @@
     }
 
     async function summariseAndMarkRead() {
+        if (guardAggregateMutation()) return;
         // Window: only include messages newer than the last time the
         // user pressed Brief me on this folder. Include both read AND
         // unread so emails the user opened-but-didn't-action still
@@ -1456,6 +1519,7 @@
     }
 
     async function markFolderRead() {
+        if (guardAggregateMutation()) return;
         const path = ui.selectedPath;
         const unreadIds = ui.messages.filter((m) => !m.flags.includes('\\Seen')).map((m) => m.uid);
         if (!unreadIds.length) {
@@ -2780,7 +2844,7 @@
     }
     .search-scope-btn.active {
         background: var(--accent);
-        color: var(--bg-elevated);
+        color: var(--text-on-accent);
         border-color: var(--accent);
     }
     .search-scope-btn.active:hover {
@@ -3013,7 +3077,8 @@
         opacity: 0;
         transition: opacity var(--transition-fast), background-color var(--transition-fast), color var(--transition-fast);
     }
-    .account-row:hover .account-signout { opacity: 1; }
+    .account-row:hover .account-signout,
+    .account-signout:focus-visible { opacity: 1; }
     .account-signout:hover { background: var(--danger-soft); color: var(--danger); }
     .account-mark {
         display: inline-flex;

@@ -12,6 +12,11 @@ const RX_PASSWORD_LABELLED = /\b(?:password|passcode|passphrase|pwd)\b[\s:=\-–
 
 const RX_API_KEY_LABELLED = /\b(?:api[_\s-]?key|secret(?:[_\s-]?key)?|access[_\s-]?token|bearer[_\s-]?token|auth[_\s-]?token)\b[\s:=\-–—]*['"`]?([A-Za-z0-9_\-\.]{16,})['"`]?/gi;
 
+// Distinctive vendor-token shapes do not need a label. This matters for
+// direct-to-provider calls and Error Doctor, where an upstream error can
+// quote a key without ever saying "apiKey:" first.
+const RX_VENDOR_TOKEN = /\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,}|(?:AKIA|ASIA)[A-Z0-9]{16}|AIza[A-Za-z0-9_-]{30,}|xox[abposr]-[A-Za-z0-9-]{10,})\b/g;
+
 // 13–19 digit runs grouped by spaces or dashes, validated against Luhn.
 // The grouping rules out long numeric IDs that aren't actually card-like.
 const RX_CARD_CANDIDATE = /\b(?:\d[ -]?){12,18}\d\b/g;
@@ -50,6 +55,7 @@ export function redactSecrets(text: string): string {
     out = out.replace(RX_OTP_LABELLED, redactCapture);
     out = out.replace(RX_PASSWORD_LABELLED, redactCapture);
     out = out.replace(RX_API_KEY_LABELLED, redactCapture);
+    out = out.replace(RX_VENDOR_TOKEN, '[REDACTED]');
 
     out = out.replace(RX_CARD_CANDIDATE, (m) => {
         const digits = m.replace(/[\s-]/g, '');

@@ -6,7 +6,7 @@
     import Avatar from './Avatar.svelte';
     import VipBadge from './VipBadge.svelte';
     import { settings, setListFilter, setReadingPaneLayout, isVipAddress, type ListFilter } from '../lib/settings.svelte';
-    import { READING_PANE_LAYOUTS } from '../lib/reading-pane-layout';
+    import { READING_PANE_LAYOUTS, type ReadingPaneLayout } from '../lib/reading-pane-layout';
     import { getCachedScan } from '../lib/phishing-scan';
     import Icon from './Icon.svelte';
     import { buildThreads, type Thread } from '../lib/threads';
@@ -27,7 +27,7 @@
 
     interface ScanState { scanned: number; total: number; reason: string }
     interface Props {
-        onSelect: (uid: number) => void;
+        onSelect: (uid: number, mailbox?: string) => void;
         onStar: (uid: number) => void;
         onUnread: (uid: number) => void;
         onTrash: (uid: number) => void;
@@ -64,7 +64,7 @@
     // the keyboard path). They are deliberately not the render position:
     // see ctxPos / placeCtx for why the final position cannot be known until
     // the menu has been measured on screen.
-    let ctx = $state<{ uid: number; x: number; y: number } | null>(null);
+    let ctx = $state<{ uid: number; mailbox?: string; x: number; y: number } | null>(null);
     // Resolved viewport position for the menu, written by placeCtx() once the
     // menu is in the document and has a measurable box. Rendered from this,
     // not from ctx.x/ctx.y.
@@ -201,10 +201,10 @@
         if (submenuOpen()) void tick().then(placeCtx);
     });
 
-    function openCtx(e: MouseEvent, uid: number) {
+    function openCtx(e: MouseEvent, uid: number, mailbox?: string) {
         e.preventDefault();
         e.stopPropagation();
-        ctx = { uid, x: e.clientX, y: e.clientY };
+        ctx = { uid, mailbox, x: e.clientX, y: e.clientY };
         // Anchor only. The rendered position comes from placeCtx() once the
         // menu is measurable, so nothing has to be re-guessed here — the
         // previous `top: ${ctx.y}px` wrote the raw pointer Y and that IS
@@ -371,7 +371,7 @@
      * it at the last physical mouse position, which can be metres away from
      * the row. Anchor to the row's own rect instead.
      */
-    function openCtxKeyboard(e: KeyboardEvent, uid: number) {
+    function openCtxKeyboard(e: KeyboardEvent, uid: number, mailbox?: string) {
         if (e.key !== 'F10' && e.key !== 'ContextMenu') return;
         if (!e.shiftKey && e.key !== 'ContextMenu') return;
         const el = e.currentTarget as HTMLElement;
@@ -384,7 +384,7 @@
         // measurement in placeCtx() supersedes it and also flips above the
         // row, which this could never do: for a row in the lower third,
         // `r.bottom + 4` is already past where the menu can fit below.
-        ctx = { uid, x: r.left + 24, y: r.bottom + 4 };
+        ctx = { uid, mailbox, x: r.left + 24, y: r.bottom + 4 };
         ctxPos = null;
         ctxRow = el;
         // Same highlight as the pointer path, so the row the keyboard menu
@@ -610,18 +610,18 @@
     // Centralised row-select used by both click and keyboard activation
     // so the per-user click sound (Settings → Sounds) reliably fires
     // regardless of input modality.
-    function selectRow(uid: number) {
+    function selectRow(uid: number, mailbox?: string) {
         playClick();
-        onSelect(uid);
+        onSelect(uid, mailbox);
     }
 
-    function rowKey(e: KeyboardEvent, uid: number) {
+    function rowKey(e: KeyboardEvent, uid: number, mailbox?: string) {
         // Keys from the nested select / star / archive / trash buttons bubble
         // here; swallowing them would cancel the button's own click.
         if (e.target !== e.currentTarget) return;
         if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
-            selectRow(uid);
+            selectRow(uid, mailbox);
         }
     }
 
@@ -901,6 +901,10 @@
     // "Move to…" submenu when multiple rows are selected; the single-
     // row path still goes through onMove() per the existing flow.
     async function bulkMoveSelected(dest: string) {
+        if (ui.searchScope === 'all') {
+            showToast('info', 'Open a message first to manage results in their folders.');
+            return false;
+        }
         const sel = Array.from(ui.selected);
         if (sel.length <= 1) return false;
         const items = sel.map((uid) => ({ path: ui.selectedPath, uid }));
@@ -1032,6 +1036,10 @@
      */
     let categoryActionBusy = $state(false);
     async function runCategoryAction(cat: AiCat, action: 'archive' | 'trash' | 'markRead') {
+        if (ui.searchScope === 'all') {
+            showToast('info', 'Open a message first to manage results in their folders.');
+            return;
+        }
         if (categoryActionBusy) return;
         const uids = uidsForCategory(cat);
         if (uids.length === 0) return;
@@ -1141,6 +1149,27 @@
         return last.charAt(0).toUpperCase() + last.slice(1);
     }
 
+    function onReadingPaneKey(e: KeyboardEvent, id: ReadingPaneLayout) {
+        const layouts = READING_PANE_LAYOUTS;
+        const at = layouts.findIndex((layout) => layout.id === id);
+        if (at < 0) return;
+        let next = at;
+        if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = (at + 1) % layouts.length;
+        else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = (at - 1 + layouts.length) % layouts.length;
+        else if (e.key === 'Home') next = 0;
+        else if (e.key === 'End') next = layouts.length - 1;
+        else return;
+        e.preventDefault();
+        // Layout's global mail shortcuts also listen for arrows. This radio
+        // group owns the key while focus is inside it.
+        e.stopPropagation();
+        const target = layouts[next];
+        setReadingPaneLayout(target.id);
+        (e.currentTarget as HTMLElement).parentElement
+            ?.querySelector<HTMLElement>(`[data-testid="reading-pane-layout-${target.id}"]`)
+            ?.focus();
+    }
+
     // Slow-load detector. Quick loads (cached / cache-warm IMAP folders)
     // shouldn't flash an overlay — only show it after ~280ms of waiting,
     // long enough that the user has registered the folder switch and
@@ -1173,10 +1202,16 @@
                         role="radio"
                         class:active={settings.readingPaneLayout === layout.id}
                         aria-checked={settings.readingPaneLayout === layout.id}
+                        aria-label={layout.outlookLabel}
                         title={layout.outlookLabel}
+                        tabindex={settings.readingPaneLayout === layout.id ? 0 : -1}
+                        onkeydown={(e) => onReadingPaneKey(e, layout.id)}
                         onclick={() => setReadingPaneLayout(layout.id)}
                         data-testid={`reading-pane-layout-${layout.id}`}
-                    >{layout.label}</button>
+                    >
+                        <Icon name={layout.icon} size={14} />
+                        <span class="sr-only">{layout.label}</span>
+                    </button>
                 {/each}
             </div>
         </div>
@@ -1246,13 +1281,16 @@
             </button>
         </div>
         {/if}
-        {#if filtered.length > 0}
+        {#if filtered.length > 0 && ui.searchScope !== 'all'}
             {@const allSelected = ui.selected.size > 0 && filtered.every((m) => ui.selected.has(m.uid))}
             <button
                 type="button"
                 class="chip select-all-chip"
                 class:active={allSelected}
                 title={allSelected
+                    ? `Clear selection (${ui.selected.size})`
+                    : `Select all ${filtered.length} visible messages`}
+                aria-label={allSelected
                     ? `Clear selection (${ui.selected.size})`
                     : `Select all ${filtered.length} visible messages`}
                 onclick={() => allSelected ? clearSelection() : (ui.selected = new Set(filtered.map((m) => m.uid)))}
@@ -1265,7 +1303,7 @@
                         </svg>
                     {/if}
                 </span>
-                <span>{allSelected ? `${ui.selected.size} selected` : 'Select all'}</span>
+                <span class="sr-only">{allSelected ? `${ui.selected.size} selected` : 'Select all'}</span>
             </button>
         {/if}
         {#each FILTERS as f (f.value)}
@@ -1549,7 +1587,7 @@
                         class:rule-popping={ruleDoneUids.has(headMsg.uid)}
                         role="button"
                         tabindex="0"
-                        draggable="true"
+                        draggable={ui.searchScope === 'folder'}
                         ondragstart={(e) => {
                             // Drag every uid in the thread so move/archive
                             // operations affect the whole conversation. If
@@ -1569,19 +1607,23 @@
                             document.body.dataset.draggingUids = String(uids.length);
                         }}
                         ondragend={() => { delete document.body.dataset.draggingUids; }}
-                        onclick={() => { if (isThread) toggleThread(t.id); selectRow(headMsg.uid); }}
-                        onkeydown={(e) => { rowKey(e, headMsg.uid); openCtxKeyboard(e, headMsg.uid); }}
-                        oncontextmenu={(e) => openCtx(e, headMsg.uid)}
+                        onclick={() => { if (isThread) toggleThread(t.id); selectRow(headMsg.uid, headMsg.mailbox); }}
+                        onkeydown={(e) => { rowKey(e, headMsg.uid, headMsg.mailbox); openCtxKeyboard(e, headMsg.uid, headMsg.mailbox); }}
+                        oncontextmenu={(e) => openCtx(e, headMsg.uid, headMsg.mailbox)}
                         data-testid={`msg-row-${headMsg.uid}`}
                     >
                         <span class="unread-dot" aria-hidden="true"></span>
                         <button
                             type="button"
                             class={`avatar-slot ${headSelected ? 'is-checked' : ''}`}
-                            title={headSelected ? 'Deselect' : 'Select'}
-                            aria-pressed={headSelected}
-                            aria-label={headSelected ? 'Deselect message' : 'Select message'}
-                            onclick={(e) => { e.stopPropagation(); toggleSelected(headMsg.uid); }}
+                            title={ui.searchScope === 'all' ? 'Open message' : headSelected ? 'Deselect' : 'Select'}
+                            aria-pressed={ui.searchScope === 'all' ? undefined : headSelected}
+                            aria-label={ui.searchScope === 'all' ? 'Open message' : headSelected ? 'Deselect message' : 'Select message'}
+                            onclick={(e) => {
+                                e.stopPropagation();
+                                if (ui.searchScope === 'all') selectRow(headMsg.uid, headMsg.mailbox);
+                                else toggleSelected(headMsg.uid);
+                            }}
                             data-testid={`msg-row-check-${headMsg.uid}`}
                         >
                             {#if headIsSms}
@@ -1720,9 +1762,9 @@
                                         class:starred={childStarred}
                                         role="button"
                                         tabindex="0"
-                                        onclick={() => selectRow(childMsg.uid)}
-                                        onkeydown={(e) => { rowKey(e, childMsg.uid); openCtxKeyboard(e, childMsg.uid); }}
-                                        oncontextmenu={(e) => openCtx(e, childMsg.uid)}
+                                        onclick={() => selectRow(childMsg.uid, childMsg.mailbox)}
+                                        onkeydown={(e) => { rowKey(e, childMsg.uid, childMsg.mailbox); openCtxKeyboard(e, childMsg.uid, childMsg.mailbox); }}
+                                        oncontextmenu={(e) => openCtx(e, childMsg.uid, childMsg.mailbox)}
                                         data-testid={`msg-row-child-${childMsg.uid}`}
                                     >
                                         <span class="thread-spine" aria-hidden="true"></span>
@@ -1897,7 +1939,7 @@
             oncontextmenu={(e) => e.preventDefault()}
             data-testid="msg-ctx"
         >
-            <li><button type="button" role="menuitem" onclick={() => { selectRow(ctx!.uid); closeCtx(); }}>
+            <li><button type="button" role="menuitem" onclick={() => { selectRow(ctx!.uid, ctx!.mailbox); closeCtx(); }}>
                 <Icon name="mail" size={12} /> Open
             </button></li>
             <li><button type="button" role="menuitem" onclick={() => { onStar(ctx!.uid); closeCtx(); }}>
@@ -2111,10 +2153,14 @@
         overflow: hidden;
     }
     .reading-pane-quick button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 24px;
         border: none;
         background: transparent;
-        padding: 3px 8px;
-        font-size: 11px;
+        padding: 0;
         color: var(--text-secondary);
         cursor: pointer;
     }
@@ -2246,7 +2292,11 @@
     .select-all-chip {
         display: inline-flex;
         align-items: center;
-        gap: 6px;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        padding: 0;
+        gap: 0;
     }
     .cat-quick-spacer {
         flex: 0 0 1px;
@@ -2808,8 +2858,16 @@
         box-shadow: 0 0 6px color-mix(in srgb, #10b981 50%, transparent);
     }
     .row.spy-tracked .subject {
-        color: #6ee7b7;
+        color: #0f6b3a;
         font-weight: 700;
+    }
+    :global([data-theme='dark']) .row.spy-tracked .subject {
+        color: #6ee7b7;
+    }
+    @media (prefers-color-scheme: dark) {
+        :global([data-theme='auto']) .row.spy-tracked .subject {
+            color: #6ee7b7;
+        }
     }
     @keyframes spy-pulse-glow {
         0%, 100% {

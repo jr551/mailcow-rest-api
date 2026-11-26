@@ -116,6 +116,10 @@ test('request log: capability URLs are redacted', () => {
     assert.equal(redactUrl('/v1/messages/approve/TOKEN123'), '/v1/messages/approve/[redacted]');
     assert.equal(redactUrl('/v1/messages/deny/TOKEN123?x=1'), '/v1/messages/deny/[redacted]?x=1');
     assert.equal(redactUrl('/v1/mailboxes/INBOX/messages?limit=5'), '/v1/mailboxes/INBOX/messages?limit=5');
+    assert.equal(
+        redactUrl('/v1/ai/models?kind=openai&apiKey=sk-user-secret&baseUrl=https%3A%2F%2Fexample.test'),
+        '/v1/ai/models?kind=openai&apiKey=[redacted]&baseUrl=https%3A%2F%2Fexample.test'
+    );
 });
 
 test('rate limit: a dual-stack IPv4 loopback peer matches the exemption', () => {

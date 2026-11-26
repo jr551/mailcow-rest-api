@@ -104,6 +104,12 @@ test('a swipe drag does not also open the row', () => {
     assert.ok(!swipe.includes('Math.abs(currentX) < 8'), 'currentX is already reset when click fires');
 });
 
+test('an initial mobile inbox load has a visible status instead of a blank list', () => {
+    assert.match(inbox, /mobileState\.messagesLoading && mobileState\.messages\.length === 0/);
+    assert.match(inbox, /data-testid="mobile-inbox-loading"/);
+    assert.match(inbox, /Loading messages…/);
+});
+
 test('viewport allows pinch zoom', () => {
     assert.ok(!html.includes('user-scalable=no'));
 });

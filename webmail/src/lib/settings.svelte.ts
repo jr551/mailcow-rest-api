@@ -75,6 +75,10 @@ export interface Settings {
      *  still records the read on the sender's side, and the proxy caches
      *  the response for 24h. Privacy-facts.ts states this in the UI. */
     proxyImages: boolean;
+    /** Share anonymised client-error reports with this server's operator.
+     *  Default off: enabling telemetry is a separate privacy decision from
+     *  suppressing the Error Doctor dialog. */
+    errorTelemetry: boolean;
     /** When true, sessions are persisted to localStorage so the user stays
      *  signed in across browser restarts without relying on the "remember me"
      *  credential vault. */
@@ -248,6 +252,7 @@ export function sanitizeSettings(raw: unknown): Settings {
         // read back — see migrateRemoteImagesAlwaysAllowed.
         groupThreads: parsed.groupThreads !== false,
         proxyImages: parsed.proxyImages !== false,
+        errorTelemetry: parsed.errorTelemetry === true,
         // Mobile defaults this to true on first launch — iOS PWA
         // storage is too volatile to leave perma-signin opt-in.
         permanentSignIn: parsed.permanentSignIn === undefined
@@ -519,6 +524,11 @@ export function setGroupThreads(on: boolean) {
 
 export function setProxyImages(on: boolean) {
     state.proxyImages = on;
+    persist(state);
+}
+
+export function setErrorTelemetry(on: boolean) {
+    state.errorTelemetry = on;
     persist(state);
 }
 
@@ -1045,21 +1055,19 @@ export async function loadAiModels(): Promise<void> {
 
     // Mirrors aiProviderOverride(): only the fields the user actually filled
     // in, and only when they've opted into their own provider. Otherwise the
-    // server probes its own configured gateway.
-    const params = new URLSearchParams();
-    const ov = aiProviderOverride();
-    if (ov) {
-        if (ov.kind) params.set('kind', ov.kind);
-        if (ov.preset) params.set('preset', ov.preset);
-        if (ov.baseUrl) params.set('baseUrl', ov.baseUrl);
-        if (ov.apiKey) params.set('apiKey', ov.apiKey);
-    }
-    const qs = params.toString();
+    // server probes its own configured gateway. POST keeps a custom API key
+    // out of the URL, reverse-proxy access logs and browser history.
+    const override = aiProviderOverride();
 
     try {
         const session = getSession();
-        const res = await fetch(apiUrl(`/v1/ai/models${qs ? `?${qs}` : ''}`), {
-            headers: session ? { authorization: bearerHeader(session) } : {},
+        const res = await fetch(apiUrl('/v1/ai/models'), {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json',
+                ...(session ? { authorization: bearerHeader(session) } : {})
+            },
+            body: JSON.stringify(override || {}),
             signal: controller.signal
         });
         if (token !== modelsToken) return; // a newer fetch superseded us

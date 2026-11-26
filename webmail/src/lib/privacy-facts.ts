@@ -186,21 +186,21 @@ export function privacySummary(): PrivacySummary {
             claim: 'Because your AI calls go through this server, a second pass there strips '
                 + 'credentials and personal details before the request leaves the building. '
                 + 'Redaction reduces what is exposed; it is pattern-matching, not a guarantee.',
-            source: 'src/routes/ai.js:566-575,580-588; src/config.js:210'
+            source: 'src/routes/ai.js:697,711; src/config.js:210'
         });
     } else {
-        // The honest limit. secret-scrub is imported in exactly one file and
-        // called from exactly two lines, both inside the proxied
-        // chat/completions handler (routes/ai.js:6,567,581). A direct
-        // browser→provider call never reaches it. Verified by
-        // `grep -rn scrubMessages src/` returning only those lines, and by
-        // src/llm/index.js having no import of the scrubber at all.
+        // The honest limit. The message scrubber is called only inside the
+        // proxied chat/completions handler (routes/ai.js:697,711). Telemetry
+        // also uses secret-scrub's text redactor for operator logs, but that
+        // does not scrub model messages. A direct browser→provider call never
+        // reaches the message scrubber, and src/llm/index.js has no import of
+        // the scrubber at all.
         facts.push({
             id: 'no-server-scrub',
             claim: 'Note: because you are using your own provider directly, only the redaction '
                 + 'above happens — the server never sees the text, so it cannot strip anything '
                 + 'further. Anything that does not match a known pattern is sent as-is.',
-            source: 'src/routes/ai.js:6,567,581 (proxy route only)'
+            source: 'src/routes/ai.js:16,697,711 (proxy route only)'
         });
     }
 
@@ -216,7 +216,7 @@ export function privacySummary(): PrivacySummary {
         claim: 'One more thing worth knowing: server-side stripping covers the chat assistant’s '
             + 'calls. The one-shot tools (scam scan, summarise, draft reply) do their own trimming '
             + 'and redaction before sending, and are covered by the in-browser pass above.',
-        source: 'src/routes/ai.js:843,857,871,885,919,1037; webmail/src/lib/phishing-scan.ts:239'
+        source: 'src/routes/ai.js:969,975,981,987,1028,1058; webmail/src/lib/phishing-scan.ts:239'
     });
 
     // Web search is a separate egress and is separately gated: it needs its
@@ -226,7 +226,7 @@ export function privacySummary(): PrivacySummary {
         id: 'web-search',
         claim: 'Live web search is off until you grant it separately, and only the search query the '
             + 'model writes is sent to the search provider — not your mail.',
-        source: 'webmail/src/lib/ai-threads.svelte.ts:108; webmail/src/lib/chat.svelte.ts:931-938; src/routes/ai.js:684'
+        source: 'webmail/src/lib/ai-threads.svelte.ts:108; webmail/src/lib/chat.svelte.ts:931-938; src/routes/ai.js:816'
     });
 
     return {

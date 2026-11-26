@@ -1063,7 +1063,11 @@ function applyCurrentSkin() {
     // style.
     const vars: Record<string, string> = {
         ...base,
-        ...buildOverrides(state.semantics)
+        // An untouched profile must keep the active skin's own semantic
+        // palette. Applying the generic defaults over every skin replaced
+        // carefully contrasted warning/success/danger colours with values
+        // that fail AA on both light and dark surfaces.
+        ...(state.semanticsEdited ? buildOverrides(state.semantics) : {})
     };
     const accent = state.accentOverride
         ? accentOverrideVars(state.accentOverride)

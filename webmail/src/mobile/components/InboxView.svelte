@@ -434,9 +434,7 @@
         mobileState.mailboxes.find((m) => m.path === mobileState.selectedPath)
     );
 
-    const unreadCount = $derived(
-        mobileState.mailboxes.find((m) => m.path === 'INBOX' || m.specialUse === '\\Inbox')?.unseen ?? 0
-    );
+    const unreadCount = $derived(currentFolder?.unseen ?? 0);
 
     // Long-press action sheet state
     let actionSheetOpen = $state(false);
@@ -615,10 +613,25 @@
                 <p>{mobileState.messagesError}</p>
                 <button class="mbtn mbtn-secondary" onclick={() => refreshMessages(true)}>Retry</button>
             </div>
+        {:else if mobileState.messagesLoading && mobileState.messages.length === 0}
+            <div class="mempty" role="status" data-testid="mobile-inbox-loading">
+                <span class="spinner" style="width:24px;height:24px" aria-hidden="true"></span>
+                <p>Loading messages…</p>
+            </div>
         {:else if !mobileState.messagesLoading && mobileState.messages.length === 0}
             <div class="mempty">
                 <Icon name="inbox" size={40} />
-                <p>{mobileState.search ? 'No matches found.' : 'This folder is empty.'}</p>
+                <p>
+                    {#if mobileState.search}
+                        No matches found.
+                    {:else if mobileState.filter === 'unread'}
+                        No unread messages here.
+                    {:else if mobileState.filter === 'starred'}
+                        No starred messages here.
+                    {:else}
+                        This folder is empty.
+                    {/if}
+                </p>
             </div>
         {:else}
             {#if settings.aiFeatures && aiSortLoading}

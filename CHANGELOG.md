@@ -3,6 +3,34 @@
 All notable changes to this project are documented here. Version numbers follow
 [Semantic Versioning](https://semver.org/) and match `package.json`.
 
+## Unreleased
+
+- **Simpler mail toolbar.** Reading-pane placement is now an accessible,
+  keyboard-navigable icon group, and Select all is a compact checkbox. The
+  core filters, including Attachments, fit the default message-list width
+  without being clipped.
+- **Mobile loading state.** A slow first inbox load now shows progress instead
+  of leaving the message list blank.
+- **Webmail redirects.** Bare `/webmail` and `/webmail/mobile` requests return
+  their 308 without Fastify reporting a second-response error.
+- **Keyboard focus.** Account sign-out controls are visible when focused, not
+  only on pointer hover. Narrow sidebar controls keep accessible names and
+  reveal their footer when focus enters it.
+- **Mail safety.** Late mailbox/message responses cannot cross an account
+  switch. Opening an all-folders result scopes subsequent actions to its real
+  folder, and aggregated results cannot trigger ambiguous bulk mutations.
+- **Error privacy.** Client error telemetry is opt-in and off by default.
+  Reports strip URL query strings/fragments and redact known credentials in
+  the browser and again at the server sink.
+- **AI provider keys.** Model discovery now uses `POST /v1/ai/models` with the
+  custom key in the request body. Legacy GET requests remain supported, and
+  `apiKey` is redacted from request logs.
+- **Visual correctness.** Untouched profiles keep their skin's semantic
+  colours instead of low-contrast generic overrides. Mobile HTML email links
+  can open new tabs, failed message loads no longer leave the previous body
+  on screen, and mobile folder badges/empty states reflect the active folder
+  and filter.
+
 ## v0.29.0 — single-list inbox
 
 - **Focused / Other inbox tabs removed.** The INBOX is one list again: bulk

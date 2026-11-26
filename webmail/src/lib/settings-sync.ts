@@ -38,11 +38,11 @@ const PUSH_DEBOUNCE_MS = 5000;
 // with a push that's mid-write, the previous snapshot is still readable.
 const KEEP_HISTORY = 3;
 // Settings that stay on the device they were set on. The LLM provider block
-// carries the user's API key and the endpoint that key is sent to, and
-// permanentSignIn decides whether credentials are kept in the browser: none
-// of that belongs in a mailbox folder, and none of it should be settable
-// from one.
-const LOCAL_ONLY_SETTINGS: ReadonlySet<string> = new Set(['llm', 'useCustomLlm', 'permanentSignIn']);
+// carries the user's API key and the endpoint that key is sent to,
+// permanentSignIn decides whether credentials are kept in the browser, and
+// errorTelemetry is consent for that browser/device's IP and user agent:
+// none of that belongs in a mailbox folder or should be enabled remotely.
+const LOCAL_ONLY_SETTINGS: ReadonlySet<string> = new Set(['llm', 'useCustomLlm', 'permanentSignIn', 'errorTelemetry']);
 // A snapshot stamped further ahead than this is treated as if it were from
 // now, so one bad timestamp cannot make every later pull look stale.
 const MAX_CLOCK_SKEW_MS = 5 * 60 * 1000;

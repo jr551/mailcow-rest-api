@@ -211,7 +211,7 @@ function redactHeaders(headers) {
 // it. Request logs go to stdout and the container log driver, so the secret
 // segments must not reach them (the same reason redactHeaders exists).
 const CAPABILITY_PATH_RE = /(\/v1\/(?:public\/(?:ical|event)|messages\/(?:approve|deny)|webhook-inbox|webhook-message)\/|\/v1\/webhook-staging\/[^/?]+\/)[^/?#]+/;
-const SECRET_QUERY_RE = /([?&](?:sig|token|key)=)[^&#]*/gi;
+const SECRET_QUERY_RE = /([?&](?:sig|token|key|apiKey)=)[^&#]*/gi;
 
 function redactUrl(url) {
     if (typeof url !== 'string') return url;
@@ -762,11 +762,11 @@ async function build({ cache, ocrCache, imapCache, pool, pushStore, logger, imap
         });
         // Bare /webmail → /webmail/
         app.get('/webmail', { config: { public: true }, schema: { hide: true } }, async (_req, reply) => {
-            reply.code(308).header('location', '/webmail/').send();
+            return reply.code(308).header('location', '/webmail/').send();
         });
         // Bare /webmail/mobile → /webmail/mobile/
         app.get('/webmail/mobile', { config: { public: true }, schema: { hide: true } }, async (_req, reply) => {
-            reply.code(308).header('location', '/webmail/mobile/').send();
+            return reply.code(308).header('location', '/webmail/mobile/').send();
         });
         indexHtml = fs.readFileSync(path.join(distAbsolute, 'index.html'));
         const mobileHtmlPath = path.join(distAbsolute, 'mobile', 'index.html');

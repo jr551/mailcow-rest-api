@@ -20,7 +20,10 @@ interface Verdict { verdict: string; malicious?: number; suspicious?: number; ha
 
 test.beforeEach(async ({ page }) => {
     await applyMocks(page);
-    await page.addInitScript(() => localStorage.setItem('webmail.theme', 'light'));
+    await page.addInitScript(() => {
+        localStorage.setItem('webmail.theme', 'light');
+        localStorage.setItem('webmail.settings.v1', JSON.stringify({ aiFeatures: true, linkSafetyCheck: true }));
+    });
     // Give the one message an HTML body containing two links, and stub the
     // link-check route. Configured=true, or Settings/UI would report the
     // feature as unavailable.

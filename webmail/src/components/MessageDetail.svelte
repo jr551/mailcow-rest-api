@@ -64,6 +64,10 @@
     let shown = $state<MessageDetail | null>(null);
     $effect(() => {
         if (ui.detail) shown = ui.detail;
+        // Keeping the previous body is useful while a new request is in
+        // flight, but not after it fails: otherwise the old subject/body
+        // remains under the newly selected row and the error is invisible.
+        else if (ui.detailError) shown = null;
     });
 
     const showConversationStack = $derived(

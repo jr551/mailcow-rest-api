@@ -52,7 +52,7 @@
 
     import { onMount } from 'svelte';
     import {
-        settings, capabilities, setLlm, setUseCustomLlm, setAiFeatures, setDensity, setGroupThreads, setProxyImages, setPermanentSignIn, setPhishingScan, setTrackOpensDefault, setAiSuggestSubjectOnBlur, setPhishingScanTimeoutSec, setPhishingScanPromptAddendum, setPhishingScanConfidenceFloor,
+        settings, capabilities, setLlm, setUseCustomLlm, setAiFeatures, setDensity, setGroupThreads, setProxyImages, setErrorTelemetry, setPermanentSignIn, setPhishingScan, setTrackOpensDefault, setAiSuggestSubjectOnBlur, setPhishingScanTimeoutSec, setPhishingScanPromptAddendum, setPhishingScanConfidenceFloor,
         setAiSystemPrompt, setAccountChipDisplay,
         aiModels, aiModelsSignature, clearAiModels, loadAiModels,
         setDefaultFromAddress, setDisplayName, deriveNameFromAddress, setPageSize,
@@ -2057,6 +2057,33 @@
                                     data-testid="settings-proxy-images"
                                 />
                                 <span>{settings.proxyImages ? 'On' : 'Off'}</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="card" data-testid="settings-error-telemetry-card">
+                        <h4><Icon name="bug" size={13} /> Error reports</h4>
+                        <p class="muted small">
+                            Error Doctor can send a short report when the app hits an unexpected
+                            error. Reports include the error type, HTTP status, page path, browser
+                            user agent and this server’s view of your IP address. Search terms,
+                            URL query strings and fragments are removed, and known credential
+                            patterns are redacted before storage.
+                        </p>
+                        <div class="form-row">
+                            <div class="row-text">
+                                <strong>Share error reports with the server operator</strong>
+                                <span class="muted">Off by default and kept on this browser. This does not control the Error Doctor dialog or AI features.</span>
+                            </div>
+                            <label class="toggle compact" class:spy-on={settings.errorTelemetry}>
+                                <input
+                                    type="checkbox"
+                                    checked={settings.errorTelemetry}
+                                    onchange={(e) => setErrorTelemetry((e.currentTarget as HTMLInputElement).checked)}
+                                    aria-label="Share error reports with the server operator"
+                                    data-testid="settings-error-telemetry"
+                                />
+                                <span>{settings.errorTelemetry ? 'On' : 'Off'}</span>
                             </label>
                         </div>
                     </div>
@@ -4918,8 +4945,8 @@
 
         <footer class="foot">
             <p class="muted">
-                Tip — these settings live only in your browser. They sync nowhere; clear your
-                browser data and they'll vanish.
+                Tip — appearance choices and error-report consent stay in this browser.
+                Other preferences can sync through your mailbox when sync is available.
             </p>
             <button type="button" class="btn btn-primary" onclick={close} data-testid="settings-done">Done</button>
         </footer>

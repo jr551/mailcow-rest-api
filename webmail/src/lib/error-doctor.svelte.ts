@@ -5,8 +5,9 @@
 // gets a plain-English explanation from the LLM plus one-click recovery.
 
 import { isChatConfigured, resolveBaseUrl, resolveModel, resolveApiKey } from './chat.svelte';
-import { showToast } from './store.svelte';
 import { apiBase, apiUrl } from './api';
+import { settings } from './settings.svelte';
+import { redactSecrets } from './redact';
 
 const SUPPRESS_KEY = 'webmail.error-doctor.suppress';
 
@@ -55,6 +56,25 @@ function makeId(): string {
 }
 
 const QUIET_MS = 10000;
+
+// Telemetry only needs the route that failed, not the search text, signed
+// query string or fragment that may carry mail/share data. The same helper is
+// used for the AI diagnosis prompt so neither egress gets the full URL.
+const CAPABILITY_PATH_RE = /(\/v1\/(?:public\/(?:ical|event)|messages\/(?:approve|deny)|webhook-inbox|webhook-message)\/|\/v1\/webhook-staging\/[^/?]+\/)[^/?#]+/g;
+
+function redactErrorText(text: string): string {
+    return redactSecrets(text.replace(CAPABILITY_PATH_RE, '$1[redacted]'));
+}
+
+function safeErrorUrl(raw?: string): string | undefined {
+    if (!raw) return undefined;
+    return redactErrorText(raw.split(/[?#]/, 1)[0]);
+}
+
+function safePageUrl(): string {
+    if (typeof location === 'undefined') return '';
+    return redactSecrets(`${location.origin}${location.pathname}`);
+}
 
 // Background-poll routes that the user never invoked directly. A 502 from
 // these is almost always upstream blip, not something worth interrupting
@@ -129,34 +149,39 @@ export function reportCriticalError(opts: {
         }
     }
 
-    // Fire-and-forget telemetry POST so the operator can grep
-    // /data/error.log for what users hit. Uses sendBeacon when
-    // available so page unload still flushes; falls back to fetch.
-    try {
-        const body = JSON.stringify({
-            type: opts.type,
-            message: opts.message,
-            status: opts.status,
-            url: opts.url,
-            stack: opts.stack,
-            detail: opts.detail,
-            page: typeof location !== 'undefined' ? location.href : undefined,
-            userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : undefined
-        });
-        // sendBeacon can't perform the CORS preflight an application/json
-        // body requires, so it is only usable while the API is same-origin.
-        if (!apiBase() && typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
-            const blob = new Blob([body], { type: 'application/json' });
-            navigator.sendBeacon('/v1/telemetry/error', blob);
-        } else {
-            void fetch(apiUrl('/v1/telemetry/error'), {
-                method: 'POST',
-                headers: { 'content-type': 'application/json' },
-                body,
-                keepalive: true
-            }).catch(() => { /* swallow — never let telemetry crash the app */ });
-        }
-    } catch { /* never throw out of an error reporter */ }
+    // Telemetry is a separate, explicit privacy choice. Suppressing the
+    // dialog must never silently enable reporting, and a profile that has not
+    // touched the setting sends nothing.
+    if (settings.errorTelemetry) {
+        // Fire-and-forget telemetry POST so the operator can grep
+        // /data/error.log for what users hit. Uses sendBeacon when
+        // available so page unload still flushes; falls back to fetch.
+        try {
+            const body = JSON.stringify({
+                type: opts.type,
+                message: redactErrorText(opts.message),
+                status: opts.status,
+                url: safeErrorUrl(opts.url),
+                stack: opts.stack ? redactErrorText(opts.stack) : undefined,
+                detail: opts.detail ? redactErrorText(opts.detail) : undefined,
+                page: safePageUrl(),
+                userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : undefined
+            });
+            // sendBeacon can't perform the CORS preflight an application/json
+            // body requires, so it is only usable while the API is same-origin.
+            if (!apiBase() && typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
+                const blob = new Blob([body], { type: 'application/json' });
+                navigator.sendBeacon('/v1/telemetry/error', blob);
+            } else {
+                void fetch(apiUrl('/v1/telemetry/error'), {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body,
+                    keepalive: true
+                }).catch(() => { /* swallow — never let telemetry crash the app */ });
+            }
+        } catch { /* never throw out of an error reporter */ }
+    }
 
     const incident: ErrorIncident = {
         id: makeId(),
@@ -282,18 +307,18 @@ function buildDiagnosisPrompt(incident: ErrorIncident, batch?: ErrorIncident[]):
     ];
     if (batch && batch.length > 1) {
         for (const i of batch.slice(0, 6)) {
-            parts.push(`- [${i.type}] ${i.message}${i.status ? ` (HTTP ${i.status})` : ''}${i.url ? ` — ${i.url}` : ''}`);
+            parts.push(`- [${i.type}] ${redactErrorText(i.message)}${i.status ? ` (HTTP ${i.status})` : ''}${i.url ? ` — ${safeErrorUrl(i.url)}` : ''}`);
         }
         if (batch.length > 6) parts.push(`- …and ${batch.length - 6} more.`);
     } else {
         parts.push(`- Type: ${incident.type}`);
-        parts.push(`- Message: ${incident.message}`);
+        parts.push(`- Message: ${redactErrorText(incident.message)}`);
         if (incident.status !== undefined) parts.push(`- HTTP status: ${incident.status}`);
-        if (incident.url) parts.push(`- URL: ${incident.url}`);
-        if (incident.detail) parts.push(`- Detail: ${incident.detail}`);
-        if (incident.stack) parts.push(`- Stack: ${incident.stack.split('\n').slice(0, 4).join('\n')}`);
+        if (incident.url) parts.push(`- URL: ${safeErrorUrl(incident.url)}`);
+        if (incident.detail) parts.push(`- Detail: ${redactErrorText(incident.detail)}`);
+        if (incident.stack) parts.push(`- Stack: ${redactErrorText(incident.stack).split('\n').slice(0, 4).join('\n')}`);
     }
-    parts.push(`- Page: ${location.href}`);
+    parts.push(`- Page: ${safePageUrl()}`);
     parts.push(`- User agent: ${navigator.userAgent}`);
     parts.push('');
     parts.push('Keep the tone calm and helpful. No markdown headings. Plain paragraphs only. Be concise.');

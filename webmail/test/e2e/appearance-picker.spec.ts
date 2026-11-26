@@ -101,6 +101,22 @@ test('every shipped swatch is legible on the surface it lands on, in both modes'
     }
 });
 
+test('an untouched profile keeps the active skin semantic colours', async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem('webmail.theme', 'light'));
+    await login(page);
+    const values = await page.locator('html').evaluate((el) => {
+        const style = getComputedStyle(el);
+        return {
+            success: style.getPropertyValue('--success').trim(),
+            warning: style.getPropertyValue('--warning').trim(),
+            danger: style.getPropertyValue('--danger').trim()
+        };
+    });
+    expect(values).toEqual({ success: '#107c10', warning: '#bc4b09', danger: '#a4262c' });
+    expect(ratio(values.success, '#ffffff')).toBeGreaterThanOrEqual(4.5);
+    expect(ratio(values.warning, '#fff4ce')).toBeGreaterThanOrEqual(4.5);
+});
+
 test('the control is keyboard operable and returns focus on close', async ({ page }) => {
     await page.addInitScript(() => localStorage.setItem('webmail.theme', 'light'));
     await login(page);

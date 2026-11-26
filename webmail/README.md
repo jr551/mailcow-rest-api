@@ -104,6 +104,12 @@ The browser never receives a provider API key. AI requests go to `POST /v1/ai/ll
 
 This replaces an earlier design that brokered per-user scoped keys through LiteLLM and shipped them to the browser — handing a key to a public static frontend means anyone who can read the page can use it. Browser-local user keys still work for personal use (Settings → AI), but they are not a safe way to distribute one shared key to all users.
 
+### Error telemetry
+
+Error Doctor reports are **off by default** and consent stays on the browser or device where you enable it. Turn on **Settings → Images & privacy → Error reports** (or **Settings → Privacy** on mobile) to share redacted diagnostics with this server's operator. Reports include the error type/status, page path, browser user agent and the server's view of your IP address. URL query strings and fragments are removed, and known credential patterns are redacted in the browser and again before the report is stored.
+
+Custom AI model discovery sends the provider key in a `POST /v1/ai/models` request body rather than the URL, so it stays out of access logs and browser history.
+
 ## Development
 
 ```sh

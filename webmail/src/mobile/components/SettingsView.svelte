@@ -5,7 +5,7 @@
     import { authState, logoutRemote, setSession, bearerHeader, getSession } from '../../lib/auth.svelte';
     import { pwa, promptInstall, subscribePush, unsubscribePush, pushSubscriptionStatus } from '../../lib/pwa.svelte';
     import {
-        settings, capabilities, setProxyImages, setDefaultFromAddress,
+        settings, capabilities, setProxyImages, setErrorTelemetry, setDefaultFromAddress,
         setDensity, setGroupThreads, setPageSize, setAccountChipDisplay,
         setLlm, setUseCustomLlm, setAiFeatures,
         setPhishingScan, setTrackOpensDefault, setAiSuggestSubjectOnBlur, setDisplayName,
@@ -406,6 +406,13 @@
                     <span class="muted small">Remote images always load; this fetches them through our server so the sender's CDN never sees your IP</span>
                 </div>
                 <Toggle checked={settings.proxyImages} label="Load images via the privacy proxy" onToggle={() => setProxyImages(!settings.proxyImages)} />
+            </div>
+            <div class="ios-row toggle-row">
+                <div class="toggle-info">
+                    <span class="row-label">Share error reports</span>
+                    <span class="muted small">Off by default and kept on this device. Sends redacted error details, page path, browser and IP to this server's operator</span>
+                </div>
+                <Toggle checked={settings.errorTelemetry} label="Share error reports with the server operator" testid="settings-error-telemetry" onToggle={() => setErrorTelemetry(!settings.errorTelemetry)} />
             </div>
             <!-- The "Always allow images" row is gone because there is no
                  blocking any more — remote content always loads. The single

@@ -231,6 +231,7 @@ test('sanitizeSnapshot keeps only known, synced, valid settings', async () => {
             "llm": { "kind": "openai", "apiKey": "sk-x", "baseUrl": "https://evil.test" },
             "useCustomLlm": true,
             "permanentSignIn": true,
+            "errorTelemetry": true,
             "clientRules": [1],
             "somethingElse": 1,
             "pageSize": 5000000,
@@ -265,13 +266,13 @@ test('sanitizeSnapshot rejects malformed envelopes', async () => {
     assert.equal(sync.sanitizeSnapshot({ v: 1, ts: 1, settings: [] }), null);
 });
 
-test('the pushed snapshot never carries the LLM key or permanentSignIn', async () => {
-    const n = env({ settings: { useCustomLlm: true, llm: { kind: 'openai', apiKey: 'sk-secret', baseUrl: 'https://p.test' }, permanentSignIn: true } });
+test('the pushed snapshot never carries the LLM key, permanentSignIn or telemetry consent', async () => {
+    const n = env({ settings: { useCustomLlm: true, llm: { kind: 'openai', apiKey: 'sk-secret', baseUrl: 'https://p.test' }, permanentSignIn: true, errorTelemetry: true } });
     const sync = await load('sync.mjs', n);
     const snap = sync.snapshotNow();
     const text = JSON.stringify(snap);
     assert.ok(!text.includes('sk-secret'));
-    for (const k of ['llm', 'useCustomLlm', 'permanentSignIn']) assert.ok(!(k in snap.settings), k);
+    for (const k of ['llm', 'useCustomLlm', 'permanentSignIn', 'errorTelemetry']) assert.ok(!(k in snap.settings), k);
     assert.ok('density' in snap.settings);
 });
 

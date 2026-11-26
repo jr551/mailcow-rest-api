@@ -62,18 +62,27 @@ async function loadSettings(blob) {
     const mod = await import(
         `${pathToFileURL(path.join(tmp, 'settings.mjs')).href}?case=${counter}`
     );
-    return mod.settings.aiFeatures;
+    return { aiFeatures: mod.settings.aiFeatures, errorTelemetry: mod.settings.errorTelemetry };
 }
 
-test('a brand-new profile has AI features off', async () => {
-    assert.equal(await loadSettings(null), false);
+test('a brand-new profile has AI features and error telemetry off', async () => {
+    const settings = await loadSettings(null);
+    assert.equal(settings.aiFeatures, false);
+    assert.equal(settings.errorTelemetry, false);
 });
 
-test('a legacy blob without aiFeatures has AI features off', async () => {
-    assert.equal(await loadSettings(JSON.stringify({ density: 'compact' })), false);
+test('a legacy blob does not silently enable AI or telemetry', async () => {
+    const settings = await loadSettings(JSON.stringify({ density: 'compact' }));
+    assert.equal(settings.aiFeatures, false);
+    assert.equal(settings.errorTelemetry, false);
 });
 
 test('only an explicit aiFeatures:true turns AI on', async () => {
-    assert.equal(await loadSettings(JSON.stringify({ aiFeatures: true })), true);
-    assert.equal(await loadSettings(JSON.stringify({ aiFeatures: false })), false);
+    assert.equal((await loadSettings(JSON.stringify({ aiFeatures: true }))).aiFeatures, true);
+    assert.equal((await loadSettings(JSON.stringify({ aiFeatures: false }))).aiFeatures, false);
+});
+
+test('only an explicit errorTelemetry:true opts into reporting', async () => {
+    assert.equal((await loadSettings(JSON.stringify({ errorTelemetry: true }))).errorTelemetry, true);
+    assert.equal((await loadSettings(JSON.stringify({ errorTelemetry: false }))).errorTelemetry, false);
 });

@@ -426,7 +426,7 @@
 
             <div class="msg-content" class:blurred={phishingFlagged && !phishingDismissed}>
                 {#if msg.html}
-                    <iframe bind:this={iframeEl} srcdoc={proxiedSrcDoc ?? iframeSrc} title="Message body" sandbox="allow-same-origin" frameborder="0" onload={resizeIframe}></iframe>
+                    <iframe bind:this={iframeEl} srcdoc={proxiedSrcDoc ?? iframeSrc} title="Message body" sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox" frameborder="0" onload={resizeIframe}></iframe>
                 {:else if msg.text}
                     <pre bind:this={preEl}>{msg.text}</pre>
                 {:else}

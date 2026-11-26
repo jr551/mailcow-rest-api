@@ -141,6 +141,13 @@ function genericDetailFor(uid: number) {
 }
 
 export async function applyMocks(page: Page) {
+    // Missing optional mock routes intentionally fall through to Vite's dev
+    // proxy. In a long suite those failures used to open Error Doctor after
+    // its quiet timer and block later clicks. Tests exercise the mail UI, not
+    // the global error dialog.
+    await page.addInitScript(() => {
+        try { localStorage.setItem('webmail.error-doctor.suppress', '1'); } catch { /* noop */ }
+    });
     await page.route(/\/health$/, (route) => {
         route.fulfill({
             status: 200,
@@ -586,6 +593,17 @@ export async function applyMocks(page: Page) {
         });
     });
 
+    // Other folders are empty unless a test installs a more specific route.
+    // This keeps all-folders search deterministic and avoids dev-proxy
+    // connection failures for every non-INBOX mailbox.
+    await page.route(/\/v1\/mailboxes\/(?!(?:INBOX|\.AI|\.storage))[^?]+\/messages(?:\?|$)/, (route) => {
+        route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({ path: 'fixture', page: 0, pageSize: 100, total: 0, messages: [] })
+        });
+    });
+
     await page.route(/\/v1\/mailboxes\/INBOX\/messages(\?|$)/, (route) => {
         route.fulfill({
             status: 200,
@@ -984,6 +1002,24 @@ export async function applyMocks(page: Page) {
             })
         });
     });
+
+    // Optional endpoints that are absent in many deployments. Return a real
+    // 404 instead of falling through to Vite's API proxy: a refused dev-proxy
+    // connection looks like a server outage to Error Doctor and can open the
+    // maintenance overlay in the middle of an unrelated UI test.
+    for (const pattern of [
+        '**/v1/me/takeover**',
+        '**/v1/capabilities',
+        '**/v1/me/contacts',
+        '**/v1/proxy/icon**',
+        '**/v1/mailboxes/.storage_webmailsettings/messages**'
+    ]) {
+        await page.route(pattern, (route) => route.fulfill({
+            status: 404,
+            contentType: 'application/problem+json',
+            body: JSON.stringify({ status: 404, title: 'Not Found', detail: 'Not configured in test fixtures' })
+        }));
+    }
 }
 
 export async function login(page: Page) {
