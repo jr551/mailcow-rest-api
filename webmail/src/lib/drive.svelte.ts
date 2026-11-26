@@ -9,6 +9,7 @@ export type { DriveItem };
 import * as cache from './drive-cache';
 import { authState } from './auth.svelte';
 import { showToast } from './store.svelte';
+import { untrack } from 'svelte';
 
 export type DriveView = 'grid' | 'list';
 
@@ -88,24 +89,93 @@ const state = $state<DriveState>({
 
 export const driveState = state;
 
+interface DriveOperation {
+    user: string;
+    epoch: number;
+    controller: AbortController;
+}
+
+let scopeUser = authState.activeUser;
+let scopeEpoch = 0;
+const operations = new Set<DriveOperation>();
+
+function ownsScope(user: string, epoch: number): boolean {
+    return authState.activeUser === user && scopeUser === user && scopeEpoch === epoch;
+}
+
+function beginOperation(): DriveOperation | null {
+    const user = authState.activeUser;
+    if (!user || !ownsScope(user, scopeEpoch)) return null;
+    const operation = { user, epoch: scopeEpoch, controller: new AbortController() };
+    operations.add(operation);
+    return operation;
+}
+
+function ownsOperation(operation: DriveOperation): boolean {
+    return ownsScope(operation.user, operation.epoch) && !operation.controller.signal.aborted;
+}
+
+function finishOperation(operation: DriveOperation): void {
+    operations.delete(operation);
+}
+
+$effect.root(() => {
+    $effect(() => {
+        const user = authState.activeUser;
+        if (user === scopeUser) return;
+        scopeUser = user;
+        scopeEpoch += 1;
+        for (const operation of operations) operation.controller.abort(new DOMException('Active account changed', 'AbortError'));
+        operations.clear();
+        setDriveConfig(null);
+        Object.assign(state, {
+            config: null,
+            configLoading: false,
+            currentPath: '',
+            items: [],
+            itemsLoading: false,
+            itemsError: null,
+            selected: new Set<string>(),
+            uploads: [],
+            dragOver: false,
+            previewItem: null,
+            drawingEditor: null,
+            textEditor: null
+        });
+        if (user) {
+            untrack(() => {
+                void loadDriveConfig().then(() => {
+                    if (authState.activeUser === user && state.config?.enabled) void loadPath('');
+                });
+            });
+        }
+    });
+});
+
 export async function loadDriveConfig(): Promise<void> {
+    const user = authState.activeUser;
+    const epoch = scopeEpoch;
+    if (!user || !ownsScope(user, epoch)) return;
     if (state.configLoading) return;
     state.configLoading = true;
     try {
         const cfg = await getDriveConfig();
+        if (!ownsScope(user, epoch)) return;
         state.config = cfg;
         setDriveConfig(cfg);
     } catch (e) {
-        showToast('error', 'Failed to load drive config');
+        if (ownsScope(user, epoch)) showToast('error', 'Failed to load drive config');
     } finally {
-        state.configLoading = false;
+        if (ownsScope(user, epoch)) state.configLoading = false;
     }
 }
 
 export async function loadPath(path: string): Promise<void> {
     const cfg = getConfig();
-    const user = authState.activeUser;
-    if (!cfg || !user) return;
+    if (!cfg) return;
+    const operation = beginOperation();
+    if (!operation) return;
+    const { user, epoch, controller } = operation;
 
     state.currentPath = path;
     state.itemsLoading = true;
@@ -113,22 +183,24 @@ export async function loadPath(path: string): Promise<void> {
     state.selected = new Set();
 
     // Stale-while-revalidate: render cache first
-    const cached = await cache.getTree(user, cfg.prefix, path);
-    if (cached) {
-        state.items = cached;
-    }
-
+    let cached: DriveItem[] | undefined;
     try {
-        const items = await listObjects(path);
+        cached = await cache.getTree(user, cfg.prefix, path);
+        if (!ownsOperation(operation)) return;
+        if (cached) state.items = cached;
+        const items = await listObjects(path, controller.signal);
+        if (!ownsOperation(operation)) return;
         state.items = items;
         await cache.putTree(user, cfg.prefix, path, items);
     } catch (e) {
+        if (!ownsOperation(operation)) return;
         const msg = e instanceof Error ? e.message : String(e);
         state.itemsError = msg;
         if (!cached) state.items = [];
         showToast('error', msg);
     } finally {
-        state.itemsLoading = false;
+        if (ownsScope(user, epoch)) state.itemsLoading = false;
+        finishOperation(operation);
     }
 }
 
@@ -146,26 +218,37 @@ export function toggleSelect(path: string) {
 
 export async function createFolder(rawName: string): Promise<void> {
     const cfg = getConfig();
-    const user = authState.activeUser;
-    if (!cfg || !user) return;
+    if (!cfg) return;
+    const operation = beginOperation();
+    if (!operation) return;
+    const { user, epoch, controller } = operation;
+    const base = state.currentPath;
     const placeholder = new File([], '');
     try {
         const name = validateDriveName(rawName);
-        const target = state.currentPath ? `${state.currentPath}/${name}` : name;
-        await putObject(target + '/', placeholder);
-        await cache.invalidateTree(user, cfg.prefix, state.currentPath);
-        await loadPath(state.currentPath);
+        const target = base ? `${base}/${name}` : name;
+        await putObject(target + '/', placeholder, undefined, controller.signal);
+        if (!ownsOperation(operation)) return;
+        await cache.invalidateTree(user, cfg.prefix, base);
+        if (!ownsOperation(operation)) return;
+        await loadPath(base);
+        if (!ownsOperation(operation)) return;
         showToast('success', `Folder "${name}" created`);
     } catch (e) {
+        if (!ownsOperation(operation)) return;
         const msg = e instanceof Error ? e.message : String(e);
         showToast('error', msg);
+    } finally {
+        if (ownsScope(user, epoch)) finishOperation(operation);
     }
 }
 
 export async function saveAttachmentToDrive(blob: Blob, rawFilename: string, targetPath?: string): Promise<void> {
     const cfg = getConfig();
-    const user = authState.activeUser;
-    if (!cfg || !user) return;
+    if (!cfg) return;
+    const operation = beginOperation();
+    if (!operation) return;
+    const { user, epoch, controller } = operation;
     // The filename comes from the sender's MIME headers.
     const filename = attachmentFileName(rawFilename);
     const base = targetPath ?? state.currentPath;
@@ -181,38 +264,48 @@ export async function saveAttachmentToDrive(blob: Blob, rawFilename: string, tar
         done: false,
         error: null
     };
+    const uploadIndex = state.uploads.length;
     state.uploads = [...state.uploads, upload];
+    const trackedUpload = state.uploads[uploadIndex];
 
     try {
         const file = new File([blob], filename, { type: blob.type || 'application/octet-stream' });
         await putObject(path, file, ({ loaded, total }) => {
-            upload.loaded = loaded;
-            upload.total = total;
-            upload.progress = total > 0 ? Math.min(100, (loaded / total) * 100) : 0;
-        });
-        upload.progress = 100;
-        upload.loaded = blob.size;
-        upload.done = true;
+            if (!ownsOperation(operation)) return;
+            trackedUpload.loaded = loaded;
+            trackedUpload.total = total;
+            trackedUpload.progress = total > 0 ? Math.min(100, (loaded / total) * 100) : 0;
+        }, controller.signal);
+        if (!ownsOperation(operation)) return;
+        trackedUpload.progress = 100;
+        trackedUpload.loaded = blob.size;
+        trackedUpload.done = true;
         showToast('success', `Saved "${filename}" to Drive`);
     } catch (e) {
+        if (!ownsOperation(operation)) return;
         const msg = e instanceof Error ? e.message : String(e);
-        upload.error = msg;
-        upload.done = true;
+        trackedUpload.error = msg;
+        trackedUpload.done = true;
         showToast('error', `Failed to save "${filename}" to Drive: ${msg}`);
+    } finally {
+        if (ownsScope(user, epoch)) finishOperation(operation);
     }
 
     setTimeout(() => {
+        if (!ownsScope(user, epoch)) return;
         state.uploads = state.uploads.filter((u) => !u.done);
     }, 3000);
 
     await cache.invalidateTree(user, cfg.prefix, base);
-    await loadPath(base);
+    if (ownsScope(user, epoch)) await loadPath(base);
 }
 
 export async function uploadFiles(files: File[], targetPath?: string): Promise<void> {
     const cfg = getConfig();
-    const user = authState.activeUser;
-    if (!cfg || !user) return;
+    if (!cfg) return;
+    const operation = beginOperation();
+    if (!operation) return;
+    const { user, epoch, controller } = operation;
     const base = targetPath ?? state.currentPath;
 
     const now = Date.now();
@@ -228,73 +321,91 @@ export async function uploadFiles(files: File[], targetPath?: string): Promise<v
     }));
     state.uploads = [...state.uploads, ...uploads];
 
-    for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        const displayName = file.webkitRelativePath || file.name;
-        const idx = state.uploads.findIndex((u) => u.name === displayName && !u.done);
-        // EMA over (loaded delta / time delta). α=0.3 smooths jitter from
-        // browser progress event bursts without lagging too far behind.
-        let lastLoaded = 0;
-        let lastTickMs = state.uploads[idx]?.startedAt || Date.now();
-        try {
-            const relPath = validateDriveRelPath(displayName);
-            const path = base ? `${base}/${relPath}` : relPath;
-            await putObject(path, file, ({ loaded, total }) => {
-                if (idx < 0) return;
-                const nowMs = performance.now();
-                const dt = (nowMs - lastTickMs) / 1000;
-                if (dt > 0.05) {
-                    const instant = (loaded - lastLoaded) / dt;
-                    const prev = state.uploads[idx].speedBps || instant;
-                    state.uploads[idx].speedBps = prev * 0.7 + instant * 0.3;
-                    lastTickMs = nowMs;
-                    lastLoaded = loaded;
+    try {
+        for (let i = 0; i < files.length; i++) {
+            if (!ownsOperation(operation)) return;
+            const file = files[i];
+            const displayName = file.webkitRelativePath || file.name;
+            const idx = state.uploads.findIndex((u) => u.name === displayName && !u.done);
+            // EMA over (loaded delta / time delta). α=0.3 smooths jitter from
+            // browser progress event bursts without lagging too far behind.
+            let lastLoaded = 0;
+            let lastTickMs = state.uploads[idx]?.startedAt || Date.now();
+            try {
+                const relPath = validateDriveRelPath(displayName);
+                const path = base ? `${base}/${relPath}` : relPath;
+                await putObject(path, file, ({ loaded, total }) => {
+                    if (idx < 0 || !ownsOperation(operation)) return;
+                    const nowMs = performance.now();
+                    const dt = (nowMs - lastTickMs) / 1000;
+                    if (dt > 0.05) {
+                        const instant = (loaded - lastLoaded) / dt;
+                        const prev = state.uploads[idx].speedBps || instant;
+                        state.uploads[idx].speedBps = prev * 0.7 + instant * 0.3;
+                        lastTickMs = nowMs;
+                        lastLoaded = loaded;
+                    }
+                    state.uploads[idx].loaded = loaded;
+                    state.uploads[idx].total = total;
+                    state.uploads[idx].progress = total > 0 ? Math.min(100, (loaded / total) * 100) : 0;
+                }, controller.signal);
+                if (!ownsOperation(operation)) return;
+                if (idx >= 0) {
+                    state.uploads[idx].progress = 100;
+                    state.uploads[idx].loaded = file.size;
+                    state.uploads[idx].done = true;
                 }
-                state.uploads[idx].loaded = loaded;
-                state.uploads[idx].total = total;
-                state.uploads[idx].progress = total > 0 ? Math.min(100, (loaded / total) * 100) : 0;
-            });
-            if (idx >= 0) {
-                state.uploads[idx].progress = 100;
-                state.uploads[idx].loaded = file.size;
-                state.uploads[idx].done = true;
+            } catch (e) {
+                if (!ownsOperation(operation)) return;
+                const msg = e instanceof Error ? e.message : String(e);
+                if (idx >= 0) {
+                    state.uploads[idx].error = msg;
+                    state.uploads[idx].done = true;
+                }
+                showToast('error', `Upload failed: ${displayName} (${msg})`);
             }
-        } catch (e) {
-            const msg = e instanceof Error ? e.message : String(e);
-            if (idx >= 0) {
-                state.uploads[idx].error = msg;
-                state.uploads[idx].done = true;
-            }
-            showToast('error', `Upload failed: ${displayName}`);
         }
+
+        if (!ownsOperation(operation)) return;
+        setTimeout(() => {
+            if (ownsScope(user, epoch)) state.uploads = state.uploads.filter((u) => !u.done);
+        }, 3000);
+
+        await cache.invalidateTree(user, cfg.prefix, base);
+        if (ownsOperation(operation)) await loadPath(base);
+    } finally {
+        if (ownsScope(user, epoch)) finishOperation(operation);
     }
-
-    setTimeout(() => {
-        state.uploads = state.uploads.filter((u) => !u.done);
-    }, 3000);
-
-    await cache.invalidateTree(user, cfg.prefix, base);
-    await loadPath(base);
 }
 
 export async function deleteSelected(): Promise<void> {
     const cfg = getConfig();
-    const user = authState.activeUser;
-    if (!cfg || !user || state.selected.size === 0) return;
+    if (!cfg || state.selected.size === 0) return;
+    const operation = beginOperation();
+    if (!operation) return;
+    const { user, epoch, controller } = operation;
     const paths = Array.from(state.selected);
-    for (const p of paths) {
-        try {
-            const item = state.items.find(i => i.path === p);
-            if (item?.isFolder) await deleteFolder(p);
-            else await deleteObject(p);
-        } catch (e) {
-            const msg = e instanceof Error ? e.message : String(e);
-            showToast('error', `Delete failed: ${msg}`);
+    const base = state.currentPath;
+    try {
+        for (const p of paths) {
+            if (!ownsOperation(operation)) return;
+            try {
+                const item = state.items.find(i => i.path === p);
+                if (item?.isFolder) await deleteFolder(p, controller.signal);
+                else await deleteObject(p, controller.signal);
+            } catch (e) {
+                if (!ownsOperation(operation)) return;
+                const msg = e instanceof Error ? e.message : String(e);
+                showToast('error', `Delete failed: ${msg}`);
+            }
         }
+        if (!ownsOperation(operation)) return;
+        state.selected = new Set();
+        await cache.invalidateTree(user, cfg.prefix, base);
+        if (ownsOperation(operation)) await loadPath(base);
+    } finally {
+        if (ownsScope(user, epoch)) finishOperation(operation);
     }
-    state.selected = new Set();
-    await cache.invalidateTree(user, cfg.prefix, state.currentPath);
-    await loadPath(state.currentPath);
 }
 
 export function navigateTo(path: string) {
@@ -311,15 +422,20 @@ export function closePreview() {
 
 export async function openDrawingEditor(path: string) {
     const cfg = getConfig();
-    const user = authState.activeUser;
-    if (!cfg || !user) return;
+    if (!cfg) return;
+    const operation = beginOperation();
+    if (!operation) return;
+    const { user, epoch, controller } = operation;
     try {
-        const blob = await fetchBlob(path);
+        const blob = await fetchBlob(path, controller.signal);
         const text = await blob.text();
+        if (!ownsOperation(operation)) return;
         const snapshot = JSON.parse(text);
         state.drawingEditor = { mode: 'edit', path, initialSnapshot: snapshot };
     } catch (e) {
-        showToast('error', 'Failed to open drawing');
+        if (ownsOperation(operation)) showToast('error', 'Failed to open drawing');
+    } finally {
+        if (ownsScope(user, epoch)) finishOperation(operation);
     }
 }
 
@@ -329,17 +445,23 @@ export function closeDrawingEditor() {
 
 export async function openTextEditor(path: string) {
     const cfg = getConfig();
-    const user = authState.activeUser;
-    if (!cfg || !user) return;
+    if (!cfg) return;
+    const operation = beginOperation();
+    if (!operation) return;
+    const { user, epoch, controller } = operation;
     try {
-        const blob = await fetchBlob(path);
+        const blob = await fetchBlob(path, controller.signal);
         const content = await blob.text();
+        if (!ownsOperation(operation)) return;
         const item = state.items.find((i) => i.path === path);
         if (!item) return;
         state.textEditor = { item, content };
     } catch (e) {
+        if (!ownsOperation(operation)) return;
         const msg = e instanceof Error ? e.message : String(e);
         showToast('error', `Failed to open file: ${msg}`);
+    } finally {
+        if (ownsScope(user, epoch)) finishOperation(operation);
     }
 }
 
@@ -349,28 +471,37 @@ export function closeTextEditor() {
 
 export async function saveTextFile(blob: Blob, rawFilename: string) {
     const cfg = getConfig();
-    const user = authState.activeUser;
-    if (!cfg || !user) return;
+    if (!cfg) return;
+    const operation = beginOperation();
+    if (!operation) return;
+    const { user, epoch, controller } = operation;
     const base = state.currentPath;
     try {
         const filename = validateDriveName(rawFilename);
         const path = base ? `${base}/${filename}` : filename;
         const file = new File([blob], filename, { type: blob.type || 'text/plain' });
-        await putObject(path, file);
+        await putObject(path, file, undefined, controller.signal);
+        if (!ownsOperation(operation)) return;
         showToast('success', `Saved "${filename}"`);
         state.textEditor = null;
-        await cache.invalidateTree(user, cfg.prefix, state.currentPath);
-        await loadPath(state.currentPath);
+        await cache.invalidateTree(user, cfg.prefix, base);
+        if (ownsOperation(operation)) await loadPath(base);
     } catch (e) {
+        if (!ownsOperation(operation)) return;
         const msg = e instanceof Error ? e.message : String(e);
         showToast('error', `Save failed: ${msg}`);
+    } finally {
+        if (ownsScope(user, epoch)) finishOperation(operation);
     }
 }
 
 export async function renameItem(oldPath: string, newName: string): Promise<void> {
     const cfg = getConfig();
-    const user = authState.activeUser;
-    if (!cfg || !user) return;
+    if (!cfg) return;
+    const operation = beginOperation();
+    if (!operation) return;
+    const { user, epoch, controller } = operation;
+    const base = state.currentPath;
     const parent = oldPath.includes('/') ? oldPath.slice(0, oldPath.lastIndexOf('/')) : '';
     try {
         if (state.items.find((i) => i.path === oldPath)?.isFolder) {
@@ -383,39 +514,52 @@ export async function renameItem(oldPath: string, newName: string): Promise<void
         if (state.items.some((i) => i.path === newPath)) {
             throw new Error(`"${newName}" already exists`);
         }
-        const blob = await fetchBlob(oldPath);
+        const blob = await fetchBlob(oldPath, controller.signal);
+        if (!ownsOperation(operation)) return;
         const file = new File([blob], newName, { type: blob.type || 'application/octet-stream' });
-        await putObject(newPath, file);
-        await deleteObject(oldPath);
+        await putObject(newPath, file, undefined, controller.signal);
+        if (!ownsOperation(operation)) return;
+        await deleteObject(oldPath, controller.signal);
+        if (!ownsOperation(operation)) return;
         showToast('success', `Renamed to "${newName}"`);
-        await cache.invalidateTree(user, cfg.prefix, state.currentPath);
-        await loadPath(state.currentPath);
+        await cache.invalidateTree(user, cfg.prefix, base);
+        if (ownsOperation(operation)) await loadPath(base);
     } catch (e) {
+        if (!ownsOperation(operation)) return;
         const msg = e instanceof Error ? e.message : String(e);
         showToast('error', `Rename failed: ${msg}`);
+    } finally {
+        if (ownsScope(user, epoch)) finishOperation(operation);
     }
 }
 
 export async function deleteItem(path: string, isFolder: boolean): Promise<void> {
     const cfg = getConfig();
-    const user = authState.activeUser;
-    if (!cfg || !user) return;
+    if (!cfg) return;
+    const operation = beginOperation();
+    if (!operation) return;
+    const { user, epoch, controller } = operation;
+    const base = state.currentPath;
     try {
-        if (isFolder) await deleteFolder(path);
-        else await deleteObject(path);
+        if (isFolder) await deleteFolder(path, controller.signal);
+        else await deleteObject(path, controller.signal);
+        if (!ownsOperation(operation)) return;
         showToast('success', 'Deleted');
-        await cache.invalidateTree(user, cfg.prefix, state.currentPath);
-        await loadPath(state.currentPath);
+        await cache.invalidateTree(user, cfg.prefix, base);
+        if (ownsOperation(operation)) await loadPath(base);
     } catch (e) {
+        if (!ownsOperation(operation)) return;
         const msg = e instanceof Error ? e.message : String(e);
         showToast('error', `Delete failed: ${msg}`);
+    } finally {
+        if (ownsScope(user, epoch)) finishOperation(operation);
     }
 }
 
 export async function createDrawing(name: string) {
     const cfg = getConfig();
     const user = authState.activeUser;
-    if (!cfg || !user) return;
+    if (!cfg || !user || !ownsScope(user, scopeEpoch)) return;
     const base = state.currentPath;
     let filename: string;
     try {
@@ -430,21 +574,27 @@ export async function createDrawing(name: string) {
 
 export async function saveDrawing(blob: Blob, rawFilename: string) {
     const cfg = getConfig();
-    const user = authState.activeUser;
-    if (!cfg || !user) return;
+    if (!cfg) return;
+    const operation = beginOperation();
+    if (!operation) return;
+    const { user, epoch, controller } = operation;
     const base = state.currentPath;
     try {
         const filename = validateDriveName(rawFilename);
         const path = base ? `${base}/${filename}` : filename;
         const file = new File([blob], filename, { type: 'application/json' });
-        await putObject(path, file);
+        await putObject(path, file, undefined, controller.signal);
+        if (!ownsOperation(operation)) return;
         showToast('success', `Saved "${filename}"`);
         state.drawingEditor = null;
-        await cache.invalidateTree(user, cfg.prefix, state.currentPath);
-        await loadPath(state.currentPath);
+        await cache.invalidateTree(user, cfg.prefix, base);
+        if (ownsOperation(operation)) await loadPath(base);
     } catch (e) {
+        if (!ownsOperation(operation)) return;
         const msg = e instanceof Error ? e.message : String(e);
         showToast('error', `Save failed: ${msg}`);
+    } finally {
+        if (ownsScope(user, epoch)) finishOperation(operation);
     }
 }
 

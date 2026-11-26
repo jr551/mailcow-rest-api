@@ -24,6 +24,7 @@
     import { domainPattern, rootDomainPattern } from '../lib/domain-scope';
     import { addMailRule } from '../lib/api';
     import { listOutboundWebhooks, isOutboundWebhooksUnavailable } from '../lib/outbound-webhooks';
+    import { authState } from '../lib/auth.svelte';
 
     interface ScanState { scanned: number; total: number; reason: string }
     interface Props {
@@ -454,15 +455,18 @@
      */
     async function loadWebhookTargets() {
         if (webhookLoading) return;
+        const user = authState.activeUser;
         webhookLoading = true;
         webhookNote = null;
         try {
             const { webhooks } = await listOutboundWebhooks();
+            if (authState.activeUser !== user) return;
             webhookItems = webhooks.map((w) => ({ key: w.id, label: w.label || w.url }));
             if (!webhooks.length) {
                 webhookNote = 'No webhooks yet — add one in Settings → Outbound webhooks.';
             }
         } catch (err) {
+            if (authState.activeUser !== user) return;
             webhookItems = [];
             // 404/501 means the SERVER has no such endpoint. Anything else
             // is a different failure, and saying "not available on this
@@ -472,7 +476,7 @@
                 ? 'Outbound webhooks are not available on this server.'
                 : 'Could not load your webhooks — try again in a moment.';
         } finally {
-            webhookLoading = false;
+            if (authState.activeUser === user) webhookLoading = false;
         }
     }
 
@@ -784,6 +788,8 @@
         // is off, but nothing should reach a paid model call through a
         // stale handler, a queued click, or a future entry point.
         if (!settings.aiFeatures) return;
+        const user = authState.activeUser;
+        if (!user) return;
         const msgs = ui.messages;
         if (msgs.length === 0) {
             aiRankings = [];
@@ -808,22 +814,22 @@
             {
                 signal: ctrl.signal,
                 onProgress: (done, total) => {
-                    if (gen === aiSortGen) aiSortProgress = { done, total };
+                    if (gen === aiSortGen && authState.activeUser === user) aiSortProgress = { done, total };
                 }
             }
         )
             .then((res) => {
-                if (gen !== aiSortGen) return;
+                if (gen !== aiSortGen || authState.activeUser !== user) return;
                 aiRankings = res.rankings;
                 playSortDone();
             })
             .catch((err) => {
-                if (gen !== aiSortGen) return;
+                if (gen !== aiSortGen || authState.activeUser !== user) return;
                 if (err instanceof DOMException && err.name === 'AbortError') return;
                 aiSortError = err instanceof Error ? err.message : 'AI sort failed';
             })
             .finally(() => {
-                if (gen !== aiSortGen) return;
+                if (gen !== aiSortGen || authState.activeUser !== user) return;
                 aiSortLoading = false;
                 // Hold the "done" state briefly so the user gets visual confirmation.
                 setTimeout(() => { aiSortProgress = null; }, 800);
@@ -838,21 +844,27 @@
 
     function runSweepAlongside() {
         if (sweepRunning) return;
+        const user = authState.activeUser;
+        if (!user) return;
         sweepRunning = true;
         sweepDismissed = false;
         sweepAbort?.abort();
         sweepAbort = new AbortController();
         runSpamSweep({ signal: sweepAbort.signal })
             .then((out) => {
+                if (authState.activeUser !== user) return;
                 sweepResults = out.candidates;
                 sweepDestSpam = out.spamPath;
                 sweepDestTrash = out.trashPath;
             })
             .catch((err) => {
+                if (authState.activeUser !== user) return;
                 if (err instanceof DOMException && err.name === 'AbortError') return;
                 showToast('error', `Spam sweep failed: ${err instanceof Error ? err.message : 'unknown error'}`);
             })
-            .finally(() => { sweepRunning = false; });
+            .finally(() => {
+                if (authState.activeUser === user) sweepRunning = false;
+            });
     }
 
     // A bulk run owns ui.bulkProgress until it finishes. The tail timer that
@@ -874,6 +886,8 @@
 
     async function applySweep(kind: 'spam' | 'phishing') {
         if (!sweepResults || sweepBulkBusy) return;
+        const user = authState.activeUser;
+        if (!user) return;
         const dest = kind === 'spam' ? sweepDestSpam : sweepDestTrash;
         if (!dest) {
             showToast('error', kind === 'spam' ? 'No Spam folder found.' : 'No Trash folder found.');
@@ -887,13 +901,14 @@
         const run = startBulkProgress(kind === 'spam' ? `Moving to Spam` : `Moving to Trash`, items.length);
         try {
             const r = await bulkMove(items, dest, (done, _total, failed) => reportBulkProgress(run, done, failed));
+            if (authState.activeUser !== user) return;
             endBulkProgress(run);
             showToast('success', `Moved ${r.moved} message${r.moved === 1 ? '' : 's'} to ${dest}${r.failed ? ` (${r.failed} failed)` : ''}.`);
             const movedUids = new Set(r.movedItems.map((i) => i.uid));
             sweepResults = sweepResults.filter((c) => !movedUids.has(c.uid));
             if (sweepResults.length === 0) sweepDismissed = true;
         } finally {
-            sweepBulkBusy = false;
+            if (authState.activeUser === user) sweepBulkBusy = false;
         }
     }
 
@@ -907,10 +922,13 @@
         }
         const sel = Array.from(ui.selected);
         if (sel.length <= 1) return false;
+        const user = authState.activeUser;
+        if (!user) return false;
         const items = sel.map((uid) => ({ path: ui.selectedPath, uid }));
         const run = startBulkProgress(`Moving to ${dest.split('/').pop() || dest}`, items.length);
         try {
             const r = await bulkMove(items, dest, (done, _total, failed) => reportBulkProgress(run, done, failed));
+            if (authState.activeUser !== user) return false;
             endBulkProgress(run);
             showToast('success', `Moved ${r.moved} message${r.moved === 1 ? '' : 's'} to ${dest}${r.failed ? ` (${r.failed} failed)` : ''}.`);
             // Drop what moved from the visible list immediately — server-side
@@ -920,7 +938,7 @@
             ui.messages = ui.messages.filter((m) => !movedUids.has(m.uid));
             ui.selected = new Set(sel.filter((uid) => !movedUids.has(uid)));
         } catch {
-            endBulkProgress(run, 0);
+            if (authState.activeUser === user) endBulkProgress(run, 0);
         }
         return true;
     }
@@ -1041,6 +1059,8 @@
             return;
         }
         if (categoryActionBusy) return;
+        const user = authState.activeUser;
+        if (!user) return;
         const uids = uidsForCategory(cat);
         if (uids.length === 0) return;
         const items = uids.map((uid) => ({ path: ui.selectedPath, uid }));
@@ -1053,12 +1073,16 @@
                 const marked = new Set<number>();
                 let failed = 0;
                 for (const { path, uid } of items) {
+                    if (authState.activeUser !== user) break;
                     try {
                         await modifyFlags(path, uid, { add: ['\\Seen'] });
+                        if (authState.activeUser !== user) break;
                         marked.add(uid);
                     } catch { failed++; }
+                    if (authState.activeUser !== user) break;
                     reportBulkProgress(run, marked.size + failed, failed);
                 }
+                if (authState.activeUser !== user) return;
                 endBulkProgress(run);
                 showToast(failed ? 'error' : 'success', `Marked ${marked.size} ${meta.label.toLowerCase()} message${marked.size === 1 ? '' : 's'} read${failed ? ` (${failed} failed)` : ''}.`);
                 // Reflect locally without a refetch — the seen-flag flip is
@@ -1067,7 +1091,7 @@
                     ? { ...m, flags: m.flags.includes('\\Seen') ? m.flags : [...m.flags, '\\Seen'] }
                     : m);
             } finally {
-                categoryActionBusy = false;
+                if (authState.activeUser === user) categoryActionBusy = false;
             }
             return;
         }
@@ -1076,8 +1100,10 @@
         let dest: string | null = null;
         try {
             const mboxes = await listMailboxes({ counts: false });
+            if (authState.activeUser !== user) return;
             dest = action === 'archive' ? findArchiveFolder(mboxes) : findTrashFolder(mboxes);
         } catch { /* ignore — handled below */ }
+        if (authState.activeUser !== user) return;
         if (!dest) {
             showToast('error', action === 'archive'
                 ? 'No Archive folder found. Create one in your IMAP account first.'
@@ -1094,6 +1120,7 @@
         const run = startBulkProgress(`${action === 'archive' ? 'Archiving' : 'Moving to Trash'} ${meta.label.toLowerCase()}`, items.length);
         try {
             const r = await bulkMove(items, dest, (done, _total, failed) => reportBulkProgress(run, done, failed));
+            if (authState.activeUser !== user) return;
             endBulkProgress(run);
             showToast('success', `${action === 'archive' ? 'Archived' : 'Trashed'} ${r.moved} message${r.moved === 1 ? '' : 's'}${r.failed ? ` (${r.failed} failed)` : ''}.`);
             // Drop what moved from the visible list — the server view will catch up.
@@ -1104,9 +1131,9 @@
             for (const id of ui.selected) if (!movedUids.has(id)) nextSel.add(id);
             ui.selected = nextSel;
         } catch {
-            endBulkProgress(run, 0);
+            if (authState.activeUser === user) endBulkProgress(run, 0);
         } finally {
-            categoryActionBusy = false;
+            if (authState.activeUser === user) categoryActionBusy = false;
         }
     }
 
@@ -1181,6 +1208,50 @@
         if (!ui.messagesLoading) { loadingSlow = false; return; }
         const t = setTimeout(() => { loadingSlow = true; }, 280);
         return () => clearTimeout(t);
+    });
+
+    // MessageList stays mounted while the user changes accounts. Clear its
+    // component-local state too: stale rankings, context menus and dialogs
+    // must not be carried into another mailbox with coincidentally matching
+    // UIDs.
+    let observedUser = authState.activeUser;
+    $effect(() => {
+        const user = authState.activeUser;
+        if (user === observedUser) return;
+        observedUser = user;
+
+        aiSortAbort?.abort();
+        aiSortGen++;
+        aiSortLoading = false;
+        aiSortError = null;
+        aiSortProgress = null;
+        aiRankings = [];
+        aiSortStartTs = 0;
+
+        sweepAbort?.abort();
+        sweepAbort = null;
+        sweepRunning = false;
+        sweepResults = null;
+        sweepDestSpam = null;
+        sweepDestTrash = null;
+        sweepDismissed = false;
+        sweepBulkBusy = false;
+        categoryActionBusy = false;
+
+        expandedThreads = new Set();
+        ruleAnimUids = new Set();
+        ruleDoneUids = new Set();
+        ctx = null;
+        ctxPos = null;
+        ctxRow = null;
+        ruleFromMessage = null;
+        aiRulesOpen = false;
+        aiRulesSender = null;
+        eventsScanOpen = false;
+        webhookItems = null;
+        webhookLoading = false;
+        webhookNote = null;
+        ui.bulkProgress = null;
     });
 </script>
 

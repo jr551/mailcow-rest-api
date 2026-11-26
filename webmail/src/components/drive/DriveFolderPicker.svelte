@@ -1,7 +1,8 @@
 <script lang="ts">
-    import { onMount } from 'svelte';
+    import { onMount, onDestroy } from 'svelte';
     import { getDriveConfig } from '../../lib/api';
-    import { listObjects, getConfig, setDriveConfig } from '../../lib/drive-api';
+    import { listObjects, setDriveConfig } from '../../lib/drive-api';
+    import { authState } from '../../lib/auth.svelte';
     import type { DriveItem } from '../../lib/drive-api';
     import Icon from '../Icon.svelte';
 
@@ -16,22 +17,54 @@
     let folders = $state<DriveItem[]>([]);
     let loading = $state(false);
     let error = $state<string | null>(null);
+    let observedUser = authState.activeUser;
+    let requestSequence = 0;
+    let requestController: AbortController | null = null;
+
+    $effect(() => {
+        const user = authState.activeUser;
+        if (user === observedUser) return;
+        observedUser = user;
+        requestSequence += 1;
+        requestController?.abort(new DOMException('Active account changed', 'AbortError'));
+        folders = [];
+        currentPath = '';
+        error = null;
+        loading = false;
+    });
+
+    onDestroy(() => {
+        requestSequence += 1;
+        requestController?.abort(new DOMException('Folder picker closed', 'AbortError'));
+        requestController = null;
+    });
 
     async function loadFolders(path: string) {
+        const user = authState.activeUser;
+        if (!user) return;
+        const sequence = ++requestSequence;
+        requestController?.abort();
+        const controller = new AbortController();
+        requestController = controller;
         loading = true;
         error = null;
         try {
-            if (!getConfig()) {
-                const cfg = await getDriveConfig();
-                if (cfg) setDriveConfig(cfg);
-            }
-            const items = await listObjects(path);
+            // The Drive config is account-specific. Never reuse whichever
+            // account happened to populate the module-level S3 client first.
+            const cfg = await getDriveConfig();
+            if (authState.activeUser !== user || sequence !== requestSequence) return;
+            if (!cfg) throw new Error('Drive is not configured');
+            setDriveConfig(cfg);
+            const items = await listObjects(path, controller.signal);
+            if (authState.activeUser !== user || sequence !== requestSequence) return;
             folders = items.filter((i) => i.isFolder);
             currentPath = path;
         } catch (e) {
-            error = e instanceof Error ? e.message : String(e);
+            if (authState.activeUser === user && sequence === requestSequence) {
+                error = e instanceof Error ? e.message : String(e);
+            }
         } finally {
-            loading = false;
+            if (authState.activeUser === user && sequence === requestSequence) loading = false;
         }
     }
 

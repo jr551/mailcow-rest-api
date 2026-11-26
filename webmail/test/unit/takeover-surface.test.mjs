@@ -93,6 +93,14 @@ test('the state module exposes the surface contract', () => {
     }
 });
 
+test('takeover state and late refreshes stay scoped to the active account', () => {
+    assert.ok(stateSrc.includes('scopeEpoch += 1'));
+    assert.ok(stateSrc.includes('Object.assign(state'));
+    assert.ok(stateSrc.includes('function ownsScope(user: string | null, epoch: number)'));
+    assert.ok(stateSrc.includes('if (!ownsScope(user, epoch)) return false;'));
+    assert.ok(stateSrc.includes('dismissalKey(scopeUser)'));
+});
+
 test('notice dismissal is persisted, so it does not nag on every open', () => {
     assert.ok(stateSrc.includes('localStorage'), 'dismissals survive a reload');
     assert.ok(stateSrc.includes('webmail.takeover-dismissed'), 'dismissals live under their own storage key');

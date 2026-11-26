@@ -1,7 +1,9 @@
 <script lang="ts">
+    import { onDestroy } from 'svelte';
     import { driveState, toggleSelect, navigateTo, openDrawingEditor, isImage, type DriveItem } from '../../lib/drive.svelte';
     import { getObjectUrl, fetchBlob } from '../../lib/drive-api';
     import { authState } from '../../lib/auth.svelte';
+    import { showToast } from '../../lib/store.svelte';
     import * as cache from '../../lib/drive-cache';
     import Icon from '../Icon.svelte';
     import type { IconName } from '../../lib/icons';
@@ -15,8 +17,22 @@
 
     let thumbUrl = $state<string | null>(null);
     let loadingThumb = $state(false);
+    let observedUser = authState.activeUser;
+    const pendingRequests = new Set<AbortController>();
 
     const selected = $derived(driveState.selected.has(item.path));
+
+    $effect(() => {
+        const user = authState.activeUser;
+        if (user === observedUser) return;
+        observedUser = user;
+        for (const controller of pendingRequests) {
+            controller.abort(new DOMException('Active account changed', 'AbortError'));
+        }
+        pendingRequests.clear();
+        thumbUrl = null;
+        loadingThumb = false;
+    });
 
     function iconForItem(): IconName {
         if (item.isFolder) return 'folderOpen';
@@ -54,26 +70,30 @@
         return 'cat-generic';
     }
 
-    async function loadThumb() {
-        if (!isImage(item) || thumbUrl) return;
-        const user = authState.activeUser;
-        if (!user) return;
-        const cached = await cache.getThumb(user, item.etag);
-        if (cached) {
-            thumbUrl = cached;
-            return;
-        }
+    async function loadThumb(user: string, current: DriveItem, signal: AbortSignal) {
+        const stillCurrent = () =>
+            !signal.aborted && authState.activeUser === user && item === current;
+        if (!isImage(current) || thumbUrl || !stillCurrent()) return;
         loadingThumb = true;
+        let objectUrl: string | null = null;
         try {
-            const blob = await fetchBlob(item.path);
-            const url = URL.createObjectURL(blob);
+            const cached = await cache.getThumb(user, current.etag);
+            if (!stillCurrent()) return;
+            if (cached) {
+                thumbUrl = cached;
+                return;
+            }
+            const blob = await fetchBlob(current.path, signal);
+            if (!stillCurrent()) return;
+            objectUrl = URL.createObjectURL(blob);
             // Generate a small thumbnail via canvas
             const img = new Image();
-            img.src = url;
+            img.src = objectUrl;
             await new Promise<void>((resolve, reject) => {
                 img.onload = () => resolve();
                 img.onerror = () => reject();
             });
+            if (!stillCurrent()) return;
             const canvas = document.createElement('canvas');
             const MAX = 200;
             const ratio = Math.min(MAX / img.naturalWidth, MAX / img.naturalHeight, 1);
@@ -82,20 +102,33 @@
             const ctx = canvas.getContext('2d');
             ctx?.drawImage(img, 0, 0, canvas.width, canvas.height);
             const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+            if (!stillCurrent()) return;
             thumbUrl = dataUrl;
-            await cache.putThumb(user, item.etag, dataUrl);
-            URL.revokeObjectURL(url);
+            await cache.putThumb(user, current.etag, dataUrl);
         } catch {
             // fall back to icon
         } finally {
-            loadingThumb = false;
+            if (objectUrl) URL.revokeObjectURL(objectUrl);
+            if (stillCurrent()) loadingThumb = false;
         }
     }
 
     $effect(() => {
-        if (driveState.view === 'grid' && isImage(item)) {
-            loadThumb();
-        }
+        const current = item;
+        const user = authState.activeUser;
+        if (driveState.view !== 'grid' || !isImage(current) || !user) return;
+        const controller = new AbortController();
+        pendingRequests.add(controller);
+        void loadThumb(user, current, controller.signal);
+        return () => {
+            controller.abort(new DOMException('Drive item changed', 'AbortError'));
+            pendingRequests.delete(controller);
+        };
+    });
+
+    onDestroy(() => {
+        for (const controller of pendingRequests) controller.abort();
+        pendingRequests.clear();
     });
 
     function isPreviewable(): boolean {
@@ -125,8 +158,23 @@
         } else if (isPreviewable() && onPreview) {
             onPreview(item);
         } else {
-            const url = await getObjectUrl(item.path);
-            window.open(url, '_blank');
+            const current = item;
+            const user = authState.activeUser;
+            if (!user) return;
+            const controller = new AbortController();
+            pendingRequests.add(controller);
+            try {
+                const url = await getObjectUrl(current.path, undefined, controller.signal);
+                if (!controller.signal.aborted && authState.activeUser === user && item === current) {
+                    window.open(url, '_blank');
+                }
+            } catch {
+                if (!controller.signal.aborted && authState.activeUser === user) {
+                    showToast('error', 'Failed to get download link');
+                }
+            } finally {
+                pendingRequests.delete(controller);
+            }
         }
     }
 

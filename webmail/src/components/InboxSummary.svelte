@@ -52,6 +52,28 @@
     let progressDone = $state(0);
     let progressTotal = $state(0);
     let abort = new AbortController();
+    let observedUser = authState.activeUser;
+    let accountEpoch = 0;
+
+    function stillOwner(user: string | null, epoch: number): boolean {
+        return authState.activeUser === user && accountEpoch === epoch;
+    }
+
+    $effect(() => {
+        const user = authState.activeUser;
+        if (user === observedUser) return;
+        observedUser = user;
+        accountEpoch += 1;
+        abort.abort();
+        result = null;
+        error = null;
+        selected = new Set();
+        actionDone = new Set();
+        actionIgnored = new Set();
+        loading = false;
+        sending = false;
+        processing = false;
+    });
 
     let selected = $state<Set<number>>(new Set());
     // Per-action lifecycle state (keyed by refUid). "done" = user
@@ -117,6 +139,8 @@
     );
 
     async function run() {
+        const user = authState.activeUser;
+        const epoch = accountEpoch;
         loading = true;
         error = null;
         result = null;
@@ -124,21 +148,24 @@
         progressDone = 0;
         progressTotal = 0;
         progressLabel = 'Reading inbox…';
-        abort = new AbortController();
+        const controller = new AbortController();
+        abort = controller;
         try {
-            result = await summarizeInbox(messages, {
-                signal: abort.signal,
+            const summary = await summarizeInbox(messages, {
+                signal: controller.signal,
                 onProgress: (p) => {
+                    if (!stillOwner(user, epoch) || controller.signal.aborted) return;
                     progressDone = p.done;
                     progressTotal = p.total;
                     progressLabel = p.label;
                 }
             });
+            if (stillOwner(user, epoch) && !controller.signal.aborted) result = summary;
         } catch (err) {
-            if ((err as Error).name === 'AbortError') return;
+            if ((err as Error).name === 'AbortError' || !stillOwner(user, epoch)) return;
             error = (err as Error).message || 'Could not generate summary.';
         } finally {
-            loading = false;
+            if (stillOwner(user, epoch) && abort === controller) loading = false;
         }
     }
 
@@ -174,78 +201,97 @@
             showToast('error', 'No active session — cannot send.');
             return;
         }
+        const epoch = accountEpoch;
+        const summary = result;
         sending = true;
         try {
-            const html = summaryToHtml(result);
+            const html = summaryToHtml(summary);
             await sendStub({
                 to: [me],
                 subject: `Inbox briefing — ${new Date().toLocaleDateString()}`,
                 html,
-                text: result.summary + '\n\n' + result.actions.map((a) => `[${a.severity.toUpperCase()}] ${a.label} — ${a.detail}`).join('\n')
+                text: summary.summary + '\n\n' + summary.actions.map((a) => `[${a.severity.toUpperCase()}] ${a.label} — ${a.detail}`).join('\n')
             });
-            showToast('success', 'Briefing emailed to ' + me);
+            if (stillOwner(me, epoch)) showToast('success', 'Briefing emailed to ' + me);
         } catch (err) {
-            showToast('error', (err as Error).message || 'Could not send.');
+            if (stillOwner(me, epoch)) showToast('error', (err as Error).message || 'Could not send.');
         } finally {
-            sending = false;
+            if (stillOwner(me, epoch)) sending = false;
         }
     }
 
     async function bulkArchive() {
         if (!onArchiveSelected || !selectedCount || processing) return;
+        const user = authState.activeUser;
+        const epoch = accountEpoch;
+        const count = selectedCount;
         processing = true;
         try {
             await onArchiveSelected([...selected]);
-            showToast('success', `Archived ${selectedCount} messages`);
+            if (!stillOwner(user, epoch)) return;
+            showToast('success', `Archived ${count} messages`);
             removeSelectedFromView();
         } catch (err) {
-            showToast('error', (err as Error).message || 'Archive failed.');
+            if (stillOwner(user, epoch)) showToast('error', (err as Error).message || 'Archive failed.');
         } finally {
-            processing = false;
+            if (stillOwner(user, epoch)) processing = false;
         }
     }
 
     async function bulkTrash() {
         if (!onTrashSelected || !selectedCount || processing) return;
-        if (!confirm(`Move ${selectedCount} message${selectedCount === 1 ? '' : 's'} to trash?`)) return;
+        const user = authState.activeUser;
+        const epoch = accountEpoch;
+        const count = selectedCount;
+        if (!confirm(`Move ${count} message${count === 1 ? '' : 's'} to trash?`)) return;
+        if (!stillOwner(user, epoch)) return;
         processing = true;
         try {
             await onTrashSelected([...selected]);
-            showToast('success', `Moved ${selectedCount} messages to trash`);
+            if (!stillOwner(user, epoch)) return;
+            showToast('success', `Moved ${count} messages to trash`);
             removeSelectedFromView();
         } catch (err) {
-            showToast('error', (err as Error).message || 'Trash failed.');
+            if (stillOwner(user, epoch)) showToast('error', (err as Error).message || 'Trash failed.');
         } finally {
-            processing = false;
+            if (stillOwner(user, epoch)) processing = false;
         }
     }
 
     async function bulkMarkRead() {
         if (!onMarkReadSelected || !selectedCount || processing) return;
+        const user = authState.activeUser;
+        const epoch = accountEpoch;
+        const count = selectedCount;
         processing = true;
         try {
             await onMarkReadSelected([...selected]);
-            showToast('success', `Marked ${selectedCount} messages as read`);
+            if (!stillOwner(user, epoch)) return;
+            showToast('success', `Marked ${count} messages as read`);
             // Don't remove from view — just clear selection
             selected = new Set();
         } catch (err) {
-            showToast('error', (err as Error).message || 'Mark read failed.');
+            if (stillOwner(user, epoch)) showToast('error', (err as Error).message || 'Mark read failed.');
         } finally {
-            processing = false;
+            if (stillOwner(user, epoch)) processing = false;
         }
     }
 
     async function bulkStar() {
         if (!onStarSelected || !selectedCount || processing) return;
+        const user = authState.activeUser;
+        const epoch = accountEpoch;
+        const count = selectedCount;
         processing = true;
         try {
             await onStarSelected([...selected]);
-            showToast('success', `Starred ${selectedCount} messages`);
+            if (!stillOwner(user, epoch)) return;
+            showToast('success', `Starred ${count} messages`);
             selected = new Set();
         } catch (err) {
-            showToast('error', (err as Error).message || 'Star failed.');
+            if (stillOwner(user, epoch)) showToast('error', (err as Error).message || 'Star failed.');
         } finally {
-            processing = false;
+            if (stillOwner(user, epoch)) processing = false;
         }
     }
 

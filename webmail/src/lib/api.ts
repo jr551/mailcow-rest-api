@@ -108,7 +108,7 @@ export class ApiError extends Error {
     }
 }
 
-function authHeaders(session?: Session): HeadersInit {
+function authHeaders(session?: Session | null): HeadersInit {
     const s = session || getSession();
     if (!s) return {};
     return { authorization: bearerHeader(s) };
@@ -137,7 +137,8 @@ async function request<T>(
     // working; `target` is what we actually fetch, which is absolute (and
     // cross-origin) when the SPA is served from the webmail domain.
     const target = apiUrl(url);
-    const headers: Record<string, string> = { ...(authHeaders(init.session) as Record<string, string>) };
+    const requestSession = init.session || getSession();
+    const headers: Record<string, string> = { ...(authHeaders(requestSession) as Record<string, string>) };
     let body: BodyInit | undefined;
     if (init.body !== undefined) {
         headers['content-type'] = 'application/json';
@@ -154,10 +155,16 @@ async function request<T>(
         // AI call after a server redeploy or session prune kicks the user
         // to the login screen even though their vault still has the creds.
         // Single-flight: tryRenewSession dedupes concurrent callers.
-        if (res.status === 401 && !init._retried && url.startsWith('/v1/') && !url.startsWith('/v1/auth/')) {
-            const renewed = await tryRenewSession();
-            if (renewed) {
-                return request<T>(method, url, { ...init, _retried: true });
+        if (res.status === 401
+            && !init._retried
+            && requestSession
+            && getSession()?.user === requestSession.user
+            && url.startsWith('/v1/')
+            && !url.startsWith('/v1/auth/')) {
+            const renewed = await tryRenewSession(requestSession.user);
+            const activeSession = getSession();
+            if (renewed && activeSession?.user === requestSession.user) {
+                return request<T>(method, url, { ...init, session: activeSession, _retried: true });
             }
         }
         const _ms = Math.round(performance.now() - _t0);
@@ -341,8 +348,12 @@ export async function bulkDeleteMessages(
     });
 }
 
-export async function getRawMessage(path: string, uid: number): Promise<string> {
-    const res = await request<Response>('GET', `/v1/mailboxes/${encodeURIComponent(path)}/messages/${uid}/raw`, { raw: true });
+export async function getRawMessage(path: string, uid: number, opts: { signal?: AbortSignal } = {}): Promise<string> {
+    const res = await request<Response>(
+        'GET',
+        `/v1/mailboxes/${encodeURIComponent(path)}/messages/${uid}/raw`,
+        { raw: true, signal: opts.signal }
+    );
     return res.text();
 }
 
@@ -364,8 +375,12 @@ function withProvider(payload: Record<string, unknown>): Record<string, unknown>
     return provider ? { ...payload, provider } : payload;
 }
 
-export async function summarizeMessage(text: string, maxWords = 120): Promise<{ content: string; model: string }> {
-    return request('POST', '/v1/ai/summarize', { body: withProvider({ text, maxWords }) });
+export async function summarizeMessage(
+    text: string,
+    maxWords = 120,
+    opts: { signal?: AbortSignal } = {}
+): Promise<{ content: string; model: string }> {
+    return request('POST', '/v1/ai/summarize', { body: withProvider({ text, maxWords }), signal: opts.signal });
 }
 
 // `opts.signal` is optional and additive — the AI panel's Draft button has
@@ -416,8 +431,8 @@ export async function sendStub(payload: {
      *  sender on first open. Server route: /v1/messages/send. */
     trackOpens?: boolean;
     attachments?: SendAttachment[];
-}): Promise<SendResult> {
-    return request<SendResult>('POST', '/v1/messages/send', { body: payload });
+}, opts: { signal?: AbortSignal } = {}): Promise<SendResult> {
+    return request<SendResult>('POST', '/v1/messages/send', { body: payload, signal: opts.signal });
 }
 
 export type DeliveryStatus = 'pending' | 'delivered' | 'failed' | 'delayed' | 'unknown';

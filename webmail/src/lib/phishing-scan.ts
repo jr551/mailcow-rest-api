@@ -58,8 +58,8 @@ interface CacheEntry {
     ts: number;
 }
 
-function makeCacheKey(path: string, uid: number): string {
-    return `${getSession()?.user ?? ''}::${path}::${uid}`; // UIDs repeat across accounts
+function makeCacheKey(path: string, uid: number, user = getSession()?.user ?? ''): string {
+    return `${user}::${path}::${uid}`; // UIDs repeat across accounts
 }
 
 function loadCache(): Record<string, CacheEntry> {
@@ -96,17 +96,17 @@ function pruneCache(cache: Record<string, CacheEntry>): void {
     }
 }
 
-export function getCachedScan(path: string, uid: number): PhishingScanResult | null {
+export function getCachedScan(path: string, uid: number, user = getSession()?.user ?? ''): PhishingScanResult | null {
     const cache = loadCache();
-    const entry = cache[makeCacheKey(path, uid)];
+    const entry = cache[makeCacheKey(path, uid, user)];
     if (!entry) return null;
     if (Date.now() - entry.ts > CACHE_TTL_MS) return null;
     return entry.result;
 }
 
-function setCachedScan(path: string, uid: number, result: PhishingScanResult): void {
+function setCachedScan(path: string, uid: number, result: PhishingScanResult, user: string): void {
     const cache = loadCache();
-    cache[makeCacheKey(path, uid)] = { result, ts: Date.now() };
+    cache[makeCacheKey(path, uid, user)] = { result, ts: Date.now() };
     pruneCache(cache);
     saveCache(cache);
 }
@@ -256,7 +256,8 @@ const inflight = new Map<string, Promise<PhishingScanResult | null>>();
 async function runScan(
     path: string,
     uid: number,
-    input: PhishingScanInput
+    input: PhishingScanInput,
+    user: string
 ): Promise<PhishingScanResult | null> {
     const timeoutCtl = new AbortController();
     const timeoutMs = Math.max(2000, (settings.phishingScanTimeoutSec || 8) * 1000);
@@ -264,6 +265,7 @@ async function runScan(
     try {
         const headers: Record<string, string> = { 'content-type': 'application/json' };
         const session = getSession();
+        if (!session || session.user !== user) return null;
         if (session) {
             headers.authorization = bearerHeader(session);
         }
@@ -303,7 +305,7 @@ async function runScan(
         });
         if (!res.ok) return null;
         const result: PhishingScanResult = await res.json();
-        setCachedScan(path, uid, result);
+        setCachedScan(path, uid, result, user);
         return result;
     } catch {
         // Silently fail — don't block email reading
@@ -319,13 +321,14 @@ export async function scanEmailForPhishing(
     input: PhishingScanInput,
     opts: { signal?: AbortSignal } = {}
 ): Promise<PhishingScanResult | null> {
-    const cached = getCachedScan(path, uid);
+    const user = getSession()?.user ?? '';
+    const cached = getCachedScan(path, uid, user);
     if (cached) return cached;
-    const key = makeCacheKey(path, uid);
+    const key = makeCacheKey(path, uid, user);
 
     let scan = inflight.get(key);
     if (!scan) {
-        scan = runScan(path, uid, input).finally(() => {
+        scan = runScan(path, uid, input, user).finally(() => {
             // Only release the slot once the scan is fully done so any
             // racing callers in the meantime piggy-back on the same
             // promise. setCachedScan inside runScan persists the result

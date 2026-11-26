@@ -16,12 +16,29 @@
     let subject = $state('');
     let body = $state('');
     let sending = $state(false);
+    let sendAbort: AbortController | null = null;
+    let observedUser = authState.activeUser;
+    let accountEpoch = 0;
     let showCc = $state(false);
     let sendFromOptions = $state<string[]>([]);
     let attachments = $state<SendAttachment[]>([]);
     let showFromPicker = $state(false);
     // Tracking pixel parity with desktop. Defaults to settings.trackOpensDefault.
     let trackOpens = $state(settings.trackOpensDefault);
+
+    function stillOwner(user: string | null, epoch: number): boolean {
+        return !!user && authState.activeUser === user && observedUser === user && accountEpoch === epoch;
+    }
+
+    $effect(() => {
+        const user = authState.activeUser;
+        if (user === observedUser) return;
+        observedUser = user;
+        accountEpoch += 1;
+        sendAbort?.abort(new DOMException('Active account changed', 'AbortError'));
+        sendAbort = null;
+        sending = false;
+    });
 
     function pickImage(source: 'camera' | 'gallery') {
         const input = document.createElement('input');
@@ -140,6 +157,12 @@
 
     async function handleSend() {
         if (!to.trim() || !subject.trim()) return;
+        const user = authState.activeUser;
+        const epoch = accountEpoch;
+        if (!user || user !== observedUser) return;
+        const controller = new AbortController();
+        sendAbort?.abort();
+        sendAbort = controller;
         sending = true;
         try {
             const fromName = pickFromName(from || authState.activeUser || '');
@@ -154,7 +177,8 @@
                 inReplyTo: mode !== 'new' && replyTo?.envelope.messageId ? replyTo.envelope.messageId : undefined,
                 attachments: attachments.length ? attachments : undefined,
                 trackOpens: trackOpens || undefined,
-            });
+            }, { signal: controller.signal });
+            if (!stillOwner(user, epoch) || controller.signal.aborted) return;
             if (result.sent) {
                 if (result.messageId) {
                     trackSent({ messageId: result.messageId, subject: subject.trim(), to: to.split(',').map((s) => s.trim()).filter(Boolean).join(', ') });
@@ -165,9 +189,12 @@
                 showToast('error', 'Send failed');
             }
         } catch (err) {
-            showToast('error', 'Send failed', err);
+            if (stillOwner(user, epoch) && (err as Error)?.name !== 'AbortError') {
+                showToast('error', 'Send failed', err);
+            }
         } finally {
-            sending = false;
+            if (stillOwner(user, epoch)) sending = false;
+            if (sendAbort === controller) sendAbort = null;
         }
     }
 
@@ -176,6 +203,8 @@
     }
 
     onMount(async () => {
+        const user = authState.activeUser;
+        const epoch = accountEpoch;
         // Consume launch-intent prefill (Web Share Target, manifest
         // shortcut, mailto: protocol). One-shot — clear immediately so
         // the next compose doesn't replay these values.
@@ -189,6 +218,7 @@
         }
         try {
             const res = await getSendFromAddresses();
+            if (!stillOwner(user, epoch)) return;
             if (res.addresses.length) {
                 const seen = new Set<string>();
                 sendFromOptions = res.addresses.filter((a) => {

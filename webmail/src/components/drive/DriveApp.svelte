@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { onMount } from 'svelte';
+    import { onMount, onDestroy } from 'svelte';
     import {
         driveState, loadDriveConfig, loadPath, closePreview, closeDrawingEditor,
         saveDrawing, closeTextEditor, saveTextFile, openTextEditor, openDrawingEditor,
@@ -7,6 +7,7 @@
     } from '../../lib/drive.svelte';
     import { getObjectUrl } from '../../lib/drive-api';
     import { showToast } from '../../lib/store.svelte';
+    import { authState } from '../../lib/auth.svelte';
     import { capabilities } from '../../lib/settings.svelte';
     import DriveToolbar from './DriveToolbar.svelte';
     import DriveGrid from './DriveGrid.svelte';
@@ -16,6 +17,26 @@
     import TextEditor from '../editor/TextEditor.svelte';
     import Icon from '../Icon.svelte';
     import type { DriveItem } from '../../lib/drive-api';
+
+    let observedUser = authState.activeUser;
+    const pendingRequests = new Set<AbortController>();
+    let ctxMenu = $state<{ item: DriveItem; x: number; y: number } | null>(null);
+
+    $effect(() => {
+        const user = authState.activeUser;
+        if (user === observedUser) return;
+        observedUser = user;
+        for (const controller of pendingRequests) {
+            controller.abort(new DOMException('Active account changed', 'AbortError'));
+        }
+        pendingRequests.clear();
+        ctxMenu = null;
+    });
+
+    onDestroy(() => {
+        for (const controller of pendingRequests) controller.abort();
+        pendingRequests.clear();
+    });
 
     onMount(() => {
         loadDriveConfig().then(() => {
@@ -41,7 +62,6 @@
     }
 
     // ---- Context menu ----------------------------------------
-    let ctxMenu = $state<{ item: DriveItem; x: number; y: number } | null>(null);
 
     function openCtxMenu(e: MouseEvent, item: DriveItem) {
         e.preventDefault();
@@ -84,25 +104,45 @@
     }
 
     async function ctxDownload(item: DriveItem) {
+        const user = authState.activeUser;
+        if (!user) return;
+        const controller = new AbortController();
+        pendingRequests.add(controller);
         try {
-            const url = await getObjectUrl(item.path);
+            const url = await getObjectUrl(item.path, undefined, controller.signal);
+            if (controller.signal.aborted || authState.activeUser !== user) return;
             const a = document.createElement('a');
             a.href = url;
             a.download = item.name;
             a.click();
         } catch (e) {
-            showToast('error', 'Failed to get download link');
+            if (!controller.signal.aborted && authState.activeUser === user) {
+                showToast('error', 'Failed to get download link');
+            }
+        } finally {
+            pendingRequests.delete(controller);
         }
         closeCtxMenu();
     }
 
     async function ctxCopyLink(item: DriveItem) {
+        const user = authState.activeUser;
+        if (!user) return;
+        const controller = new AbortController();
+        pendingRequests.add(controller);
         try {
-            const url = await getObjectUrl(item.path);
+            const url = await getObjectUrl(item.path, undefined, controller.signal);
+            if (controller.signal.aborted || authState.activeUser !== user) return;
             await navigator.clipboard.writeText(url);
-            showToast('success', 'Link copied to clipboard');
+            if (!controller.signal.aborted && authState.activeUser === user) {
+                showToast('success', 'Link copied to clipboard');
+            }
         } catch {
-            showToast('error', 'Failed to copy link');
+            if (!controller.signal.aborted && authState.activeUser === user) {
+                showToast('error', 'Failed to copy link');
+            }
+        } finally {
+            pendingRequests.delete(controller);
         }
         closeCtxMenu();
     }

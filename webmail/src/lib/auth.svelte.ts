@@ -375,6 +375,27 @@ export async function login(user: string, pass: string, opts: { remember?: boole
 // Background renewal: if the active session is within ~5 min of expiring
 // AND we have remembered creds for that user, call /v1/auth/session again
 // to get a fresh token. Returns true if the session was renewed.
+function storeRenewedSession(session: Session, fresh: Session): boolean {
+    const idx = state.sessions.findIndex((s) => s.user === session.user);
+    if (idx < 0) {
+        // login() remembers credentials on success. Undo that side effect if
+        // the account was explicitly signed out while renewal was pending.
+        forgetCreds(session.user);
+        return false;
+    }
+    // Another renewal or a fresh login won the race. Keep that newer session
+    // instead of replacing it with a response for an older token.
+    if (state.sessions[idx].token !== session.token) return true;
+    if (state.activeUser === session.user) {
+        upsertSession(fresh);
+    } else {
+        state.sessions[idx] = fresh;
+        persist(state);
+        if (isMobile || permanentSignInOn()) persistPerm(state);
+    }
+    return true;
+}
+
 async function renewIfNeeded(session: Session): Promise<boolean> {
     const remaining = session.expiresAt - Date.now();
     if (remaining > SOON_MS) return false;
@@ -382,8 +403,7 @@ async function renewIfNeeded(session: Session): Promise<boolean> {
     if (!creds) return false;
     try {
         const fresh = await login(creds.user, creds.pass, { remember: true });
-        upsertSession(fresh);
-        return true;
+        return storeRenewedSession(session, fresh);
     } catch (err) {
         // Only forget creds on a *definitive* auth failure (server told us
         // 401 — bad password). Network errors, 5xx, IMAP-backend-down etc.
@@ -391,7 +411,10 @@ async function renewIfNeeded(session: Session): Promise<boolean> {
         // wifi is what was kicking PWA users to the login screen on
         // perfectly good passwords.
         const status = (err as { status?: number }).status;
-        if (status === 401) forgetCreds(session.user);
+        if (status === 401
+            && state.sessions.some((s) => s.user === session.user && s.token === session.token)) {
+            forgetCreds(session.user);
+        }
         return false;
     }
 }
@@ -409,30 +432,41 @@ export function forgetSavedCreds(user: string) {
  *  Single-flight: concurrent callers (multiple in-flight 401s on app
  *  resume) all await the same renewal promise instead of stampeding the
  *  /v1/auth/session endpoint. */
-let inflightRenewal: Promise<boolean> | null = null;
-export async function tryRenewSession(): Promise<boolean> {
-    if (inflightRenewal) return inflightRenewal;
-    const session = getSession();
+const inflightRenewals = new Map<string, Promise<boolean>>();
+export async function tryRenewSession(expectedUser?: string): Promise<boolean> {
+    const session = expectedUser
+        ? state.sessions.find((s) => s.user === expectedUser) || null
+        : getSession();
     if (!session) return false;
+    const existing = inflightRenewals.get(session.user);
+    if (existing) return existing;
     const creds = recallCreds(session.user);
     if (!creds) return false;
-    inflightRenewal = (async () => {
+
+    const renewal = (async () => {
         try {
             const fresh = await login(creds.user, creds.pass, { remember: true });
-            upsertSession(fresh);
-            return true;
+            // A user may switch accounts while the credential exchange is
+            // pending. Update the renewed session without stealing focus from
+            // the account they switched to, and don't resurrect a session
+            // they explicitly signed out of while renewal was in flight.
+            return storeRenewedSession(session, fresh);
         } catch (err) {
             // As in renewIfNeeded — only forget on a definitive 401. A
             // network error or 5xx means the password might still be good
             // and we'd rather fail this attempt than nuke the keychain.
             const status = (err as { status?: number }).status;
-            if (status === 401) forgetCreds(session.user);
+            if (status === 401
+                && state.sessions.some((s) => s.user === session.user && s.token === session.token)) {
+                forgetCreds(session.user);
+            }
             return false;
         } finally {
-            inflightRenewal = null;
+            inflightRenewals.delete(session.user);
         }
     })();
-    return inflightRenewal;
+    inflightRenewals.set(session.user, renewal);
+    return renewal;
 }
 
 export function isRemembered(user: string): boolean {

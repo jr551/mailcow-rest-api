@@ -7,6 +7,7 @@
 import { listMailboxes, listMessages, getMessage, moveMessage, type Mailbox, type MessageListItem } from './api';
 import { scanEmailForPhishing, envelopeToHeaders } from './phishing-scan';
 import { settings } from './settings.svelte';
+import { getSession } from './auth.svelte';
 
 export interface SweepCandidate {
     uid: number;
@@ -74,7 +75,13 @@ export async function runSpamSweep(opts: SweepOptions = {}): Promise<{
     spamPath: string | null;
     trashPath: string | null;
 }> {
+    const user = getSession()?.user;
+    const stillOwner = () => !!user && getSession()?.user === user && !opts.signal?.aborted;
+    if (!user) throw new Error('No active session');
     const mailboxes = await listMailboxes();
+    if (!stillOwner()) {
+        return { candidates: [], inboxPath: 'INBOX', spamPath: null, trashPath: null };
+    }
     const inboxPath = findInboxFolder(mailboxes);
     if (!inboxPath) throw new Error('Could not find INBOX');
     const spamPath = findSpamFolder(mailboxes);
@@ -86,9 +93,10 @@ export async function runSpamSweep(opts: SweepOptions = {}): Promise<{
     // bigger batch is read page by page.
     const messages: MessageListItem[] = [];
     for (let page = 0; messages.length < batch; page++) {
-        if (opts.signal?.aborted) break;
+        if (!stillOwner()) break;
         const want = Math.min(LIST_PAGE_MAX, batch - messages.length);
         const list = await listMessages(inboxPath, { pageSize: want, page });
+        if (!stillOwner()) return { candidates: [], inboxPath, spamPath, trashPath };
         const got = list.messages || [];
         messages.push(...got);
         if (got.length < want) break;
@@ -102,12 +110,13 @@ export async function runSpamSweep(opts: SweepOptions = {}): Promise<{
     const spamFloor = settings.spamSuggestConfidenceFloor || 0.7;
 
     for (const item of messages) {
-        if (opts.signal?.aborted) break;
+        if (!stillOwner()) return { candidates: [], inboxPath, spamPath, trashPath };
         try {
             // Need the full message to scan body. Cached scans return
             // immediately so the network cost is bounded by uncached
             // messages only.
             const detail = await getMessage(inboxPath, item.uid);
+            if (!stillOwner()) return { candidates: [], inboxPath, spamPath, trashPath };
             const from = detail.envelope.from?.[0];
             const to = detail.envelope.to?.[0];
             const result = await scanEmailForPhishing(inboxPath, item.uid, {
@@ -125,6 +134,7 @@ export async function runSpamSweep(opts: SweepOptions = {}): Promise<{
                 path: inboxPath,
                 uid: item.uid
             }, { signal: opts.signal });
+            if (!stillOwner()) return { candidates: [], inboxPath, spamPath, trashPath };
 
             const phish = !!result?.isPhishing && (result?.confidence || 0) >= phishingFloor;
             const spam = !!result?.isSpam && (result?.spamConfidence || 0) >= spamFloor;
@@ -144,6 +154,7 @@ export async function runSpamSweep(opts: SweepOptions = {}): Promise<{
                 });
             }
         } catch { /* skip — keep sweeping */ }
+        if (!stillOwner()) return { candidates: [], inboxPath, spamPath, trashPath };
         scanned++;
         opts.onProgress?.({ scanned, total, flagged: candidates.length });
     }
@@ -159,9 +170,13 @@ export async function bulkMove(
     destPath: string,
     onProgress?: (done: number, total: number, failed: number) => void
 ): Promise<{ moved: number; failed: number; movedItems: { path: string; uid: number }[] }> {
+    const user = getSession()?.user;
     const movedItems: { path: string; uid: number }[] = [];
     let failed = 0;
     for (let i = 0; i < items.length; i++) {
+        // A bulk action may span several sequential IMAP calls. Stop before
+        // the next one if the active account changed while this batch waited.
+        if (getSession()?.user !== user) break;
         const { path, uid } = items[i];
         try {
             await moveMessage(path, uid, destPath);
@@ -169,6 +184,7 @@ export async function bulkMove(
         } catch {
             failed++;
         }
+        if (getSession()?.user !== user) break;
         onProgress?.(i + 1, items.length, failed);
     }
     return { moved: movedItems.length, failed, movedItems };

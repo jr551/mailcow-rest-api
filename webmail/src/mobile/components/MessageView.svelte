@@ -1,6 +1,6 @@
 <script lang="ts">
     import { mobileState, goBack, navigate, showToast, pushOverlay } from '../lib/store.svelte';
-    import { authState, setSession } from '../../lib/auth.svelte';
+    import { authState, getSession, bearerHeader } from '../../lib/auth.svelte';
     import {
         modifyFlags,
         moveMessage,
@@ -8,6 +8,7 @@
         sendStub,
         getRawMessage,
         ApiError,
+        type MessageDetail,
         type SendAttachment,
         attachmentUrl
     } from '../../lib/api';
@@ -44,7 +45,62 @@
     let headersText = $state('');
     let folderPickerAtt = $state<{ id: string; filename?: string | null } | null>(null);
     let folderPickerBlob = $state<Blob | null>(null);
+    let folderPickerOwner: string | null = null;
     let driveSaving = $state<Record<string, boolean>>({});
+    let observedUser = authState.activeUser;
+    let accountEpoch = 0;
+    const driveAborts = new Set<AbortController>();
+    let headersAbort: AbortController | null = null;
+    let observedDetail: MessageDetail | null = null;
+    let detailOwner = authState.activeUser;
+
+    $effect(() => {
+        const detail = msg;
+        const user = authState.activeUser;
+        if (detail === observedDetail) return;
+        observedDetail = detail;
+        detailOwner = user;
+    });
+
+    function stillCurrentMessage(user: string | null, epoch: number, path: string, uid: number): boolean {
+        return !!user
+            && detailOwner === user
+            && authState.activeUser === user
+            && observedUser === user
+            && accountEpoch === epoch
+            && mobileState.selectedPath === path
+            && mobileState.detail?.uid === uid;
+    }
+
+    $effect(() => {
+        const user = authState.activeUser;
+        if (user === observedUser) return;
+        observedUser = user;
+        accountEpoch += 1;
+        proxyAbort?.abort(new DOMException('Active account changed', 'AbortError'));
+        phishingAbort?.abort(new DOMException('Active account changed', 'AbortError'));
+        for (const controller of driveAborts) {
+            controller.abort(new DOMException('Active account changed', 'AbortError'));
+        }
+        driveAborts.clear();
+        headersAbort?.abort(new DOMException('Active account changed', 'AbortError'));
+        headersAbort = null;
+        folderPickerAtt = null;
+        folderPickerBlob = null;
+        folderPickerOwner = null;
+        driveSaving = {};
+        headersOpen = false;
+        headersLoading = false;
+        headersText = '';
+        proxiedSrcDoc = null;
+        hasRemote = false;
+        iframeSrc = '';
+        phishingScanning = false;
+        phishingResult = null;
+        phishingDismissed = false;
+        mobileState.detail = null;
+        mobileState.selectedUid = null;
+    });
 
     // --- Phishing scan -----------------------------------------------
     let phishingScanning = $state(false);
@@ -55,10 +111,16 @@
     $effect(() => {
         const m = msg;
         const path = mobileState.selectedPath;
+        const user = authState.activeUser;
+        const epoch = accountEpoch;
+        const stillCurrent = () => !!m && !!path
+            && stillCurrentMessage(user, epoch, path, m.uid)
+            && detailOwner === user
+            && mobileState.detail === m;
         // Nothing leaves the device unless the user has scan switched on;
         // the AI-conversation folders hold our own chat history, not mail.
         const isAiThread = path === '.AI Conversations' || path === 'AI Conversations';
-        if (!m || !path || !settings.phishingScan || isAiThread) {
+        if (!m || !path || !user || user !== observedUser || detailOwner !== user || !settings.phishingScan || isAiThread) {
             phishingResult = null;
             phishingDismissed = false;
             phishingScanning = false;
@@ -67,10 +129,9 @@
         }
         phishingDismissed = false;
         phishingResult = null;
-        if (phishingAbort) { phishingAbort.abort(); }
-        phishingAbort = new AbortController();
+        if (phishingAbort) { phishingAbort.abort(); phishingAbort = null; }
 
-        const cached = getCachedScan(path, m.uid);
+        const cached = getCachedScan(path, m.uid, user);
         if (cached) {
             phishingResult = cached;
             phishingScanning = false;
@@ -94,6 +155,8 @@
         }
 
         phishingScanning = true;
+        const controller = new AbortController();
+        phishingAbort = controller;
         const from = m.envelope.from?.[0];
         const to = m.envelope.to?.[0];
         scanEmailForPhishing(path, m.uid, {
@@ -111,17 +174,18 @@
             attachments: m.attachments,
             path,
             uid: m.uid
-        }, { signal: phishingAbort.signal }).then((result) => {
-            if (phishingAbort?.signal.aborted) return;
+        }, { signal: controller.signal }).then((result) => {
+            if (controller.signal.aborted || !stillCurrent()) return;
             phishingResult = result;
         }).catch(() => {
             /* silently fail */
         }).finally(() => {
-            phishingScanning = false;
+            if (phishingAbort === controller && stillCurrent()) phishingScanning = false;
         });
 
         return () => {
-            if (phishingAbort) { phishingAbort.abort(); phishingAbort = null; }
+            controller.abort();
+            if (phishingAbort === controller) phishingAbort = null;
         };
     });
 
@@ -221,97 +285,143 @@
 
     // The list row backing the open message. In all-folders search rows from
     // other folders can share its uid, so match the folder as well.
-    function isOpenRow(m: { uid: number; mailbox?: string }) {
-        return m.uid === msg?.uid && (m.mailbox ?? mobileState.selectedPath) === mobileState.selectedPath;
-    }
-
     async function toggleStar() {
-        if (!msg) return;
-        const isFlagged = msg.flags.includes('\\Flagged');
+        const current = msg;
+        const user = authState.activeUser;
+        const epoch = accountEpoch;
+        const path = mobileState.selectedPath;
+        if (!current || !user || user !== observedUser || !stillCurrentMessage(user, epoch, path, current.uid)) return;
+        const uid = current.uid;
+        const isFlagged = current.flags.includes('\\Flagged');
         try {
-            const r = await modifyFlags(mobileState.selectedPath, msg.uid, isFlagged ? { remove: ['\\Flagged'] } : { add: ['\\Flagged'] });
-            msg.flags = r.flags;
-            const li = mobileState.messages.find(isOpenRow);
+            const r = await modifyFlags(path, uid, isFlagged ? { remove: ['\\Flagged'] } : { add: ['\\Flagged'] });
+            if (!stillCurrentMessage(user, epoch, path, uid)) return;
+            mobileState.detail!.flags = r.flags;
+            const li = mobileState.messages.find((m) => m.uid === uid && (m.mailbox ?? path) === path);
             if (li) li.flags = r.flags;
             showToast('success', isFlagged ? 'Unstarred' : 'Starred');
         } catch {
-            showToast('error', 'Failed to update star');
+            if (stillCurrentMessage(user, epoch, path, uid)) showToast('error', 'Failed to update star');
         }
     }
 
     async function toggleUnread() {
-        if (!msg) return;
-        const seen = msg.flags.includes('\\Seen');
+        const current = msg;
+        const user = authState.activeUser;
+        const epoch = accountEpoch;
+        const path = mobileState.selectedPath;
+        if (!current || !user || user !== observedUser || !stillCurrentMessage(user, epoch, path, current.uid)) return;
+        const uid = current.uid;
+        const seen = current.flags.includes('\\Seen');
         try {
-            const r = await modifyFlags(mobileState.selectedPath, msg.uid, seen ? { remove: ['\\Seen'] } : { add: ['\\Seen'] });
-            msg.flags = r.flags;
-            const li = mobileState.messages.find(isOpenRow);
+            const r = await modifyFlags(path, uid, seen ? { remove: ['\\Seen'] } : { add: ['\\Seen'] });
+            if (!stillCurrentMessage(user, epoch, path, uid)) return;
+            mobileState.detail!.flags = r.flags;
+            const li = mobileState.messages.find((m) => m.uid === uid && (m.mailbox ?? path) === path);
             if (li) li.flags = r.flags;
             showToast('success', seen ? 'Marked unread' : 'Marked read');
         } catch {
-            showToast('error', 'Failed to update read state');
+            if (stillCurrentMessage(user, epoch, path, uid)) showToast('error', 'Failed to update read state');
         }
     }
 
     async function trash() {
-        if (!msg) return;
+        const current = msg;
+        const user = authState.activeUser;
+        const epoch = accountEpoch;
         const from = mobileState.selectedPath;
+        if (!current || !user || user !== observedUser || !stillCurrentMessage(user, epoch, from, current.uid)) return;
+        const uid = current.uid;
         const trashBox = mobileState.mailboxes.find((m) => m.specialUse === '\\Trash')?.path || 'Trash';
         try {
-            if (from === trashBox) await deleteMessage(from, msg.uid);
-            else await moveMessage(from, msg.uid, trashBox);
-            mobileState.messages = mobileState.messages.filter((m) => !isOpenRow(m));
+            if (from === trashBox) await deleteMessage(from, uid);
+            else await moveMessage(from, uid, trashBox);
+            if (!stillCurrentMessage(user, epoch, from, uid)) return;
+            mobileState.messages = mobileState.messages.filter((m) => !(m.uid === uid && (m.mailbox ?? from) === from));
             mobileState.messagesTotal = Math.max(0, mobileState.messagesTotal - 1);
             showToast('success', from === trashBox ? 'Deleted' : 'Moved to Trash');
             goBack();
         } catch {
-            showToast('error', 'Failed to delete');
+            if (stillCurrentMessage(user, epoch, from, uid)) showToast('error', 'Failed to delete');
         }
     }
 
     async function archive() {
-        if (!msg) return;
+        const current = msg;
+        const user = authState.activeUser;
+        const epoch = accountEpoch;
         const from = mobileState.selectedPath;
+        if (!current || !user || user !== observedUser || !stillCurrentMessage(user, epoch, from, current.uid)) return;
+        const uid = current.uid;
         const archiveBox = mobileState.mailboxes.find((m) => m.specialUse === '\\Archive')?.path || 'Archive';
         try {
-            await moveMessage(from, msg.uid, archiveBox);
-            mobileState.messages = mobileState.messages.filter((m) => !isOpenRow(m));
+            await moveMessage(from, uid, archiveBox);
+            if (!stillCurrentMessage(user, epoch, from, uid)) return;
+            mobileState.messages = mobileState.messages.filter((m) => !(m.uid === uid && (m.mailbox ?? from) === from));
             mobileState.messagesTotal = Math.max(0, mobileState.messagesTotal - 1);
             showToast('success', 'Archived');
             goBack();
         } catch {
-            showToast('error', 'Failed to archive');
+            if (stillCurrentMessage(user, epoch, from, uid)) showToast('error', 'Failed to archive');
         }
     }
 
     async function saveAttToDrive(att: { id: string; filename?: string | null; size?: number | null }) {
-        if (!msg) return;
+        const current = msg;
+        const user = authState.activeUser;
+        const epoch = accountEpoch;
+        const path = mobileState.selectedPath;
+        const session = getSession();
+        if (!current || !user || user !== observedUser || !session || session.user !== user
+            || !stillCurrentMessage(user, epoch, path, current.uid)) return;
+        const uid = current.uid;
+        const controller = new AbortController();
+        driveAborts.add(controller);
+        const stillCurrent = () =>
+            !controller.signal.aborted && stillCurrentMessage(user, epoch, path, uid);
         driveSaving = { ...driveSaving, [att.id]: true };
         try {
             await loadDriveConfig();
-            const url = attachmentUrl(mobileState.selectedPath, msg.uid, att.id);
-            const res = await fetch(url);
+            if (!stillCurrent()) return;
+            const url = attachmentUrl(path, uid, att.id);
+            const res = await fetch(url, {
+                headers: { authorization: bearerHeader(session) },
+                signal: controller.signal
+            });
+            if (!stillCurrent()) return;
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const blob = await res.blob();
+            if (!stillCurrent()) return;
             folderPickerBlob = blob;
             folderPickerAtt = att;
+            folderPickerOwner = user;
         } catch (err) {
-            showToast('error', "Couldn't save to Drive", err);
+            if (stillCurrent()) showToast('error', "Couldn't save to Drive", err);
         } finally {
-            driveSaving = { ...driveSaving, [att.id]: false };
+            if (stillCurrentMessage(user, epoch, path, uid)) {
+                driveSaving = { ...driveSaving, [att.id]: false };
+            }
+            driveAborts.delete(controller);
         }
     }
 
     async function onFolderPicked(path: string) {
-        if (!folderPickerAtt || !folderPickerBlob) return;
+        const user = folderPickerOwner;
+        const epoch = accountEpoch;
+        if (!user || user !== authState.activeUser || !folderPickerAtt || !folderPickerBlob) return;
         const filename = folderPickerAtt.filename || `attachment-${folderPickerAtt.id}`;
         await saveAttachmentToDrive(folderPickerBlob, filename, path);
+        if (authState.activeUser !== user || accountEpoch !== epoch) return;
         folderPickerAtt = null;
         folderPickerBlob = null;
+        folderPickerOwner = null;
     }
 
     function reply(mode: 'reply' | 'replyAll' | 'forward' = 'reply') {
-        if (!msg) return;
+        const user = authState.activeUser;
+        const epoch = accountEpoch;
+        const path = mobileState.selectedPath;
+        if (!msg || !user || !stillCurrentMessage(user, epoch, path, msg.uid)) return;
         mobileState.composeReplyTo = msg;
         mobileState.composeMode = mode;
         navigate('compose');
@@ -321,11 +431,23 @@
 
     function closeHeaders() {
         headersOpen = false;
+        headersAbort?.abort();
+        headersAbort = null;
         if (headersDispose) { headersDispose(); headersDispose = null; }
     }
 
     async function viewHeaders() {
-        if (!msg) return;
+        const current = msg;
+        const user = authState.activeUser;
+        const epoch = accountEpoch;
+        const path = mobileState.selectedPath;
+        if (!current || !user || user !== observedUser || !stillCurrentMessage(user, epoch, path, current.uid)) return;
+        const uid = current.uid;
+        const controller = new AbortController();
+        headersAbort?.abort();
+        headersAbort = controller;
+        const stillCurrent = () =>
+            !controller.signal.aborted && stillCurrentMessage(user, epoch, path, uid);
         headersLoading = true;
         headersOpen = true;
         // Hardware-back closes the headers sheet before leaving the
@@ -335,14 +457,18 @@
             headersDispose = null;
         });
         try {
-            const raw = await getRawMessage(mobileState.selectedPath, msg.uid);
+            const raw = await getRawMessage(path, uid, { signal: controller.signal });
+            if (!stillCurrent()) return;
             const idx = raw.indexOf('\r\n\r\n');
             headersText = idx !== -1 ? raw.slice(0, idx) : raw.indexOf('\n\n') !== -1 ? raw.slice(0, raw.indexOf('\n\n')) : raw;
         } catch (err) {
-            showToast('error', "Couldn't load headers", err);
-            closeHeaders();
+            if (stillCurrent()) {
+                showToast('error', "Couldn't load headers", err);
+                closeHeaders();
+            }
         } finally {
-            headersLoading = false;
+            if (stillCurrentMessage(user, epoch, path, uid)) headersLoading = false;
+            if (headersAbort === controller) headersAbort = null;
         }
     }
 
@@ -510,7 +636,11 @@
                         {#if folderPickerAtt?.id === att.id}
                             <DriveFolderPicker
                                 onSelect={onFolderPicked}
-                                onCancel={() => { folderPickerAtt = null; folderPickerBlob = null; }}
+                                onCancel={() => {
+                                    folderPickerAtt = null;
+                                    folderPickerBlob = null;
+                                    folderPickerOwner = null;
+                                }}
                             />
                         {/if}
                     {/each}

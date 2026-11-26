@@ -3,6 +3,7 @@
     import { summarizeMessage, type MessageListItem, type MessageDetail, ApiError } from '../../lib/api';
     import { showToast } from '../lib/store.svelte';
     import { settings } from '../../lib/settings.svelte';
+    import { authState } from '../../lib/auth.svelte';
 
     interface Props {
         msg: MessageListItem;
@@ -33,6 +34,39 @@
     let summaryLoading = $state(false);
     let summaryResult = $state<string | null>(null);
     let summaryError = $state<string | null>(null);
+    let observedUser = authState.activeUser;
+    let accountEpoch = 0;
+    let summaryAbort: AbortController | null = null;
+
+    function stillOwner(user: string | null, epoch: number, ownerDetail: MessageDetail): boolean {
+        return !!user
+            && authState.activeUser === user
+            && observedUser === user
+            && accountEpoch === epoch
+            && isOpen
+            && detail === ownerDetail;
+    }
+
+    $effect(() => {
+        const user = authState.activeUser;
+        if (user === observedUser) return;
+        observedUser = user;
+        accountEpoch += 1;
+        summaryAbort?.abort(new DOMException('Active account changed', 'AbortError'));
+        summaryAbort = null;
+        summaryLoading = false;
+        summaryResult = null;
+        summaryError = null;
+    });
+
+    $effect(() => {
+        if (isOpen) return;
+        summaryAbort?.abort(new DOMException('Action sheet closed', 'AbortError'));
+        summaryAbort = null;
+        summaryLoading = false;
+        summaryResult = null;
+        summaryError = null;
+    });
 
     // Derived, not captured at init: the sheet stays open after a Star /
     // mark-read tap and the handlers mutate `msg.flags` in place, so frozen
@@ -61,20 +95,34 @@
             showToast('error', 'Open the message first');
             return;
         }
+        const user = authState.activeUser;
+        const epoch = accountEpoch;
+        const ownerDetail = detail;
+        if (!user || user !== observedUser) return;
+        const controller = new AbortController();
+        summaryAbort?.abort();
+        summaryAbort = controller;
+        const stillCurrent = () => !controller.signal.aborted && stillOwner(user, epoch, ownerDetail);
         summaryLoading = true;
         summaryError = null;
         summaryResult = null;
         try {
-            const r = await summarizeMessage(bodyForAi());
+            const r = await summarizeMessage(bodyForAi(), 120, { signal: controller.signal });
+            if (!stillCurrent()) return;
             summaryResult = r.content;
         } catch (err) {
-            summaryError = err instanceof ApiError ? (err.detail || err.title || 'Summarize failed') : 'Summarize failed';
+            if (stillCurrent()) {
+                summaryError = err instanceof ApiError ? (err.detail || err.title || 'Summarize failed') : 'Summarize failed';
+            }
         } finally {
-            summaryLoading = false;
+            if (stillOwner(user, epoch, ownerDetail)) summaryLoading = false;
+            if (summaryAbort === controller) summaryAbort = null;
         }
     }
 
     function closeAll() {
+        summaryAbort?.abort(new DOMException('Action sheet closed', 'AbortError'));
+        summaryAbort = null;
         summaryResult = null;
         summaryError = null;
         onClose();

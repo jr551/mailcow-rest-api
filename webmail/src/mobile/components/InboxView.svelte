@@ -1,7 +1,7 @@
 <script lang="ts">
     import { onMount } from 'svelte';
     import { mobileState, navigate, showToast, pushOverlay } from '../lib/store.svelte';
-    import { tryRenewSession } from '../../lib/auth.svelte';
+    import { authState, tryRenewSession } from '../../lib/auth.svelte';
     import {
         listMailboxes,
         listMessages,
@@ -29,6 +29,72 @@
 
     const SERVER_CAP = 100;
     let appending = $state(false);
+    let observedUser = authState.activeUser;
+    let accountEpoch = 0;
+    let mailboxSeq = 0;
+    let refreshSeq = 0;
+    let appendSeq = 0;
+    let detailSeq = 0;
+    let actionSheetSeq = 0;
+    let detailAbort: AbortController | null = null;
+
+    function stillOwner(user: string | null, epoch: number): boolean {
+        return !!user && authState.activeUser === user && observedUser === user && accountEpoch === epoch;
+    }
+
+    $effect(() => {
+        const user = authState.activeUser;
+        if (user === observedUser) return;
+        observedUser = user;
+        accountEpoch += 1;
+        mailboxSeq += 1;
+        refreshSeq += 1;
+        appendSeq += 1;
+        detailSeq += 1;
+        actionSheetSeq += 1;
+        detailAbort?.abort(new DOMException('Active account changed', 'AbortError'));
+        detailAbort = null;
+        cancelGlobalSearch();
+        aiSortAbort?.abort(new DOMException('Active account changed', 'AbortError'));
+        aiSortAbort = null;
+        if (searchDebounce) clearTimeout(searchDebounce);
+        searchDebounce = null;
+        searchInput = '';
+        appending = false;
+        isRefreshing = false;
+        pullDelta = 0;
+        aiSortLoading = false;
+        aiSortError = null;
+        aiRankings = [];
+        lastSortedKey = '';
+        ruleAnimUids = new Set();
+        ruleDoneUids = new Set();
+        actionSheetOpen = false;
+        actionSheetMsg = null;
+        actionSheetDetail = null;
+        actionSheetDetailLoading = false;
+        if (actionSheetDispose) {
+            actionSheetDispose();
+            actionSheetDispose = null;
+        }
+        mobileState.mailboxes = [];
+        mobileState.mailboxesLoading = false;
+        mobileState.selectedPath = 'INBOX';
+        mobileState.messages = [];
+        mobileState.messagesTotal = 0;
+        mobileState.messagesLoading = false;
+        mobileState.messagesError = null;
+        mobileState.search = '';
+        mobileState.searchScope = 'folder';
+        mobileState.selectedUid = null;
+        mobileState.detail = null;
+        mobileState.detailLoading = false;
+        mobileState.detailError = null;
+        if (user) {
+            void refreshMailboxes();
+            void refreshMessages(true);
+        }
+    });
 
     // Pull-to-refresh state
     let listEl: HTMLDivElement | undefined = $state();
@@ -64,17 +130,22 @@
     const rowPath = (msg: MessageListItem) => msg.mailbox ?? mobileState.selectedPath;
     const rowKey = (msg: MessageListItem) => `${msg.mailbox ?? ''}:${msg.uid}`;
     const findRow = (msg: MessageListItem) => mobileState.messages.find((m) => rowKey(m) === rowKey(msg));
+    const detailMatchesRow = (path: string, uid: number) =>
+        mobileState.selectedPath === path && mobileState.detail?.uid === uid;
     const dropRow = (msg: MessageListItem) => {
         mobileState.messages = mobileState.messages.filter((m) => rowKey(m) !== rowKey(msg));
         mobileState.messagesTotal = Math.max(0, mobileState.messagesTotal - 1);
     };
-    const detailIsRow = (msg: MessageListItem) =>
-        mobileState.detail?.uid === msg.uid && rowPath(msg) === mobileState.selectedPath;
-
     async function refreshMailboxes() {
+        const user = authState.activeUser;
+        const epoch = accountEpoch;
+        if (!user || user !== observedUser) return;
+        const seq = ++mailboxSeq;
+        const stillCurrent = () => stillOwner(user, epoch) && seq === mailboxSeq;
         mobileState.mailboxesLoading = true;
         try {
             const fresh = await listMailboxes({ counts: true });
+            if (!stillCurrent()) return;
             mobileState.mailboxes = fresh;
         } catch (err) {
             // Don't ever drop the session on 401 — most often the server
@@ -82,81 +153,121 @@
             // via stored creds; if that succeeds, retry once. If not,
             // surface a toast so the user can re-login on their own
             // schedule rather than getting kicked back to the login screen.
+            if (!stillCurrent()) return;
             if (err instanceof ApiError && err.status === 401) {
-                if (await tryRenewSession()) {
+                if (await tryRenewSession(user) && stillCurrent()) {
                     try {
-                        mobileState.mailboxes = await listMailboxes({ counts: true });
+                        const fresh = await listMailboxes({ counts: true });
+                        if (stillCurrent()) mobileState.mailboxes = fresh;
                     } catch { /* fall through */ }
-                } else {
+                } else if (stillCurrent()) {
                     showToast('error', 'Session lost — re-open the app or sign in again.');
                 }
             }
         } finally {
-            mobileState.mailboxesLoading = false;
+            if (stillCurrent()) mobileState.mailboxesLoading = false;
         }
     }
 
     async function refreshMessages(reset = false) {
+        const user = authState.activeUser;
+        const epoch = accountEpoch;
+        if (!user || user !== observedUser) return;
         // An all-folders result set must not collapse to the single folder
         // that happens to be selected.
         if (mobileState.searchScope === 'all' && (mobileState.search || '').trim()) return searchAllFolders();
+        const seq = ++refreshSeq;
+        const path = mobileState.selectedPath;
+        const search = mobileState.search || undefined;
+        const stillCurrent = () =>
+            stillOwner(user, epoch)
+            && seq === refreshSeq
+            && mobileState.selectedPath === path
+            && mobileState.search === (search || '')
+            && mobileState.searchScope === 'folder';
         if (reset) mobileState.messages = [];
         mobileState.messagesLoading = true;
         mobileState.messagesError = null;
         try {
-            const r = await listMessages(mobileState.selectedPath, {
+            const r = await listMessages(path, {
                 page: 0,
                 pageSize: SERVER_CAP,
-                search: mobileState.search || undefined,
+                search,
             });
+            if (!stillCurrent()) return;
             mobileState.messages = r.messages;
             mobileState.messagesTotal = r.total;
             // (client-rules pass removed — settings.clientRules deleted by Settings refactor)
         } catch (err) {
+            if (!stillCurrent()) return;
             mobileState.messagesError = err instanceof Error ? err.message : 'Failed to load messages';
             if (err instanceof ApiError && err.status === 401) {
-                if (await tryRenewSession()) {
+                if (await tryRenewSession(user) && stillCurrent()) {
                     try {
-                        const r = await listMessages(mobileState.selectedPath, {
+                        const r = await listMessages(path, {
                             page: 0,
                             pageSize: SERVER_CAP,
-                            search: mobileState.search || undefined,
+                            search,
                         });
-                        mobileState.messages = r.messages;
-                        mobileState.messagesTotal = r.total;
-                        mobileState.messagesError = null;
+                        if (stillCurrent()) {
+                            mobileState.messages = r.messages;
+                            mobileState.messagesTotal = r.total;
+                            mobileState.messagesError = null;
+                        }
                     } catch { /* keep the original error visible */ }
-                } else {
+                } else if (stillCurrent()) {
                     showToast('error', 'Session lost — re-open the app or sign in again.');
                 }
             }
         } finally {
-            mobileState.messagesLoading = false;
+            if (stillOwner(user, epoch) && seq === refreshSeq) mobileState.messagesLoading = false;
         }
     }
 
     async function loadMore() {
+        const user = authState.activeUser;
+        const epoch = accountEpoch;
+        if (!user || user !== observedUser) return;
         if (appending || mobileState.messagesLoading) return;
         if (mobileState.messages.length >= mobileState.messagesTotal) return;
         const nextPage = Math.floor(mobileState.messages.length / SERVER_CAP);
+        const path = mobileState.selectedPath;
+        const search = mobileState.search || undefined;
+        const seq = ++appendSeq;
+        const stillCurrent = () =>
+            stillOwner(user, epoch)
+            && seq === appendSeq
+            && path === mobileState.selectedPath
+            && search === (mobileState.search || '')
+            && mobileState.searchScope === 'folder';
         appending = true;
         try {
-            const r = await listMessages(mobileState.selectedPath, {
+            const r = await listMessages(path, {
                 page: nextPage,
                 pageSize: SERVER_CAP,
-                search: mobileState.search || undefined,
+                search,
             });
+            if (!stillCurrent()) return;
             const seen = new Set(mobileState.messages.map((m) => m.uid));
             const fresh = r.messages.filter((m) => !seen.has(m.uid));
             mobileState.messages = [...mobileState.messages, ...fresh];
             mobileState.messagesTotal = r.total;
         } catch {
-            showToast('error', "Couldn't load more messages");
+            if (stillCurrent()) showToast('error', "Couldn't load more messages");
         }
-        finally { appending = false; }
+        finally {
+            if (seq === appendSeq && stillOwner(user, epoch)) appending = false;
+        }
     }
 
     async function selectMessage(msg: MessageListItem) {
+        const user = authState.activeUser;
+        const epoch = accountEpoch;
+        if (!user || user !== observedUser) return;
+        const seq = ++detailSeq;
+        detailAbort?.abort();
+        const controller = new AbortController();
+        detailAbort = controller;
         playClick();
         const uid = msg.uid;
         mobileState.selectedUid = uid;
@@ -165,68 +276,99 @@
         mobileState.detailLoading = true;
         // In all-folders search the row carries its source mailbox; switch
         // selectedPath so detail/flags/move target the right folder.
+        if (mobileState.searchScope === 'all') cancelGlobalSearch();
         if (mobileState.searchScope === 'all' && msg.mailbox && mobileState.selectedPath !== msg.mailbox) {
             mobileState.selectedPath = msg.mailbox;
         }
         const path = mobileState.selectedPath;
+        const stillCurrent = () =>
+            stillOwner(user, epoch)
+            && seq === detailSeq
+            && mobileState.selectedPath === path
+            && mobileState.selectedUid === uid;
         navigate('message');
         try {
-            const fresh = await getMessage(path, uid);
+            const fresh = await getMessage(path, uid, { signal: controller.signal });
+            if (!stillCurrent()) return;
             mobileState.detail = fresh;
             if (fresh.flags && !fresh.flags.includes('\\Seen')) {
                 const r = await modifyFlags(path, uid, { add: ['\\Seen'] });
+                if (!stillCurrent()) return;
                 fresh.flags = r.flags;
                 const li = findRow(msg);
                 if (li) li.flags = r.flags;
             }
         } catch (err) {
-            mobileState.detailError = err instanceof Error ? err.message : 'Failed to load message';
+            if (stillCurrent()) mobileState.detailError = err instanceof Error ? err.message : 'Failed to load message';
         } finally {
-            mobileState.detailLoading = false;
+            if (stillCurrent()) mobileState.detailLoading = false;
+            if (detailAbort === controller) detailAbort = null;
         }
     }
 
     async function toggleStar(msg: MessageListItem) {
+        const user = authState.activeUser;
+        const epoch = accountEpoch;
+        if (!user || user !== observedUser || !findRow(msg)) return;
         const li = findRow(msg);
         if (!li) return;
+        const path = rowPath(li);
+        const key = rowKey(li);
         const isFlagged = li.flags.includes('\\Flagged');
         try {
-            const r = await modifyFlags(rowPath(li), li.uid, isFlagged ? { remove: ['\\Flagged'] } : { add: ['\\Flagged'] });
-            li.flags = r.flags;
-            if (mobileState.detail && detailIsRow(li)) mobileState.detail.flags = r.flags;
+            const r = await modifyFlags(path, li.uid, isFlagged ? { remove: ['\\Flagged'] } : { add: ['\\Flagged'] });
+            if (!stillOwner(user, epoch)) return;
+            const current = mobileState.messages.find((m) => rowKey(m) === key);
+            if (current) current.flags = r.flags;
+            if (detailMatchesRow(path, li.uid)) {
+                mobileState.detail!.flags = r.flags;
+            }
         } catch {
-            showToast('error', "Couldn't update star");
+            if (stillOwner(user, epoch)) showToast('error', "Couldn't update star");
         }
     }
 
     async function trashMessage(msg: MessageListItem) {
+        const user = authState.activeUser;
+        const epoch = accountEpoch;
+        if (!user || user !== observedUser) return;
         const from = rowPath(msg);
         const trashBox = mobileState.mailboxes.find((m) => m.specialUse === '\\Trash')?.path || 'Trash';
         try {
             if (from === trashBox) await deleteMessage(from, msg.uid);
             else await moveMessage(from, msg.uid, trashBox);
+            if (!stillOwner(user, epoch)) return;
             dropRow(msg);
             showToast('success', from === trashBox ? 'Deleted' : 'Moved to Trash');
         } catch {
-            showToast('error', 'Failed to delete');
+            if (stillOwner(user, epoch)) showToast('error', 'Failed to delete');
         }
     }
 
     async function archiveMessage(msg: MessageListItem) {
+        const user = authState.activeUser;
+        const epoch = accountEpoch;
+        if (!user || user !== observedUser) return;
         const archiveBox = mobileState.mailboxes.find((m) => m.specialUse === '\\Archive')?.path || 'Archive';
+        const from = rowPath(msg);
         try {
-            await moveMessage(rowPath(msg), msg.uid, archiveBox);
+            await moveMessage(from, msg.uid, archiveBox);
+            if (!stillOwner(user, epoch)) return;
             dropRow(msg);
             showToast('success', 'Archived');
         } catch {
-            showToast('error', 'Failed to archive');
+            if (stillOwner(user, epoch)) showToast('error', 'Failed to archive');
         }
     }
 
     function onSearch(value: string) {
+        const user = authState.activeUser;
+        const epoch = accountEpoch;
+        if (!user || user !== observedUser) return;
         searchInput = value;
         if (searchDebounce) clearTimeout(searchDebounce);
         searchDebounce = setTimeout(() => {
+            if (!stillOwner(user, epoch)) return;
             mobileState.search = searchInput.trim();
             // Typing always reverts to current-folder scope; users have to
             // tap "All folders" again deliberately.
@@ -240,20 +382,32 @@
 
     // ----- Global (all-folders) search -----------------------------------
     let globalAbort: AbortController | null = null;
+    let globalSearchSeq = 0;
     let globalScan = $state<{ scanned: number; total: number } | null>(null);
 
     function cancelGlobalSearch() {
+        globalSearchSeq += 1;
         if (globalAbort) { globalAbort.abort(); globalAbort = null; }
         globalScan = null;
+        mobileState.messagesLoading = false;
     }
 
     async function searchAllFolders() {
+        const user = authState.activeUser;
+        const epoch = accountEpoch;
         const q = (mobileState.search || '').trim();
-        if (!q) return;
+        if (!user || user !== observedUser || !q) return;
         cancelGlobalSearch();
         mobileState.searchScope = 'all';
         const ctrl = new AbortController();
         globalAbort = ctrl;
+        const seq = globalSearchSeq;
+        const stillCurrent = () =>
+            stillOwner(user, epoch)
+            && globalSearchSeq === seq
+            && globalAbort === ctrl
+            && mobileState.searchScope === 'all'
+            && (mobileState.search || '').trim() === q;
         const folders = (mobileState.mailboxes || [])
             .filter((m) => !m.flags?.some((f) => /\\Noselect/i.test(f)))
             .map((m) => m.path);
@@ -266,11 +420,11 @@
         globalScan = { scanned: 0, total: folders.length };
         try {
             for (let i = 0; i < folders.length; i++) {
-                if (ctrl.signal.aborted) break;
+                if (!stillCurrent()) break;
                 const path = folders[i];
                 try {
                     const r = await listMessages(path, { page: 0, pageSize: SERVER_CAP, search: q });
-                    if (ctrl.signal.aborted) break;
+                    if (!stillCurrent()) break;
                     for (const msg of r.messages) {
                         const k = `${path} ${msg.uid}`;
                         if (seen.has(k)) continue;
@@ -280,12 +434,17 @@
                     mobileState.messages = [...aggregated];
                     mobileState.messagesTotal = aggregated.length;
                 } catch { /* per-folder errors non-fatal */ }
+                if (!stillCurrent()) break;
                 globalScan = { scanned: i + 1, total: folders.length };
             }
         } finally {
-            mobileState.messagesLoading = false;
-            if (globalAbort === ctrl) globalAbort = null;
-            setTimeout(() => { if (!globalAbort) globalScan = null; }, 1500);
+            if (stillOwner(user, epoch) && globalAbort === ctrl) {
+                mobileState.messagesLoading = false;
+                globalAbort = null;
+                setTimeout(() => {
+                    if (stillOwner(user, epoch) && globalSearchSeq === seq && !globalAbort) globalScan = null;
+                }, 1500);
+            }
         }
     }
 
@@ -323,9 +482,12 @@
         if (!isPulling) return;
         isPulling = false;
         if (pullDelta >= PULL_THRESHOLD && !isRefreshing) {
+            const user = authState.activeUser;
+            const epoch = accountEpoch;
             isRefreshing = true;
             pullDelta = PULL_THRESHOLD;
             Promise.all([refreshMessages(true), refreshMailboxes()]).finally(() => {
+                if (!stillOwner(user, epoch)) return;
                 isRefreshing = false;
                 pullDelta = 0;
             });
@@ -346,6 +508,7 @@
     let aiSortLoading = $state(false);
     let aiSortError = $state<string | null>(null);
     let aiRankings = $state<InboxSortRanking[]>([]);
+    let aiSortAbort: AbortController | null = null;
 
     // UID set of the last list we actually sent to the model. The effect
     // re-runs on every mutation of mobileState.messages — the 60s mailbox
@@ -361,6 +524,8 @@
         // filter value must not keep re-firing a paid sort behind the
         // scenes. Reset to the plain list rather than silently doing work.
         if (!settings.aiFeatures) {
+            aiSortAbort?.abort();
+            aiSortAbort = null;
             if (mobileState.filter === 'ai-sorted') mobileState.filter = 'all';
             aiSortError = null;
             aiRankings = [];
@@ -368,11 +533,15 @@
             return;
         }
         if (mobileState.filter !== 'ai-sorted') {
+            aiSortAbort?.abort();
+            aiSortAbort = null;
             aiSortError = null;
             return;
         }
         const msgs = mobileState.messages;
         if (msgs.length === 0) {
+            aiSortAbort?.abort();
+            aiSortAbort = null;
             aiRankings = [];
             lastSortedKey = '';
             return;
@@ -380,6 +549,14 @@
         const key = msgs.map((m) => m.uid).sort((a, b) => a - b).join(',');
         if (key === lastSortedKey) return;
         lastSortedKey = key;
+        const user = authState.activeUser;
+        const epoch = accountEpoch;
+        if (!user || user !== observedUser) return;
+        aiSortAbort?.abort();
+        const controller = new AbortController();
+        aiSortAbort = controller;
+        const stillSorting = () =>
+            stillOwner(user, epoch) && aiSortAbort === controller && !controller.signal.aborted;
         aiSortLoading = true;
         aiSortError = null;
         sortInboxClient(msgs.map((m) => ({
@@ -389,9 +566,18 @@
             to: m.envelope.to,
             date: m.envelope.date || m.internalDate || undefined
         })))
-            .then((res) => { aiRankings = res.rankings; })
-            .catch((err) => { aiSortError = err instanceof Error ? err.message : 'AI sort failed'; })
-            .finally(() => { aiSortLoading = false; });
+            .then((res) => { if (stillSorting()) aiRankings = res.rankings; })
+            .catch((err) => {
+                if (stillSorting() && (err as Error)?.name !== 'AbortError') {
+                    aiSortError = err instanceof Error ? err.message : 'AI sort failed';
+                }
+            })
+            .finally(() => {
+                if (stillSorting()) {
+                    aiSortLoading = false;
+                    aiSortAbort = null;
+                }
+            });
     });
 
     function dangerLevel(uid: number): number {
@@ -444,6 +630,17 @@
     let actionSheetDispose: (() => void) | null = null;
 
     async function openActionSheet(msg: MessageListItem) {
+        const user = authState.activeUser;
+        const epoch = accountEpoch;
+        if (!user || user !== observedUser) return;
+        const key = rowKey(msg);
+        const seq = ++actionSheetSeq;
+        const stillCurrent = () =>
+            stillOwner(user, epoch)
+            && seq === actionSheetSeq
+            && actionSheetOpen
+            && actionSheetMsg !== null
+            && rowKey(actionSheetMsg) === key;
         actionSheetMsg = msg;
         actionSheetOpen = true;
         actionSheetDetail = null;
@@ -451,42 +648,54 @@
         // Register with the back-button stack so Android-back closes the
         // sheet first instead of leaving the inbox view entirely.
         actionSheetDispose = pushOverlay('inbox-action-sheet', () => {
+            actionSheetSeq += 1;
             actionSheetOpen = false;
             actionSheetMsg = null;
             actionSheetDetail = null;
+            actionSheetDetailLoading = false;
             actionSheetDispose = null;
         });
         try {
             const fresh = await getMessage(rowPath(msg), msg.uid);
+            if (!stillCurrent()) return;
             actionSheetDetail = fresh;
         } catch {
             // Sheet stays open for the non-detail actions; Summarize is
             // already guarded by `if (!detail)` inside MessageActionSheet,
             // so a failed fetch cannot trigger a paid call on an empty body.
-            showToast('error', "Couldn't load message details");
+            if (stillCurrent()) showToast('error', "Couldn't load message details");
         } finally {
-            actionSheetDetailLoading = false;
+            if (stillCurrent()) actionSheetDetailLoading = false;
         }
     }
 
     function closeActionSheet() {
+        actionSheetSeq += 1;
         actionSheetOpen = false;
         actionSheetMsg = null;
         actionSheetDetail = null;
+        actionSheetDetailLoading = false;
         if (actionSheetDispose) { actionSheetDispose(); actionSheetDispose = null; }
     }
 
     async function actionToggleRead(msg: MessageListItem) {
+        const user = authState.activeUser;
+        const epoch = accountEpoch;
+        if (!user || user !== observedUser || !findRow(msg)) return;
+        const path = rowPath(msg);
+        const key = rowKey(msg);
         const seen = msg.flags.includes('\\Seen');
         try {
-            const r = await modifyFlags(rowPath(msg), msg.uid, seen ? { remove: ['\\Seen'] } : { add: ['\\Seen'] });
-            msg.flags = r.flags;
-            if (mobileState.detail && detailIsRow(msg)) {
-                mobileState.detail.flags = r.flags;
+            const r = await modifyFlags(path, msg.uid, seen ? { remove: ['\\Seen'] } : { add: ['\\Seen'] });
+            if (!stillOwner(user, epoch)) return;
+            const current = mobileState.messages.find((m) => rowKey(m) === key);
+            if (current) current.flags = r.flags;
+            if (detailMatchesRow(path, msg.uid)) {
+                mobileState.detail!.flags = r.flags;
             }
             showToast('success', seen ? 'Marked unread' : 'Marked read');
         } catch {
-            showToast('error', 'Failed to update read state');
+            if (stillOwner(user, epoch)) showToast('error', 'Failed to update read state');
         }
     }
 

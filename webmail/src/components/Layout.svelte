@@ -416,25 +416,35 @@
     async function createFolder(parent: string | null) {
         const fresh = prompt(parent ? `New subfolder under "${parent}":` : 'New folder name:');
         if (!fresh) return;
+        const user = currentUser();
         const delim = ui.mailboxes[0]?.delimiter || '/';
         const path = parent ? `${parent}${delim}${fresh}` : fresh;
         await createMailbox(path);
+        if (currentUser() !== user) return;
         await refreshMailboxes();
+        if (currentUser() !== user) return;
         showToast('success', `Folder created: ${path}`);
     }
     async function renameFolder(oldPath: string, newPath: string) {
+        const user = currentUser();
         await renameMailbox(oldPath, newPath);
+        if (currentUser() !== user) return;
         if (ui.selectedPath === oldPath) ui.selectedPath = newPath;
         await refreshMailboxes();
+        if (currentUser() !== user) return;
         showToast('success', `Renamed to ${newPath}`);
     }
     async function deleteFolder(path: string) {
+        const user = currentUser();
         await deleteMailbox(path);
+        if (currentUser() !== user) return;
         if (ui.selectedPath === path) {
             ui.selectedPath = 'INBOX';
             await refreshMessages({ resetPage: true });
+            if (currentUser() !== user) return;
         }
         await refreshMailboxes();
+        if (currentUser() !== user) return;
         showToast('success', `Deleted ${path}`);
     }
 
@@ -564,15 +574,16 @@
         const reqPage = ui.messagesPage;
         const reqUser = user;
         const stillWanted = () =>
-            ui.selectedPath === reqPath
+            seq === refreshSeq
+            && ui.selectedPath === reqPath
             && ui.messagesPage === reqPage
             && currentUser() === reqUser
             && effectiveSearch() === search;
         try {
             const r = await listMessages(reqPath, { page: reqPage, pageSize: pageSize(), search, include: 'attachments' });
+            if (!stillWanted()) return;
             // Always keyed by the request, never by whatever is selected now.
             cache.putMessageList(reqUser, reqPath, reqPage, search, r);
-            if (!stillWanted()) return;
             ui.messages = r.messages;
             ui.messagesTotal = r.total;
             messagesShownFor = { user: reqUser, path: reqPath, page: reqPage, search };
@@ -597,6 +608,7 @@
     // scrolled near the bottom — and the crawler below uses it to drain
     // the entire mailbox when a non-trivial filter is active.
     let appendingMore = $state(false);
+    let appendSeq = 0;
     async function loadMoreMessages() {
         if (appendingMore || ui.messagesLoading) return;
         if (ui.messages.length >= ui.messagesTotal) return;
@@ -604,6 +616,8 @@
         const nextPage = Math.floor(ui.messages.length / SERVER_PAGE_CAP);
         const search = effectiveSearch();
         const path = ui.selectedPath;
+        const user = currentUser();
+        const seq = ++appendSeq;
         appendingMore = true;
         try {
             const r = await listMessages(path, {
@@ -612,7 +626,11 @@
                 search,
                 include: 'attachments'
             });
-            if (ui.selectedPath !== path || effectiveSearch() !== search || ui.searchScope === 'all') return;
+            if (seq !== appendSeq
+                || currentUser() !== user
+                || ui.selectedPath !== path
+                || effectiveSearch() !== search
+                || ui.searchScope === 'all') return;
             const seen = new Set(ui.messages.map((m) => m.uid));
             const fresh = r.messages.filter((m) => !seen.has(m.uid));
             ui.messages = [...ui.messages, ...fresh];
@@ -623,7 +641,9 @@
                 recordEnvelope(m.envelope.cc);
             }
         } catch { /* fail silently for the auto-loader */ }
-        finally { appendingMore = false; }
+        finally {
+            if (seq === appendSeq) appendingMore = false;
+        }
     }
 
     // ----- Background crawler ------------------------------------------------
@@ -650,12 +670,13 @@
         scanAbort = ctrl;
         const search = effectiveSearch();
         const path = ui.selectedPath;
+        const user = currentUser();
         // Initial guess at total — gets refined after the first response.
         const total = Math.max(ui.messagesTotal || 0, ui.messages.length);
         scanState = { scanned: ui.messages.length, total, reason };
         try {
             while (!ctrl.signal.aborted) {
-                if (ui.selectedPath !== path) break;
+                if (currentUser() !== user || ui.selectedPath !== path || effectiveSearch() !== search) break;
                 if (ui.messages.length >= ui.messagesTotal) break;
                 const nextPage = Math.floor(ui.messages.length / SERVER_PAGE_CAP);
                 const r = await listMessages(path, {
@@ -664,7 +685,7 @@
                     search,
                     include: 'attachments'
                 });
-                if (ctrl.signal.aborted || ui.selectedPath !== path || effectiveSearch() !== search) break;
+                if (ctrl.signal.aborted || currentUser() !== user || ui.selectedPath !== path || effectiveSearch() !== search) break;
                 const seen = new Set(ui.messages.map((m) => m.uid));
                 const fresh = r.messages.filter((m) => !seen.has(m.uid));
                 if (!fresh.length) break;
@@ -747,13 +768,21 @@
         const user = currentUser();
         const details: Record<number, MessageDetailBody> = {};
         const threadId = thread.id;
+        const stillWanted = () =>
+            currentUser() === user
+            && ui.selectedPath === path
+            && ui.selectedUid === uid
+            && ui.conversationStack?.threadId === threadId;
         try {
             await Promise.all(
                 thread.messages.map(async (m) => {
+                    if (!stillWanted()) return;
                     try {
                         let body = await cache.getMessageBody(user, path, m.uid);
+                        if (!stillWanted()) return;
                         if (!body) {
                             body = await getMessage(path, m.uid);
+                            if (!stillWanted()) return;
                             cache.putMessageBody(user, path, m.uid, body);
                         }
                         details[m.uid] = body;
@@ -762,11 +791,11 @@
                     }
                 })
             );
-            if (currentUser() === user && ui.selectedUid === uid && ui.conversationStack?.threadId === threadId) {
+            if (stillWanted()) {
                 ui.conversationDetails = details;
             }
         } finally {
-            if (currentUser() === user && ui.selectedUid === uid) ui.conversationLoading = false;
+            if (stillWanted()) ui.conversationLoading = false;
         }
     }
 
@@ -791,6 +820,10 @@
         // bulk actions cannot confuse UIDs from different mailboxes.
         const row = ui.messages.find((m) => m.uid === uid && (!mailbox || m.mailbox === mailbox));
         if (ui.searchScope === 'all' && row?.mailbox) {
+            // The aggregate request may still be fetching later folders.
+            // Abort it before changing scope so a late response cannot
+            // repopulate the list with cross-folder results.
+            cancelGlobalSearch();
             ui.selectedPath = row.mailbox;
             ui.searchScope = 'folder';
             clearSelection();
@@ -895,12 +928,20 @@
         mailboxSeq++;
         refreshSeq++;
         detailSeq++;
+        appendSeq++;
+        appendingMore = false;
         cancelGlobalSearch();
         cancelScan();
         searchInput = '';
+        searchSuggestOpen = false;
         mailboxInfo = null;
         lastLoginWarning = null;
         lastLoginDismissed = false;
+        sentExpanded = null;
+        inboxSummaryOpen = false;
+        inboxSummarySnapshot = [];
+        voiceModeOpen = false;
+        lastUnseenByPath = {};
         Object.assign(ui, {
             mailboxes: [],
             messages: [],
@@ -913,11 +954,31 @@
             conversationStack: null,
             conversationDetails: {},
             conversationLoading: false,
+            composeOpen: false,
+            composeContext: null,
+            aiPanelOpen: false,
+            aiSummary: null,
+            aiSummaryLoading: false,
+            aiSummaryError: null,
+            aiDraft: null,
+            aiDraftLoading: false,
+            aiDraftError: null,
+            aiActions: null,
+            aiActionsLoading: false,
+            aiActionsError: null,
+            aiTranslate: null,
+            aiTranslateLoading: false,
+            aiTranslateError: null,
+            suggestedEvent: null,
+            suggestLoading: false,
+            pendingAttachment: null,
+            toast: null,
             search: '',
             searchScope: 'folder',
             messagesPage: 0,
             messagesLoading: false,
-            messagesError: null
+            messagesError: null,
+            bulkProgress: null
         });
     }
 
@@ -962,9 +1023,11 @@
         observedUser = user;
         resetMailState();
         if (user) {
+            shortcutsItems.set([]);
             void refreshMailboxes();
             void refreshMessages({ resetPage: true });
             void loadMailboxInfo();
+            void loadShortcuts();
             void checkLastLogin();
         }
     });
@@ -1045,7 +1108,7 @@
 
         try {
             for (let i = 0; i < folders.length; i++) {
-                if (ctrl.signal.aborted || currentUser() !== user) break;
+                if (ctrl.signal.aborted || currentUser() !== user || ui.searchScope !== 'all') break;
                 const path = folders[i];
                 try {
                     // First page is enough to surface most hits without
@@ -1058,7 +1121,7 @@
                         search: q,
                         include: 'attachments'
                     });
-                    if (ctrl.signal.aborted || currentUser() !== user) break;
+                    if (ctrl.signal.aborted || currentUser() !== user || ui.searchScope !== 'all') break;
                     for (const msg of r.messages) {
                         const key = `${path}\u0000${msg.uid}`;
                         if (seenKey.has(key)) continue;
@@ -1073,10 +1136,13 @@
                     ui.messages = [...aggregated];
                     ui.messagesTotal = aggregated.length;
                 } catch { /* per-folder errors are non-fatal */ }
+                if (ctrl.signal.aborted || currentUser() !== user || ui.searchScope !== 'all') break;
                 globalScanState = { scanned: i + 1, total: folders.length, reason: 'global-search' };
             }
         } finally {
-            if (currentUser() === user) ui.messagesLoading = false;
+            if (globalSearchAbort === ctrl && currentUser() === user && ui.searchScope === 'all') {
+                ui.messagesLoading = false;
+            }
             if (globalSearchAbort === ctrl) globalSearchAbort = null;
             // Leave scanState visible briefly so the user sees the final
             // count, then clear it.
@@ -1100,70 +1166,82 @@
 
     async function toggleStar(uid: number) {
         if (guardAggregateMutation()) return;
+        const user = currentUser();
+        const path = ui.selectedPath;
         const li = ui.messages.find((m) => m.uid === uid);
         if (!li) return;
         const isFlagged = li.flags.includes('\\Flagged');
         try {
-            const r = await modifyFlags(ui.selectedPath, uid, isFlagged ? { remove: ['\\Flagged'] } : { add: ['\\Flagged'] });
+            const r = await modifyFlags(path, uid, isFlagged ? { remove: ['\\Flagged'] } : { add: ['\\Flagged'] });
+            if (currentUser() !== user || ui.selectedPath !== path) return;
             li.flags = r.flags;
             if (ui.detail && ui.detail.uid === uid) ui.detail.flags = r.flags;
         } catch (err) {
-            showToast('error', describe(err, 'Failed to update star'));
+            if (currentUser() === user) showToast('error', describe(err, 'Failed to update star'));
         }
     }
 
     async function toggleUnread(uid: number) {
         if (guardAggregateMutation()) return;
+        const user = currentUser();
+        const path = ui.selectedPath;
         const li = ui.messages.find((m) => m.uid === uid);
         if (!li) return;
         const seen = li.flags.includes('\\Seen');
         try {
-            const r = await modifyFlags(ui.selectedPath, uid, seen ? { remove: ['\\Seen'] } : { add: ['\\Seen'] });
+            const r = await modifyFlags(path, uid, seen ? { remove: ['\\Seen'] } : { add: ['\\Seen'] });
+            if (currentUser() !== user || ui.selectedPath !== path) return;
             li.flags = r.flags;
             if (ui.detail && ui.detail.uid === uid) ui.detail.flags = r.flags;
         } catch (err) {
-            showToast('error', describe(err, 'Failed to update read state'));
+            if (currentUser() === user) showToast('error', describe(err, 'Failed to update read state'));
         }
     }
 
     // Drops a row that has left the current folder (moved or deleted) from
     // the list, the selection and the cached page.
-    function removeFromList(uid: number, from: string) {
+    function removeFromList(uid: number, from: string, user: string) {
         ui.messages = ui.messages.filter((m) => m.uid !== uid);
         ui.messagesTotal = Math.max(0, ui.messagesTotal - 1);
         if (ui.selectedUid === uid) {
             ui.selectedUid = null;
             ui.detail = null;
         }
-        cache.invalidatePath(currentUser(), from);
+        cache.invalidatePath(user, from);
     }
 
     async function trashMessage(uid: number) {
         if (guardAggregateMutation()) return;
         const trashBox = trashFolderName();
+        const user = currentUser();
         const from = ui.selectedPath;
         try {
             const isHardDelete = from === trashBox;
             if (isHardDelete) await deleteMessage(from, uid);
             else await moveMessage(from, uid, trashBox);
-            removeFromList(uid, from);
+            cache.invalidatePath(user, from);
+            if (currentUser() !== user || ui.selectedPath !== from) return;
+            removeFromList(uid, from, user);
             if (!isHardDelete) recordUndo('trash', uid, from, trashBox);
             showToast('success', isHardDelete ? 'Deleted' : 'Moved to Trash');
         } catch (err) {
-            showToast('error', describe(err, 'Failed to delete'));
+            if (currentUser() === user) showToast('error', describe(err, 'Failed to delete'));
         }
     }
 
     async function moveTo(uid: number, destPath: string) {
         if (guardAggregateMutation()) return;
+        const user = currentUser();
         const from = ui.selectedPath;
         try {
             await moveMessage(from, uid, destPath);
-            removeFromList(uid, from);
+            cache.invalidatePath(user, from);
+            if (currentUser() !== user || ui.selectedPath !== from) return;
+            removeFromList(uid, from, user);
             recordUndo('move', uid, from, destPath);
             showToast('success', `Moved to ${destPath}`);
         } catch (err) {
-            showToast('error', describe(err, 'Failed to move'));
+            if (currentUser() === user) showToast('error', describe(err, 'Failed to move'));
         }
     }
 
@@ -1171,12 +1249,15 @@
     // failures, then reloads the folder. Bulk moves are not undoable.
     async function moveMany(uids: number[], dest: string) {
         if (guardAggregateMutation()) return;
+        const user = currentUser();
         const from = ui.selectedPath;
         ui.undo = null;
         for (const uid of uids) {
+            if (currentUser() !== user) break;
             try { await moveMessage(from, uid, dest); } catch { /* skip */ }
         }
-        cache.invalidatePath(currentUser(), from);
+        cache.invalidatePath(user, from);
+        if (currentUser() !== user || ui.selectedPath !== from) return;
         if (ui.selectedUid !== null && uids.includes(ui.selectedUid)) {
             ui.selectedUid = null;
             ui.detail = null;
@@ -1185,6 +1266,7 @@
     }
 
     function openCompose(replyTo?: MessageDetailType | null, mode: 'new' | 'reply' | 'replyAll' | 'forward' = replyTo ? 'reply' : 'new') {
+        if (replyTo && (!ui.detail || ui.detail.uid !== replyTo.uid)) return;
         ui.composeOpen = true;
         ui.composeContext = { replyTo: replyTo || null, mode };
     }
@@ -1251,6 +1333,7 @@
      */
     async function blockSenderForUid(uid: number, pattern?: string) {
         if (guardAggregateMutation()) return;
+        const user = currentUser();
         const m = ui.messages.find((x) => x.uid === uid);
         const addr = pattern || m?.envelope?.from?.[0]?.address;
         if (!addr) {
@@ -1275,15 +1358,17 @@
             // clean folder. Fall through with the count unknown and say so.
             doomed = -1;
         }
+        if (currentUser() !== user) return;
         const scope = doomed < 0
             ? `Block all mail matching ${addr}?\n\nThe message count in ${folder} could not be read, so existing messages may or may not be deleted.`
             : `Block all mail matching ${addr} and permanently delete ${doomed} existing message${doomed === 1 ? '' : 's'} from ${folder}?\n\nThis cannot be undone.`;
         if (!confirm(scope)) return;
         try {
             await apiBlockSender(addr);
+            if (currentUser() !== user) return;
         } catch (err) {
             const msg = err instanceof ApiError ? (err.detail || err.title) : (err as Error).message;
-            showToast('error', msg || 'Could not block sender');
+            if (currentUser() === user) showToast('error', msg || 'Could not block sender');
             return;
         }
         // Deleted after the block, as reasoned above. The count is not
@@ -1291,6 +1376,8 @@
         // is what gets expunged, and what it reports is what the toast says.
         try {
             const res = await bulkDeleteMessages(folder, { sender: addr });
+            cache.invalidatePath(user, folder);
+            if (currentUser() !== user || ui.selectedPath !== folder) return;
             if (res.deleted) {
                 // Local state: drop the rows and the cached folder so the
                 // list cannot show messages the server has just removed.
@@ -1315,7 +1402,6 @@
                 if ([...gone].some((g) => ui.selected.has(g))) {
                     ui.selected = new Set([...ui.selected].filter((s) => !gone.has(s)));
                 }
-                cache.invalidatePath(currentUser(), folder);
                 // Only when something was actually destroyed: the shred cue
                 // is feedback about deletion, and firing it for a 0-match
                 // block would claim mail was destroyed when none was.
@@ -1331,8 +1417,10 @@
             // The block stands. Say exactly that, rather than a generic
             // failure that implies the whole action rolled back.
             const msg = err instanceof ApiError ? (err.detail || err.title) : (err as Error).message;
-            showToast('error', `Blocked ${addr}, but the delete failed: ${msg || 'unknown error'}`);
-            void refreshMessages({ force: true });
+            if (currentUser() === user) {
+                showToast('error', `Blocked ${addr}, but the delete failed: ${msg || 'unknown error'}`);
+                void refreshMessages({ force: true });
+            }
         }
     }
 
@@ -1360,15 +1448,18 @@
 
     async function archiveMessage(uid: number) {
         if (guardAggregateMutation()) return;
+        const user = currentUser();
         const dest = archiveFolderName();
         const from = ui.selectedPath;
         try {
             await moveMessage(from, uid, dest);
-            removeFromList(uid, from);
+            cache.invalidatePath(user, from);
+            if (currentUser() !== user || ui.selectedPath !== from) return;
+            removeFromList(uid, from, user);
             recordUndo('archive', uid, from, dest);
             showToast('success', 'Archived');
         } catch (err) {
-            showToast('error', describe(err, 'Failed to archive'));
+            if (currentUser() === user) showToast('error', describe(err, 'Failed to archive'));
         }
     }
 
@@ -1376,15 +1467,18 @@
         if (guardAggregateMutation()) return;
         const u = ui.undo;
         if (!u) return;
+        const user = currentUser();
         ui.undo = null;
         try {
             await moveMessage(u.toPath, u.uid, u.fromPath);
-            cache.invalidatePath(currentUser(), u.fromPath);
-            cache.invalidatePath(currentUser(), u.toPath);
+            cache.invalidatePath(user, u.fromPath);
+            cache.invalidatePath(user, u.toPath);
+            if (currentUser() !== user) return;
             await refreshMessages({ force: true });
+            if (currentUser() !== user) return;
             showToast('success', 'Undone');
         } catch (err) {
-            showToast('error', describe(err, 'Undo failed'));
+            if (currentUser() === user) showToast('error', describe(err, 'Undo failed'));
         }
     }
 
@@ -1394,14 +1488,19 @@
         if (guardAggregateMutation()) return;
         const ids = [...ui.selected];
         if (!ids.length) return;
+        const user = currentUser();
+        const path = ui.selectedPath;
         for (const uid of ids) {
+            if (currentUser() !== user) break;
             try {
-                const r = await modifyFlags(ui.selectedPath, uid, seen ? { add: ['\\Seen'] } : { remove: ['\\Seen'] });
+                const r = await modifyFlags(path, uid, seen ? { add: ['\\Seen'] } : { remove: ['\\Seen'] });
+                if (currentUser() !== user) break;
                 const li = ui.messages.find((m) => m.uid === uid);
                 if (li) li.flags = r.flags;
             } catch { /* skip */ }
         }
-        cache.invalidatePath(currentUser(), ui.selectedPath);
+        cache.invalidatePath(user, path);
+        if (currentUser() !== user || ui.selectedPath !== path) return;
         clearSelection();
         showToast('success', `${seen ? 'Marked read' : 'Marked unread'}: ${ids.length}`);
     }
@@ -1410,27 +1509,32 @@
         if (guardAggregateMutation()) return;
         const ids = [...ui.selected];
         if (!ids.length) return;
+        const user = currentUser();
         clearSelection();
         await moveMany(ids, archiveFolderName());
-        showToast('success', `Archived ${ids.length}`);
+        if (currentUser() === user) showToast('success', `Archived ${ids.length}`);
     }
 
     async function bulkTrash() {
         if (guardAggregateMutation()) return;
         const ids = [...ui.selected];
         if (!ids.length) return;
+        const user = currentUser();
         const dest = trashFolderName();
         const from = ui.selectedPath;
         ui.undo = null;
         for (const uid of ids) {
+            if (currentUser() !== user) break;
             try {
                 if (from === dest) await deleteMessage(from, uid);
                 else await moveMessage(from, uid, dest);
             } catch { /* skip */ }
         }
-        cache.invalidatePath(currentUser(), from);
+        cache.invalidatePath(user, from);
+        if (currentUser() !== user || ui.selectedPath !== from) return;
         clearSelection();
         await refreshMessages({ force: true });
+        if (currentUser() !== user) return;
         showToast('success', `Moved to Trash: ${ids.length}`);
     }
 
@@ -1458,31 +1562,39 @@
     // each press shows only what's actually new — without losing
     // already-read emails the user may have skimmed but not actioned.
     const BRIEF_TS_KEY = 'webmail.briefme.lastTs.v1';
-    function readBriefTs(path: string): number {
+    function briefTsKey(user: string): string {
+        return `${BRIEF_TS_KEY}.${encodeURIComponent(user)}`;
+    }
+    function readBriefTs(path: string, user: string): number {
+        if (!user) return 0;
         try {
-            const raw = localStorage.getItem(BRIEF_TS_KEY);
+            const raw = localStorage.getItem(briefTsKey(user));
             if (!raw) return 0;
             const map = JSON.parse(raw);
             const v = map?.[path];
             return typeof v === 'number' ? v : 0;
         } catch { return 0; }
     }
-    function writeBriefTs(path: string, ts: number) {
+    function writeBriefTs(path: string, ts: number, user: string) {
+        if (!user) return;
         try {
-            const raw = localStorage.getItem(BRIEF_TS_KEY);
+            const key = briefTsKey(user);
+            const raw = localStorage.getItem(key);
             const map = raw ? JSON.parse(raw) : {};
             map[path] = ts;
-            localStorage.setItem(BRIEF_TS_KEY, JSON.stringify(map));
+            localStorage.setItem(key, JSON.stringify(map));
         } catch { /* quota */ }
     }
 
     async function summariseAndMarkRead() {
         if (guardAggregateMutation()) return;
+        const user = currentUser();
+        const path = ui.selectedPath;
         // Window: only include messages newer than the last time the
         // user pressed Brief me on this folder. Include both read AND
         // unread so emails the user opened-but-didn't-action still
         // make the briefing.
-        const lastTs = readBriefTs(ui.selectedPath);
+        const lastTs = readBriefTs(path, user);
         const allVisible = ui.messages.map((m) => {
             const dStr = m.internalDate || m.envelope.date;
             const dMs = dStr ? Date.parse(dStr) : 0;
@@ -1511,7 +1623,7 @@
         // doesn't know about it.
         inboxSummarySnapshot = windowed.map(({ ts: _ts, ...rest }) => rest);
         // Save the click moment so the next brief windows from here.
-        writeBriefTs(ui.selectedPath, Date.now());
+        writeBriefTs(path, Date.now(), user);
         inboxSummaryOpen = true;
         // Don't await — let the modal render immediately while the IMAP
         // flag updates trickle through.
@@ -1520,6 +1632,7 @@
 
     async function markFolderRead() {
         if (guardAggregateMutation()) return;
+        const user = currentUser();
         const path = ui.selectedPath;
         const unreadIds = ui.messages.filter((m) => !m.flags.includes('\\Seen')).map((m) => m.uid);
         if (!unreadIds.length) {
@@ -1527,14 +1640,17 @@
             return;
         }
         for (const uid of unreadIds) {
+            if (currentUser() !== user) break;
             try {
                 const r = await modifyFlags(path, uid, { add: ['\\Seen'] });
+                if (currentUser() !== user) break;
                 const li = ui.messages.find((m) => m.uid === uid);
                 if (li) li.flags = r.flags;
             } catch { /* skip */ }
         }
-        cache.invalidatePath(currentUser(), path);
-        cache.invalidateMailboxes(currentUser());
+        cache.invalidatePath(user, path);
+        cache.invalidateMailboxes(user);
+        if (currentUser() !== user || ui.selectedPath !== path) return;
         showToast('success', `${unreadIds.length} marked read`);
         refreshMailboxes();
     }
@@ -1620,9 +1736,10 @@
     }
 
     async function loadShortcuts() {
+        const user = currentUser();
         try {
             const r = await getShortcuts();
-            shortcutsItems.set(r.shortcuts || []);
+            if (currentUser() === user) shortcutsItems.set(r.shortcuts || []);
         } catch { /* silent — non-fatal */ }
     }
 
@@ -1642,9 +1759,10 @@
     }
 
     async function loadMailboxInfo() {
+        const user = currentUser();
         try {
             const m = await getMailboxInfo();
-            mailboxInfo = m;
+            if (currentUser() === user) mailboxInfo = m;
         } catch { /* mailcow DB optional — silent fallback */ }
     }
 
@@ -1657,8 +1775,10 @@
     }
 
     async function checkLastLogin() {
+        const user = currentUser();
         try {
             const r = await getLogins(5);
+            if (currentUser() !== user) return;
             const list = r.logins || [];
             // [0] is the freshest = the current session. [1] is the previous.
             const cur = list[0];
@@ -1680,7 +1800,9 @@
                 flag: flagEmoji(code) || ''
             };
             // Auto-hide after 2 minutes of being signed in.
-            setTimeout(() => { lastLoginDismissed = true; }, 2 * 60 * 1000);
+            setTimeout(() => {
+                if (currentUser() === user) lastLoginDismissed = true;
+            }, 2 * 60 * 1000);
         } catch { /* mailcow DB unavailable — skip */ }
     }
 
@@ -2199,8 +2321,9 @@
                 onRename={renameFolder}
                 onDelete={deleteFolder}
                 onDropMessages={async (uids, destPath) => {
+                    const user = currentUser();
                     await moveMany(uids, destPath);
-                    showToast('success', `Moved ${uids.length} → ${destPath}`);
+                    if (currentUser() === user) showToast('success', `Moved ${uids.length} → ${destPath}`);
                 }}
             />
         </div>
@@ -2407,19 +2530,25 @@
             onArchiveSelected={(uids) => moveMany(uids, archiveFolderName())}
             onTrashSelected={(uids) => moveMany(uids, trashFolderName())}
             onMarkReadSelected={async (uids) => {
+                const user = currentUser();
                 const from = ui.selectedPath;
                 for (const uid of uids) {
+                    if (currentUser() !== user) break;
                     try { await modifyFlags(from, uid, { add: ['\\Seen'] }); } catch { /* skip */ }
                 }
-                cache.invalidatePath(currentUser(), from);
+                cache.invalidatePath(user, from);
+                if (currentUser() !== user || ui.selectedPath !== from) return;
                 await refreshMessages({ force: true });
             }}
             onStarSelected={async (uids) => {
+                const user = currentUser();
                 const from = ui.selectedPath;
                 for (const uid of uids) {
+                    if (currentUser() !== user) break;
                     try { await modifyFlags(from, uid, { add: ['\\Flagged'] }); } catch { /* skip */ }
                 }
-                cache.invalidatePath(currentUser(), from);
+                cache.invalidatePath(user, from);
+                if (currentUser() !== user || ui.selectedPath !== from) return;
                 await refreshMessages({ force: true });
             }}
             onAutoReply={async (uid, label) => {
@@ -2427,9 +2556,12 @@
                 // actual email, then open a fresh AI thread seeded with a
                 // "draft a reply" prompt + the email context block. The
                 // chat UI auto-sends so a draft starts streaming on land.
+                const user = currentUser();
+                const path = ui.selectedPath;
                 inboxSummaryOpen = false;
                 try {
-                    const msg = await getMessage(ui.selectedPath, uid);
+                    const msg = await getMessage(path, uid);
+                    if (currentUser() !== user || ui.selectedPath !== path) return;
                     const fromName = msg.envelope.from?.[0]?.name || '';
                     const fromAddr = msg.envelope.from?.[0]?.address || '';
                     const bodyText = (msg.text || '').slice(0, 4000);
@@ -2455,7 +2587,7 @@
                     requestAutoSendAi(t.id);
                     ui.app = 'ai';
                 } catch (err) {
-                    showToast('error', `Couldn\'t open AI reply: ${(err as Error).message}`);
+                    if (currentUser() === user) showToast('error', `Couldn\'t open AI reply: ${(err as Error).message}`);
                 }
             }}
         />

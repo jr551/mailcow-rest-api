@@ -31,15 +31,15 @@ export function setDriveConfig(config: DriveConfig | null) {
     }
 }
 
-function getBaseUrl(): string {
-    if (!cfg) throw new Error('Drive not configured');
-    const ep = cfg.endpoint.replace(/\/$/, '');
-    return `${ep}/${cfg.bucket}`;
+function getBaseUrl(config: DriveConfig | null = cfg): string {
+    if (!config) throw new Error('Drive not configured');
+    const ep = config.endpoint.replace(/\/$/, '');
+    return `${ep}/${config.bucket}`;
 }
 
-function prefixKey(key: string): string {
-    if (!cfg) throw new Error('Drive not configured');
-    const p = cfg.prefix.replace(/\/$/, '');
+function prefixKey(key: string, config: DriveConfig | null = cfg): string {
+    if (!config) throw new Error('Drive not configured');
+    const p = config.prefix.replace(/\/$/, '');
     if (!p) return key;
     return p + '/' + key;
 }
@@ -152,12 +152,14 @@ function parseListXml(xml: string, parentPath: string): DriveItem[] {
     return items;
 }
 
-export async function listObjects(path: string): Promise<DriveItem[]> {
-    if (!aws || !cfg) throw new Error('Drive not configured');
-    const prefix = prefixKey(path ? path + '/' : '');
+export async function listObjects(path: string, signal?: AbortSignal): Promise<DriveItem[]> {
+    const client = aws;
+    const config = cfg;
+    if (!client || !config) throw new Error('Drive not configured');
+    const prefix = prefixKey(path ? path + '/' : '', config);
     const delimiter = '/';
-    const url = `${getBaseUrl()}?list-type=2&prefix=${encodeKey(prefix)}&delimiter=${encodeURIComponent(delimiter)}`;
-    const res = await aws.fetch(url);
+    const url = `${getBaseUrl(config)}?list-type=2&prefix=${encodeKey(prefix)}&delimiter=${encodeURIComponent(delimiter)}`;
+    const res = await client.fetch(url, { signal });
     if (!res.ok) {
         const text = await res.text();
         throw new Error(`S3 list failed: ${res.status} ${text}`);
@@ -174,24 +176,31 @@ export interface PutProgress {
 export async function putObject(
     path: string,
     file: File,
-    onProgress?: (p: PutProgress) => void
+    onProgress?: (p: PutProgress) => void,
+    signal?: AbortSignal
 ): Promise<void> {
-    if (!aws || !cfg) throw new Error('Drive not configured');
-    const key = prefixKey(path);
-    const url = `${getBaseUrl()}/${encodeKey(key)}`;
+    const client = aws;
+    const config = cfg;
+    if (!client || !config) throw new Error('Drive not configured');
+    if (signal?.aborted) throw signal.reason || new DOMException('The operation was aborted.', 'AbortError');
+    const key = prefixKey(path, config);
+    const url = `${getBaseUrl(config)}/${encodeKey(key)}`;
 
     // We need XMLHttpRequest's `upload.onprogress` events to drive a real
     // % bar + transfer speed. fetch() can't do upload progress in any
     // browser today (request streams aren't shipped). Sign with aws4fetch
     // first (it computes SigV4) then replay the signed request via XHR.
-    const signed = await aws.sign(url, {
+    const signed = await client.sign(url, {
         method: 'PUT',
         body: file,
         headers: { 'content-type': file.type || 'application/octet-stream' }
     });
+    if (signal?.aborted) throw signal.reason || new DOMException('The operation was aborted.', 'AbortError');
 
     return new Promise<void>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
+        const cleanup = () => signal?.removeEventListener('abort', onAbort);
+        const onAbort = () => xhr.abort();
         xhr.open('PUT', signed.url, true);
         signed.headers.forEach((value, name) => {
             // Some headers (host, content-length) are unsafe to set on XHR;
@@ -206,47 +215,67 @@ export async function putObject(
             onProgress({ loaded: e.loaded, total });
         };
         xhr.onload = () => {
+            cleanup();
             if (xhr.status >= 200 && xhr.status < 300) {
                 resolve();
             } else {
                 reject(new Error(`S3 upload failed: ${xhr.status} ${xhr.responseText.slice(0, 200)}`));
             }
         };
-        xhr.onerror = () => reject(new Error('S3 upload network error'));
-        xhr.onabort = () => reject(new Error('S3 upload aborted'));
-        xhr.send(file);
+        xhr.onerror = () => {
+            cleanup();
+            reject(new Error('S3 upload network error'));
+        };
+        xhr.onabort = () => {
+            cleanup();
+            reject(signal?.reason || new DOMException('The operation was aborted.', 'AbortError'));
+        };
+        if (signal?.aborted) {
+            reject(signal.reason || new DOMException('The operation was aborted.', 'AbortError'));
+            return;
+        }
+        signal?.addEventListener('abort', onAbort, { once: true });
+        try {
+            xhr.send(file);
+        } catch (e) {
+            cleanup();
+            reject(e);
+        }
     });
 }
 
-async function deleteFullKey(key: string): Promise<void> {
-    if (!aws) throw new Error('Drive not configured');
-    const url = `${getBaseUrl()}/${encodeKey(key)}`;
-    const res = await aws.fetch(url, { method: 'DELETE' });
+async function deleteFullKey(key: string, client: AwsClient, config: DriveConfig, signal?: AbortSignal): Promise<void> {
+    const url = `${getBaseUrl(config)}/${encodeKey(key)}`;
+    const res = await client.fetch(url, { method: 'DELETE', signal });
     if (!res.ok) {
         const text = await res.text();
         throw new Error(`S3 delete failed: ${res.status} ${text}`);
     }
 }
 
-export async function deleteObject(path: string): Promise<void> {
-    if (!aws || !cfg) throw new Error('Drive not configured');
-    await deleteFullKey(prefixKey(path));
+export async function deleteObject(path: string, signal?: AbortSignal): Promise<void> {
+    const client = aws;
+    const config = cfg;
+    if (!client || !config) throw new Error('Drive not configured');
+    await deleteFullKey(prefixKey(path, config), client, config, signal);
 }
 
 /** Delete a folder and everything under it. A folder is only a key prefix
  *  (plus an optional zero-byte placeholder), so removing the placeholder
  *  alone would leave every file in the bucket. */
-export async function deleteFolder(path: string): Promise<void> {
-    if (!aws || !cfg) throw new Error('Drive not configured');
+export async function deleteFolder(path: string, signal?: AbortSignal): Promise<void> {
+    const client = aws;
+    const config = cfg;
+    if (!client || !config) throw new Error('Drive not configured');
     const clean = path.replace(/^\/+|\/+$/g, '');
     if (!clean) throw new Error('Refusing to delete the drive root');
-    const prefix = prefixKey(clean + '/');
+    const prefix = prefixKey(clean + '/', config);
     const keys: string[] = [];
     let token = '';
     do {
-        const url = `${getBaseUrl()}?list-type=2&prefix=${encodeKey(prefix)}` +
+        const url = `${getBaseUrl(config)}?list-type=2&prefix=${encodeKey(prefix)}` +
             (token ? `&continuation-token=${encodeURIComponent(token)}` : '');
-        const res = await aws.fetch(url);
+        const res = await client.fetch(url, { signal });
         if (!res.ok) {
             const text = await res.text();
             throw new Error(`S3 list failed: ${res.status} ${text}`);
@@ -262,25 +291,32 @@ export async function deleteFolder(path: string): Promise<void> {
     } while (token);
     if (!keys.includes(prefix)) keys.push(prefix);
     for (let i = 0; i < keys.length; i += 8) {
-        await Promise.all(keys.slice(i, i + 8).map(deleteFullKey));
+        if (signal?.aborted) throw signal.reason || new DOMException('The operation was aborted.', 'AbortError');
+        await Promise.all(keys.slice(i, i + 8).map((key) => deleteFullKey(key, client, config, signal)));
     }
 }
 
 /** Presigned GET URL. Defaults to aws4fetch's 24h; pass a shorter lifetime
  *  for URLs that are only needed to render a preview. */
-export async function getObjectUrl(path: string, expiresSec?: number): Promise<string> {
-    if (!aws || !cfg) throw new Error('Drive not configured');
-    const key = prefixKey(path);
-    const url = `${getBaseUrl()}/${encodeKey(key)}${expiresSec ? `?X-Amz-Expires=${Math.floor(expiresSec)}` : ''}`;
-    const signed = await aws.sign(url, { method: 'GET', aws: { signQuery: true } });
+export async function getObjectUrl(path: string, expiresSec?: number, signal?: AbortSignal): Promise<string> {
+    const client = aws;
+    const config = cfg;
+    if (!client || !config) throw new Error('Drive not configured');
+    if (signal?.aborted) throw signal.reason || new DOMException('The operation was aborted.', 'AbortError');
+    const key = prefixKey(path, config);
+    const url = `${getBaseUrl(config)}/${encodeKey(key)}${expiresSec ? `?X-Amz-Expires=${Math.floor(expiresSec)}` : ''}`;
+    const signed = await client.sign(url, { method: 'GET', aws: { signQuery: true } });
+    if (signal?.aborted) throw signal.reason || new DOMException('The operation was aborted.', 'AbortError');
     return signed.url.toString();
 }
 
-export async function fetchBlob(path: string): Promise<Blob> {
-    if (!aws || !cfg) throw new Error('Drive not configured');
-    const key = prefixKey(path);
-    const url = `${getBaseUrl()}/${encodeKey(key)}`;
-    const res = await aws.fetch(url);
+export async function fetchBlob(path: string, signal?: AbortSignal): Promise<Blob> {
+    const client = aws;
+    const config = cfg;
+    if (!client || !config) throw new Error('Drive not configured');
+    const key = prefixKey(path, config);
+    const url = `${getBaseUrl(config)}/${encodeKey(key)}`;
+    const res = await client.fetch(url, { signal });
     if (!res.ok) throw new Error(`S3 fetch failed: ${res.status}`);
     return res.blob();
 }

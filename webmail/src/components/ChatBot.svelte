@@ -10,6 +10,7 @@
     import Icon from './Icon.svelte';
     import { showToast } from '../lib/store.svelte';
     import { isChatConfigured, chatTurn, type ChatMessage, type ToolCall } from '../lib/chat.svelte';
+    import { authState } from '../lib/auth.svelte';
     import { renderMarkdown } from '../lib/markdown';
 
     interface Props {
@@ -36,6 +37,21 @@
     let inputEl: HTMLTextAreaElement | undefined = $state();
     let lastToolCalls = $state<ToolCall[]>([]);
     let abortCtrl: AbortController | null = null;
+    let accountEpoch = 0;
+    let observedUser = authState.activeUser;
+
+    $effect(() => {
+        const user = authState.activeUser;
+        if (user === observedUser) return;
+        observedUser = user;
+        accountEpoch += 1;
+        abortCtrl?.abort(new DOMException('Active account changed', 'AbortError'));
+        abortCtrl = null;
+        messages = [];
+        input = '';
+        sending = false;
+        lastToolCalls = [];
+    });
 
     let configured = $derived(isChatConfigured());
 
@@ -54,16 +70,24 @@
     async function send() {
         const text = input.trim();
         if (!text || sending) return;
+        const user = authState.activeUser;
+        if (!user || user !== observedUser) return;
+        const epoch = accountEpoch;
+        const controller = new AbortController();
+        abortCtrl = controller;
+        const stillOwner = () =>
+            authState.activeUser === user && observedUser === user && accountEpoch === epoch;
         input = '';
         messages = [...messages, { role: 'user', content: text }];
-        await scrollToBottom();
         sending = true;
-        abortCtrl = new AbortController();
         const pendingToolCalls: ToolCall[] = [];
         let assistantText = '';
         let assistantReasoning = '';
         try {
-            for await (const ev of chatTurn(messages, { signal: abortCtrl.signal })) {
+            await scrollToBottom();
+            if (!stillOwner()) return;
+            for await (const ev of chatTurn(messages, { signal: controller.signal, accountUser: user })) {
+                if (!stillOwner() || controller.signal.aborted) break;
                 if (ev.type === 'tool_call') {
                     const tc: ToolCall = {
                         id: `pending-${Date.now()}-${Math.random()}`,
@@ -77,27 +101,32 @@
                     assistantText = ev.text || '';
                     if (ev.reasoningContent) assistantReasoning = ev.reasoningContent;
                 } else if (ev.type === 'error') {
+                    if (!stillOwner()) return;
                     showToast('error', ev.text || 'Chat failed');
                     messages = [...messages, { role: 'assistant', content: `_${ev.text || 'Chat failed'}_` }];
                     await scrollToBottom();
                     return;
                 }
             }
-            messages = [...messages, {
-                role: 'assistant',
-                content: assistantText,
-                toolCalls: pendingToolCalls.length ? pendingToolCalls : undefined,
-                ...(assistantReasoning ? { reasoningContent: assistantReasoning } : {})
-            }];
+            if (stillOwner() && !controller.signal.aborted) {
+                messages = [...messages, {
+                    role: 'assistant',
+                    content: assistantText,
+                    toolCalls: pendingToolCalls.length ? pendingToolCalls : undefined,
+                    ...(assistantReasoning ? { reasoningContent: assistantReasoning } : {})
+                }];
+            }
         } catch (err) {
-            if ((err as Error).name !== 'AbortError') {
+            if (stillOwner() && (err as Error).name !== 'AbortError') {
                 showToast('error', (err as Error).message);
             }
         } finally {
-            sending = false;
-            abortCtrl = null;
-            lastToolCalls = [];
-            await scrollToBottom();
+            if (stillOwner()) {
+                sending = false;
+                if (abortCtrl === controller) abortCtrl = null;
+                lastToolCalls = [];
+                await scrollToBottom();
+            }
         }
     }
 

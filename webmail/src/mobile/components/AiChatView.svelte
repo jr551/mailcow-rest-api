@@ -10,6 +10,7 @@
         WRITE_TOOLS
     } from '../../lib/chat.svelte';
     import { settings, capabilities } from '../../lib/settings.svelte';
+    import { authState } from '../../lib/auth.svelte';
     import { navigate, showToast, pushOverlay } from '../lib/store.svelte';
     import Icon from '../../components/Icon.svelte';
     import Toggle from './Toggle.svelte';
@@ -78,11 +79,13 @@
     interface PendingWrite {
         name: string;
         args: Record<string, unknown>;
+        accountUser: string | null;
         resolve: (ok: boolean) => void;
     }
     let pendingWrites = $state<PendingWrite[]>([]);
 
     interface PendingPermission {
+        accountUser: string | null;
         capability: GrantableCapability;
         reason: string;
         resolve: (ok: boolean) => void;
@@ -111,7 +114,9 @@
     };
 
     let active = $derived(aiState.threads.find((t) => t.id === aiState.activeId) ?? null);
-    let bgTask = $derived(active ? backgroundTasks().active.find((t) => t.threadId === active.id) : undefined);
+    let bgTask = $derived(active
+        ? backgroundTasks().active.find((t) => t.threadId === active.id && t.accountUser === authState.activeUser)
+        : undefined);
 
     let toolCatalog = $derived.by(() => {
         const base = aiState.tools.accessEmail ? TOOLS : [];
@@ -187,6 +192,31 @@
         for (const p of perms) p.resolve(false);
     }
 
+    let accountEpoch = 0;
+    let observedUser = authState.activeUser;
+
+    function stillOwner(user: string | null, epoch: number): boolean {
+        return authState.activeUser === user && observedUser === user && accountEpoch === epoch;
+    }
+
+    $effect(() => {
+        const user = authState.activeUser;
+        if (user === observedUser) return;
+        observedUser = user;
+        accountEpoch += 1;
+        abortCtrl?.abort(new DOMException('Active account changed', 'AbortError'));
+        abortCtrl = null;
+        denyPending();
+        input = '';
+        sending = false;
+        pendingImages = [];
+        voiceModeOpen = false;
+        closeThreads();
+        closeSettings();
+        doneFlashThreadId = null;
+        doneFlashStamp = 0;
+    });
+
     function stopTurn() {
         abortCtrl?.abort();
         denyPending();
@@ -195,15 +225,16 @@
     function answerWrite(idx: number, ok: boolean) {
         const w = pendingWrites[idx];
         if (!w) return;
-        w.resolve(ok);
+        w.resolve(ok && authState.activeUser === w.accountUser);
         pendingWrites = pendingWrites.filter((_, i) => i !== idx);
     }
 
     function answerPermission(idx: number, ok: boolean) {
         const p = pendingPermissions[idx];
         if (!p) return;
-        if (ok) setTools({ [p.capability]: true });
-        p.resolve(ok);
+        const allowed = ok && authState.activeUser === p.accountUser;
+        if (allowed) setTools({ [p.capability]: true });
+        p.resolve(allowed);
         pendingPermissions = pendingPermissions.filter((_, i) => i !== idx);
     }
 
@@ -237,6 +268,9 @@
     }
 
     function pickImage(source: 'camera' | 'gallery') {
+        const user = authState.activeUser;
+        const epoch = accountEpoch;
+        if (!user || user !== observedUser) return;
         const el = document.createElement('input');
         el.type = 'file';
         el.accept = 'image/*';
@@ -246,9 +280,10 @@
             if (!file) return;
             try {
                 const dataUrl = await compressImage(file);
+                if (!stillOwner(user, epoch)) return;
                 pendingImages = [...pendingImages, dataUrl];
             } catch {
-                showToast('error', 'Could not attach image — try a smaller file.');
+                if (stillOwner(user, epoch)) showToast('error', 'Could not attach image — try a smaller file.');
             }
         };
         el.click();
@@ -312,6 +347,9 @@
     ];
 
     async function runQuickTool(qt: QuickTool) {
+        const user = authState.activeUser;
+        const epoch = accountEpoch;
+        if (!user || user !== observedUser) return;
         if (qt.needsEmail && !aiState.tools.accessEmail) {
             setTools({ accessEmail: true });
         }
@@ -319,6 +357,7 @@
         input = qt.prompt;
         if (qt.autoSend) {
             await tickScroll();
+            if (!stillOwner(user, epoch)) return;
             void handleSend();
         } else {
             // Defer focus until the textarea finishes its current
@@ -337,6 +376,13 @@
         const text = input.trim();
         const images = pendingImages.slice();
         if ((!text && !images.length) || sending) return;
+        const user = authState.activeUser;
+        if (!user) return;
+        const epoch = accountEpoch;
+        if (user !== observedUser) return;
+        const ctrl = new AbortController();
+        abortCtrl = ctrl;
+        const ownsRun = () => stillOwner(user, epoch) && !ctrl.signal.aborted;
         input = '';
         pendingImages = [];
 
@@ -344,15 +390,14 @@
         const threadId = aiState.activeId!;
         appendMessage(threadId, { role: 'user', content: text, images: images.length ? images : undefined });
         sending = true;
-        await tickScroll();
-
-        const ctrl = new AbortController();
-        abortCtrl = ctrl;
-        const history = active?.messages.slice() || [];
 
         try {
+            await tickScroll();
+            if (!ownsRun()) return;
+            const history = active?.messages.slice() || [];
             for await (const ev of chatTurn(history, {
                 signal: ctrl.signal,
+                accountUser: user,
                 tools: toolCatalog,
                 systemPrompt,
                 modelOverride,
@@ -360,15 +405,18 @@
                 confirmWrite: async (call) => {
                     if (!WRITE_TOOLS.has(call.name)) return true;
                     return new Promise((resolve) => {
-                        pendingWrites = [...pendingWrites, { name: call.name, args: call.args, resolve }];
+                        if (!ownsRun()) { resolve(false); return; }
+                        pendingWrites = [...pendingWrites, { name: call.name, args: call.args, accountUser: user, resolve }];
                     });
                 },
                 confirmPermission: async (req) => {
                     return new Promise((resolve) => {
-                        pendingPermissions = [...pendingPermissions, { capability: req.capability, reason: req.reason, resolve }];
+                        if (!ownsRun()) { resolve(false); return; }
+                        pendingPermissions = [...pendingPermissions, { capability: req.capability, reason: req.reason, accountUser: user, resolve }];
                     });
                 }
             })) {
+                if (!ownsRun()) break;
                 // ChatTurnEvent only emits message/tool_call/error/done.
                 // The previous tool_result branch was dead code — chatTurn
                 // executes tools internally and folds the result into the
@@ -401,16 +449,19 @@
                     appendMessage(threadId, { role: 'assistant', content: `Error: ${ev.text || ''}` });
                 }
                 await tickScroll();
+                if (!ownsRun()) break;
             }
         } catch (err) {
-            if ((err as Error).name !== 'AbortError') {
+            if (stillOwner(user, epoch) && (err as Error).name !== 'AbortError') {
                 appendMessage(threadId, { role: 'assistant', content: `Error: ${(err as Error).message}` });
             }
         } finally {
-            sending = false;
-            if (abortCtrl === ctrl) abortCtrl = null;
-            await tickScroll();
-            if (!ctrl.signal.aborted) {
+            if (stillOwner(user, epoch)) {
+                sending = false;
+                if (abortCtrl === ctrl) abortCtrl = null;
+                await tickScroll();
+            }
+            if (ownsRun()) {
                 // Soft chime + haptic so the user knows the reply landed
                 // even if they switched away from the chat surface.
                 playNotify();
@@ -426,20 +477,23 @@
             // the desktop ChatApp logic) so action-spawned chats whose
             // auto-derived title leaked the email sentinel still get
             // upgraded to a clean LLM-generated label.
-            const t = aiState.threads.find((th) => th.id === threadId);
+            const t = ownsRun() ? aiState.threads.find((th) => th.id === threadId) : undefined;
             const firstUser = t?.messages.find((m) => m.role === 'user');
             const firstAssistant = t?.messages.find((m) => m.role === 'assistant');
             if (t && firstUser && firstAssistant && !t.aiTitled) {
                 const stripped = parseEmailContext(firstUser.content).display || firstUser.content;
                 generateThreadTitle(stripped, firstAssistant.content)
                     .then((result) => {
+                        if (!stillOwner(user, epoch)) return;
                         if (result) {
                             renameThread(threadId, `${result.emoji} ${result.title}`, { ai: true });
                         } else {
                             renameThread(threadId, t.title, { ai: true });
                         }
                     })
-                    .catch(() => { renameThread(threadId, t.title, { ai: true }); });
+                    .catch(() => {
+                        if (stillOwner(user, epoch)) renameThread(threadId, t.title, { ai: true });
+                    });
             }
         }
     }

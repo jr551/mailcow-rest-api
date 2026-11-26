@@ -18,7 +18,7 @@
     import Icon from './Icon.svelte';
     import DriveFolderPicker from './drive/DriveFolderPicker.svelte';
     import { aiAvailable, capabilities, isVipAddress, settings } from '../lib/settings.svelte';
-    import { authState } from '../lib/auth.svelte';
+    import { authState, getSession, bearerHeader } from '../lib/auth.svelte';
     import { suggestCalendarOptions, type CalendarSuggestion } from '../lib/calendar-suggest';
     import { isChatConfigured } from '../lib/chat.svelte';
     import { loadCalendar } from '../lib/calendar.svelte';
@@ -43,10 +43,18 @@
     }
     let { onReply, onReplyAll, onForward, onTrash, onArchive, onMove, onAi }: Props = $props();
 
+    function stillCurrentMessage(user: string | null, path: string, uid: number): boolean {
+        return authState.activeUser === user
+            && observedUser === user
+            && ui.selectedPath === path
+            && ui.detail?.uid === uid;
+    }
+
     let showRaw = $state<'auto' | 'text' | 'html'>('auto');
     let moveOpen = $state(false);
     let folderPickerAtt = $state<Attachment | null>(null);
     let folderPickerBlob = $state<Blob | null>(null);
+    let folderPickerOwner = $state<string | null>(null);
 
     // Folder destinations for the Move submenu. Unbounded by design — the
     // inline list this replaced dumped every mailbox into a 320px max-height
@@ -62,12 +70,20 @@
     // pane crossfades instead of flashing a spinner. `shown` only changes
     // once a fresh body has actually arrived.
     let shown = $state<MessageDetail | null>(null);
+    let shownUser = authState.activeUser;
+    let observedUser = authState.activeUser;
     $effect(() => {
+        const user = authState.activeUser;
+        if (user !== shownUser) {
+            shownUser = user;
+            shown = null;
+            return;
+        }
         if (ui.detail) shown = ui.detail;
         // Keeping the previous body is useful while a new request is in
         // flight, but not after it fails: otherwise the old subject/body
         // remains under the newly selected row and the error is invisible.
-        else if (ui.detailError) shown = null;
+        else if (ui.detailError || (!ui.detailLoading && ui.selectedUid === null)) shown = null;
     });
 
     const showConversationStack = $derived(
@@ -86,25 +102,29 @@
     let spamMoving = $state(false);
 
     async function moveToSpam(d: MessageDetail) {
+        const user = authState.activeUser;
         const path = ui.selectedPath;
         if (!path) return;
+        const stillCurrent = () => stillCurrentMessage(user, path, d.uid);
         spamMoving = true;
         try {
             const list = ui.mailboxes && ui.mailboxes.length ? ui.mailboxes : await listMailboxes();
+            if (!stillCurrent()) return;
             const dest = findSpamFolder(list);
             if (!dest) {
                 showToast('error', 'No Spam/Junk folder found. Create one and try again.');
                 return;
             }
             await moveMessage(path, d.uid, dest);
+            if (!stillCurrent()) return;
             showToast('success', `Moved to ${dest}.`);
             spamDismissed = true;
             // Tell the parent so the message list refreshes.
             onMove(d.uid, dest);
         } catch {
-            showToast('error', 'Could not move the message to Spam.');
+            if (stillCurrent()) showToast('error', 'Could not move the message to Spam.');
         } finally {
-            spamMoving = false;
+            if (stillCurrent()) spamMoving = false;
         }
     }
     function authFailed(auth: MessageDetail['auth']): boolean {
@@ -126,17 +146,19 @@
     // What identifies "a different message": the folder plus the uid.
     // Neither alone is sufficient — a uid is only unique within a
     // mailbox, and the same folder can be re-listed.
-    function scanKeyFor(p: string, uid: number | string): string {
-        return `${p}::${uid}`;
+    function scanKeyFor(user: string, p: string, uid: number | string): string {
+        return `${user}::${p}::${uid}`;
     }
 
 
     $effect(() => {
         const detail = ui.detail;
         const path = ui.selectedPath;
+        const user = authState.activeUser;
+        if (user !== observedUser || (detail && shown !== detail)) return;
         // Re-listing or re-syncing the message already on screen is not a
         // new scan: leave its result and overlay alone.
-        const key = detail && path ? scanKeyFor(path, detail.uid) : '';
+        const key = detail && path && user ? scanKeyFor(user, path, detail.uid) : '';
         if (key && key === scannedKey) return;
         // A different message (or none): drop any scan still in flight for
         // the old one. This must NOT be an effect teardown — Svelte runs the
@@ -195,6 +217,10 @@
         }
 
         phishingScanning = true;
+        const scanUser = user;
+        const scanPath = path;
+        const scanUid = detail.uid;
+        const scanCtrl = phishingAbort;
         const from = detail.envelope.from?.[0];
         const to = detail.envelope.to?.[0];
         scanEmailForPhishing(path, detail.uid, {
@@ -216,12 +242,14 @@
             path,
             uid: detail.uid
         }, { signal: phishingAbort.signal }).then((result) => {
-            if (phishingAbort?.signal.aborted) return;
+            if (scanCtrl?.signal.aborted || !stillCurrentMessage(scanUser, scanPath, scanUid)) return;
             phishingResult = result;
         }).catch(() => {
             /* silently fail */
         }).finally(() => {
-            phishingScanning = false;
+            if (!scanCtrl?.signal.aborted && stillCurrentMessage(scanUser, scanPath, scanUid)) {
+                phishingScanning = false;
+            }
         });
     });
 
@@ -329,6 +357,10 @@
 
     async function openAiTools(d: MessageDetail) {
         if (aiToolsOpen) { closeAiTools(); return; }
+        const user = authState.activeUser;
+        const path = ui.selectedPath;
+        const uid = d.uid;
+        const stillCurrent = () => stillCurrentMessage(user, path, uid);
         aiToolsOpen = true;
         aiToolsLoading = true;
         aiToolsActions = [];
@@ -343,11 +375,12 @@
                 from: fromName ? `${fromName} <${fromAddr}>` : fromAddr,
                 body: d.text || stripHtml(d.html || '')
             }, { signal: aiToolsAbort.signal });
+            if (!stillCurrent()) return;
             aiToolsActions = out;
         } catch (err) {
-            aiToolsError = (err as Error).message || 'Suggest failed';
+            if (stillCurrent()) aiToolsError = (err as Error).message || 'Suggest failed';
         } finally {
-            aiToolsLoading = false;
+            if (stillCurrent()) aiToolsLoading = false;
         }
     }
     function closeAiTools() {
@@ -407,10 +440,12 @@
             aiMenuOpen = false;
             folderPickerAtt = null;
             folderPickerBlob = null;
+            folderPickerOwner = null;
         });
     });
 
     function runAction(a: EmailAction, d: MessageDetail) {
+        if (ui.detail !== d) return;
         // Open a fresh AI thread seeded with the email's context + the
         // action's prompt as the first user message. Optionally enable
         // web search for actions that signalled web=true.
@@ -450,8 +485,13 @@
     // message, so per-attachment state is keyed by folder + uid + part. The
     // pane is not remounted per message and would otherwise show one
     // message's OCR text or spinner on the next message's attachment 2.
-    function attKey(att: Attachment, uid: number | undefined = ui.detail?.uid, path: string = ui.selectedPath): string {
-        return `${path}:${uid}:${att.id}`;
+    function attKey(
+        att: Attachment,
+        uid: number | undefined = ui.detail?.uid,
+        path: string = ui.selectedPath,
+        user: string | null = authState.activeUser
+    ): string {
+        return `${user}:${path}:${uid}:${att.id}`;
     }
     let ocrText = $state<Record<string, string>>({});
     let ocrLoading = $state<Record<string, boolean>>({});
@@ -462,17 +502,24 @@
 
     async function viewHeaders() {
         if (!ui.detail) return;
+        const user = authState.activeUser;
+        const path = ui.selectedPath;
+        const uid = ui.detail.uid;
+        const stillCurrent = () => stillCurrentMessage(user, path, uid);
         headersLoading = true;
         headersOpen = true;
         try {
-            const raw = await getRawMessage(ui.selectedPath, ui.detail.uid);
+            const raw = await getRawMessage(path, uid);
+            if (!stillCurrent()) return;
             const idx = raw.indexOf('\r\n\r\n');
             headersText = idx !== -1 ? raw.slice(0, idx) : raw.indexOf('\n\n') !== -1 ? raw.slice(0, raw.indexOf('\n\n')) : raw;
         } catch (err) {
-            showToast('error', `Couldn't load headers: ${(err as Error).message}`);
-            headersOpen = false;
+            if (stillCurrent()) {
+                showToast('error', `Couldn't load headers: ${(err as Error).message}`);
+                headersOpen = false;
+            }
         } finally {
-            headersLoading = false;
+            if (stillCurrent()) headersLoading = false;
         }
     }
 
@@ -659,16 +706,22 @@
 
     async function viewOcr(att: Attachment) {
         if (!ui.detail) return;
+        const user = authState.activeUser;
+        const path = ui.selectedPath;
+        const uid = ui.detail.uid;
+        const stillCurrent = () => stillCurrentMessage(user, path, uid);
         const key = attKey(att);
         ocrLoading = { ...ocrLoading, [key]: true };
         try {
-            const text = await ocrAttachmentText(ui.selectedPath, ui.detail.uid, att.id);
+            const text = await ocrAttachmentText(path, uid, att.id);
+            if (!stillCurrent()) return;
             ocrText = { ...ocrText, [key]: text };
         } catch (err) {
+            if (!stillCurrent()) return;
             const msg = err instanceof ApiError ? err.detail || err.title : (err as Error).message;
             showToast('error', msg || 'OCR failed');
         } finally {
-            ocrLoading = { ...ocrLoading, [key]: false };
+            if (stillCurrent()) ocrLoading = { ...ocrLoading, [key]: false };
         }
     }
 
@@ -699,41 +752,62 @@
     // panes or jumps back to the same message.
     const pdfFormSeen = new Map<string, boolean>();
 
-    async function fetchAttachmentBytes(att: Attachment): Promise<ArrayBuffer> {
-        if (!ui.detail) throw new Error('No message');
-        const url = attachmentUrl(ui.selectedPath, ui.detail.uid, att.id);
-        const session = (await import('../lib/auth.svelte')).getSession();
+    async function fetchAttachmentBytes(
+        att: Attachment,
+        path = ui.selectedPath,
+        uid = ui.detail?.uid,
+        user = authState.activeUser
+    ): Promise<ArrayBuffer> {
+        if (uid == null) throw new Error('No message');
+        const session = getSession();
+        if (!session || session.user !== user || !stillCurrentMessage(user, path, uid)) {
+            throw new DOMException('Message changed', 'AbortError');
+        }
+        const url = attachmentUrl(path, uid, att.id);
         const res = await fetch(url, {
-            headers: session ? { authorization: `Bearer ${session.token}` } : {}
+            headers: { authorization: bearerHeader(session) }
         });
+        if (authState.activeUser !== user || ui.selectedPath !== path || ui.detail?.uid !== uid) {
+            throw new DOMException('Message changed', 'AbortError');
+        }
         if (!res.ok) throw new Error(`Download ${res.status}`);
         return res.arrayBuffer();
     }
 
     async function viewPdf(att: Attachment) {
         if (!ui.detail) return;
+        const user = authState.activeUser;
+        const path = ui.selectedPath;
+        const uid = ui.detail.uid;
+        const stillCurrent = () => stillCurrentMessage(user, path, uid);
         const key = attKey(att);
         pdfLoading = { ...pdfLoading, [key]: true };
         try {
-            const bytes = await fetchAttachmentBytes(att);
+            const bytes = await fetchAttachmentBytes(att, path, uid, user);
+            if (!stillCurrent()) return;
             pdfPreview = { id: att.id, filename: att.filename || 'document.pdf', bytes };
         } catch (err) {
-            showToast('error', `Couldn't open PDF: ${(err as Error).message}`);
+            if (stillCurrent()) showToast('error', `Couldn't open PDF: ${(err as Error).message}`);
         } finally {
-            pdfLoading = { ...pdfLoading, [key]: false };
+            if (stillCurrent()) pdfLoading = { ...pdfLoading, [key]: false };
         }
     }
     function closePdf() { pdfPreview = null; }
 
     async function openPdfForm(attId: string) {
         if (!ui.detail) return;
+        const user = authState.activeUser;
+        const path = ui.selectedPath;
         const att = ui.detail.attachments.find((a) => a.id === attId);
         if (!att) return;
+        const uid = ui.detail.uid;
+        const stillCurrent = () => stillCurrentMessage(user, path, uid);
         try {
-            const bytes = await fetchAttachmentBytes(att);
+            const bytes = await fetchAttachmentBytes(att, path, uid, user);
+            if (!stillCurrent()) return;
             pdfFormFiller = { id: attId, filename: att.filename || 'form.pdf', bytes };
         } catch (err) {
-            showToast('error', `Couldn't open form: ${(err as Error).message}`);
+            if (stillCurrent()) showToast('error', `Couldn't open form: ${(err as Error).message}`);
         }
     }
     function closePdfForm() { pdfFormFiller = null; }
@@ -745,11 +819,13 @@
     async function maybeShowPdfFormBanner(d: MessageDetail) {
         pdfFormBanner = null;
         const path = ui.selectedPath;
+        const user = authState.activeUser;
         // The loop awaits per attachment; the user may have moved on by then.
-        const stale = () => ui.detail?.uid !== d.uid || ui.selectedPath !== path;
+        const stale = () => !stillCurrentMessage(user, path, d.uid);
         const pdfs = d.attachments.filter(isPdf);
         for (const att of pdfs) {
-            const key = attKey(att, d.uid, path);
+            if (stale()) return;
+            const key = attKey(att, d.uid, path, user);
             const memo = pdfFormSeen.get(key);
             if (memo === false) continue; // already scanned, no form
             if (memo === true) {
@@ -758,18 +834,18 @@
             }
             if (att.size && att.size > PDF_SCAN_MAX_BYTES) continue;
             try {
-                const bytes = await fetchAttachmentBytes(att);
+                const bytes = await fetchAttachmentBytes(att, path, d.uid, user);
                 const { hasPdfForm } = await import('../lib/pdf-form');
                 const has = await hasPdfForm(bytes);
-                pdfFormSeen.set(key, has);
                 if (stale()) return;
+                pdfFormSeen.set(key, has);
                 if (has) {
                     pdfFormBanner = { attId: att.id, filename: att.filename || 'form.pdf' };
                     return;
                 }
             } catch {
-                pdfFormSeen.set(key, false);
                 if (stale()) return;
+                pdfFormSeen.set(key, false);
             }
         }
     }
@@ -795,21 +871,32 @@
 
     async function viewEml(att: Attachment) {
         if (!ui.detail) return;
+        const user = authState.activeUser;
+        const path = ui.selectedPath;
+        const uid = ui.detail.uid;
+        const session = getSession();
+        if (!session || session.user !== user) return;
+        const stillCurrent = () => stillCurrentMessage(user, path, uid);
         const key = attKey(att);
         emlLoading = { ...emlLoading, [key]: true };
         try {
             // Fetch the raw attachment bytes through the existing
             // download endpoint, then parse client-side with eml-parse-js.
-            const res = await fetch(attachmentUrl(ui.selectedPath, ui.detail.uid, att.id), {
-                headers: authState.activeUser ? { authorization: `Bearer ${(await import('../lib/auth.svelte')).getSession()?.token || ''}` } : {}
+            const res = await fetch(attachmentUrl(path, uid, att.id), {
+                headers: { authorization: bearerHeader(session) }
             });
+            if (!stillCurrent()) return;
+            if (!res.ok) throw new Error(`Download ${res.status}`);
             const bytes = await res.text();
+            if (!stillCurrent()) return;
             const eml = await import('eml-parse-js');
+            if (!stillCurrent()) return;
             // eml-parse-js exposes a callback-style read; wrap in a Promise.
             const parsed = await new Promise<Record<string, unknown>>((resolve, reject) => {
                 const fn = (eml as unknown as { readEml: (s: string, cb: (e: Error | null, p: Record<string, unknown>) => void) => void }).readEml;
                 fn(bytes, (err, p) => (err ? reject(err) : resolve(p)));
             });
+            if (!stillCurrent()) return;
             emlPreview = {
                 id: att.id,
                 subject: String((parsed.subject as string) || '(no subject)'),
@@ -822,9 +909,9 @@
                 html: typeof parsed.html === 'string' ? parsed.html : null
             };
         } catch (err) {
-            showToast('error', `Couldn't open .eml: ${(err as Error).message}`);
+            if (stillCurrent()) showToast('error', `Couldn't open .eml: ${(err as Error).message}`);
         } finally {
-            emlLoading = { ...emlLoading, [key]: false };
+            if (stillCurrent()) emlLoading = { ...emlLoading, [key]: false };
         }
     }
     function closeEmlPreview() { emlPreview = null; }
@@ -835,32 +922,44 @@
     }
     async function saveAttachmentToDriveFromDetail(att: Attachment) {
         if (!ui.detail) return;
+        const user = authState.activeUser;
+        const path = ui.selectedPath;
+        const uid = ui.detail.uid;
+        const session = getSession();
+        if (!session || session.user !== user) return;
+        const stillCurrent = () => stillCurrentMessage(user, path, uid);
         const key = attKey(att);
         driveLoading = { ...driveLoading, [key]: true };
         try {
             await loadDriveConfig();
-            const url = attachmentUrl(ui.selectedPath, ui.detail.uid, att.id);
-            const session = (await import('../lib/auth.svelte')).getSession();
+            if (!stillCurrent()) return;
+            const url = attachmentUrl(path, uid, att.id);
             const res = await fetch(url, {
-                headers: session ? { authorization: `Bearer ${session.token}` } : {}
+                headers: { authorization: bearerHeader(session) }
             });
+            if (!stillCurrent()) return;
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const blob = await res.blob();
+            if (!stillCurrent()) return;
             folderPickerBlob = blob;
             folderPickerAtt = att;
+            folderPickerOwner = user;
         } catch (err) {
-            showToast('error', `Couldn't save to Drive: ${(err as Error).message}`);
+            if (stillCurrent()) showToast('error', `Couldn't save to Drive: ${(err as Error).message}`);
         } finally {
-            driveLoading = { ...driveLoading, [key]: false };
+            if (stillCurrent()) driveLoading = { ...driveLoading, [key]: false };
         }
     }
 
     async function onFolderPicked(path: string) {
-        if (!folderPickerAtt || !folderPickerBlob) return;
+        const user = folderPickerOwner;
+        if (!user || user !== authState.activeUser || !folderPickerAtt || !folderPickerBlob) return;
         const filename = folderPickerAtt.filename || `attachment-${folderPickerAtt.id}`;
         await saveAttachmentToDrive(folderPickerBlob, filename, path);
+        if (authState.activeUser !== user) return;
         folderPickerAtt = null;
         folderPickerBlob = null;
+        folderPickerOwner = null;
     }
 
     // True when the recipient list is exactly the logged-in user. We then
@@ -872,12 +971,20 @@
     }
     async function doBlockSender(addr: string | null | undefined) {
         if (!addr) return;
+        const user = authState.activeUser;
+        const path = ui.selectedPath;
+        const uid = ui.detail?.uid;
+        if (uid == null) return;
+        const stillCurrent = () => stillCurrentMessage(user, path, uid);
         if (!confirm(`Block all mail from ${addr}?`)) return;
+        if (!stillCurrent()) return;
         moveOpen = false;
         try {
             await blockSender(addr);
+            if (!stillCurrent()) return;
             showToast('success', `Blocked ${addr}`);
         } catch (err) {
+            if (!stillCurrent()) return;
             const msg = err instanceof ApiError ? (err.detail || err.title) : (err as Error).message;
             showToast('error', msg || 'Could not block sender');
         }
@@ -891,6 +998,10 @@
     async function doAiBlockSender(d: MessageDetail) {
         const addr = d.envelope.from?.[0]?.address;
         if (!addr || aiBlockBusy) return;
+        const user = authState.activeUser;
+        const path = ui.selectedPath;
+        const stillCurrent = () => stillCurrentMessage(user, path, d.uid);
+        if (!stillCurrent()) return;
         moveOpen = false;
         aiBlockBusy = true;
         try {
@@ -900,34 +1011,48 @@
                 fromName: d.envelope.from?.[0]?.name || '',
                 subject: d.envelope.subject || ''
             });
+            if (!stillCurrent()) return;
             const pattern = suggestion || addr;
             const scope = pattern === addr ? addr : pattern;
             if (!confirm(`Block all mail matching ${scope}?`)) return;
+            if (!stillCurrent()) return;
             await blockSender(pattern);
+            if (!stillCurrent()) return;
             showToast('success', `Blocked ${pattern}`);
         } catch (err) {
+            if (!stillCurrent()) return;
             // AI unavailable or failed — fall back to the exact address.
             if (confirm(`Couldn't get a suggestion — block ${addr} exactly?`)) {
+                if (!stillCurrent()) return;
                 try {
                     await blockSender(addr);
+                    if (!stillCurrent()) return;
                     showToast('success', `Blocked ${addr}`);
                 } catch (e2) {
+                    if (!stillCurrent()) return;
                     const msg = e2 instanceof ApiError ? (e2.detail || e2.title) : (e2 as Error).message;
                     showToast('error', msg || 'Could not block sender');
                 }
             }
         } finally {
-            aiBlockBusy = false;
+            if (stillCurrent()) aiBlockBusy = false;
         }
     }
 
     async function doAllowSender(addr: string | null | undefined) {
         if (!addr) return;
+        const user = authState.activeUser;
+        const path = ui.selectedPath;
+        const uid = ui.detail?.uid;
+        if (uid == null) return;
+        const stillCurrent = () => stillCurrentMessage(user, path, uid);
         moveOpen = false;
         try {
             await allowSender(addr);
+            if (!stillCurrent()) return;
             showToast('success', `Allowed ${addr}`);
         } catch (err) {
+            if (!stillCurrent()) return;
             const msg = err instanceof ApiError ? (err.detail || err.title) : (err as Error).message;
             showToast('error', msg || 'Could not allow sender');
         }
@@ -935,11 +1060,18 @@
 
     async function doBlockRecipient(addr: string | null | undefined) {
         if (!addr) return;
+        const user = authState.activeUser;
+        const path = ui.selectedPath;
+        const uid = ui.detail?.uid;
+        if (uid == null) return;
+        const stillCurrent = () => stillCurrentMessage(user, path, uid);
         moveOpen = false;
         try {
             await blockRecipient(addr);
+            if (!stillCurrent()) return;
             showToast('success', `Blocked mail to ${addr}`);
         } catch (err) {
+            if (!stillCurrent()) return;
             const msg = err instanceof ApiError ? (err.detail || err.title) : (err as Error).message;
             showToast('error', msg || 'Could not block recipient');
         }
@@ -970,12 +1102,17 @@
     async function suggestEvent(d: MessageDetail) {
         if (ui.suggestLoading) return;
         if (calOptionsOpen) { closeCalOptions(); return; }
+        const user = authState.activeUser;
+        const path = ui.selectedPath;
+        const stillCurrent = () => stillCurrentMessage(user, path, d.uid);
+        if (!stillCurrent()) return;
         calOptionsOpen = true;
         ui.suggestLoading = true;
         calOptions = [];
         calOptionsError = null;
         if (calOptionsAbort) calOptionsAbort.abort();
         calOptionsAbort = new AbortController();
+        const request = calOptionsAbort;
         try {
             loadCalendar();
             const fromAddr = d.envelope.from?.[0]?.address || '';
@@ -985,11 +1122,12 @@
                 from: fromName ? `${fromName} <${fromAddr}>` : fromAddr,
                 body: d.text || stripHtml(d.html || '')
             }, { signal: calOptionsAbort.signal });
+            if (!stillCurrent()) return;
             calOptions = opts;
         } catch (err) {
-            calOptionsError = (err as Error).message || 'Suggest failed';
+            if (stillCurrent()) calOptionsError = (err as Error).message || 'Suggest failed';
         } finally {
-            ui.suggestLoading = false;
+            if (calOptionsAbort === request && stillCurrent()) ui.suggestLoading = false;
         }
     }
     function closeCalOptions() {
@@ -1023,6 +1161,63 @@
             .trim()
             .slice(0, 8000);
     }
+
+    // The pane is mounted across mailbox and account switches. Drop all
+    // message-derived local state, including attachment previews and AI
+    // suggestions, rather than letting matching folder/UIDs inherit it.
+    $effect(() => {
+        const user = authState.activeUser;
+        if (user === observedUser) return;
+        observedUser = user;
+
+        phishingAbort?.abort();
+        phishingAbort = null;
+        scannedKey = '';
+        aiToolsAbort?.abort();
+        aiToolsAbort = null;
+        calOptionsAbort?.abort();
+        calOptionsAbort = null;
+
+        showRaw = 'auto';
+        moveOpen = false;
+        folderPickerAtt = null;
+        folderPickerBlob = null;
+        folderPickerOwner = null;
+        shown = null;
+        phishingScanning = false;
+        phishingResult = null;
+        phishingDismissed = false;
+        spamDismissed = false;
+        spamMoving = false;
+        pendingLink = null;
+        linkToken = '';
+        aiToolsOpen = false;
+        aiToolsLoading = false;
+        aiToolsActions = [];
+        aiToolsError = null;
+        aiMenuOpen = false;
+        ocrText = {};
+        ocrLoading = {};
+        driveLoading = {};
+        headersOpen = false;
+        headersLoading = false;
+        headersText = '';
+        proxiedSrcDoc = null;
+        proxyLoading = false;
+        pdfPreview = null;
+        pdfLoading = {};
+        pdfFormBanner = null;
+        pdfFormFiller = null;
+        pdfFormSeen.clear();
+        emlPreview = null;
+        emlLoading = {};
+        aiBlockBusy = false;
+        calOptionsOpen = false;
+        calOptions = [];
+        calOptionsError = null;
+        ui.suggestLoading = false;
+        ui.suggestedEvent = null;
+    });
 
     // Combined SPF/DKIM/DMARC verdict for the sender chip. Returns the
     // icon to draw + a hover tooltip explaining each check. Padlock when
@@ -2132,7 +2327,11 @@
                             {#if folderPickerAtt?.id === att.id}
                                 <DriveFolderPicker
                                     onSelect={onFolderPicked}
-                                    onCancel={() => { folderPickerAtt = null; folderPickerBlob = null; }}
+                                    onCancel={() => {
+                                        folderPickerAtt = null;
+                                        folderPickerBlob = null;
+                                        folderPickerOwner = null;
+                                    }}
                                 />
                             {/if}
                             {#if ocrText[attKey(att)]}

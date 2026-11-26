@@ -318,6 +318,19 @@
     }
     let showCcBcc = $state(buildCc().length > 0);
     let sending = $state(false);
+    let sendAbort: AbortController | null = null;
+    let observedUser = authState.activeUser;
+    let accountEpoch = 0;
+
+    $effect(() => {
+        const user = authState.activeUser;
+        if (user === observedUser) return;
+        observedUser = user;
+        accountEpoch += 1;
+        sendAbort?.abort(new DOMException('Active account changed', 'AbortError'));
+        sendAbort = null;
+        sending = false;
+    });
     // Read-receipt tracker. When on, the server injects a 1×1 pixel into the
     // outbound HTML and emails me when the recipient opens the message. The
     // initial state mirrors settings.trackOpensDefault so users who always
@@ -780,6 +793,17 @@
 
     async function doSend() {
         if (!to.trim() || !smtpAvailable()) return;
+        const ownerUser = authState.activeUser;
+        const ownerEpoch = accountEpoch;
+        if (!ownerUser || ownerUser !== observedUser) return;
+        const controller = new AbortController();
+        sendAbort?.abort();
+        sendAbort = controller;
+        const stillOwner = () =>
+            authState.activeUser === ownerUser
+            && observedUser === ownerUser
+            && accountEpoch === ownerEpoch
+            && !controller.signal.aborted;
         sending = true;
         const sentSubject = subject.trim() || '(no subject)';
         try {
@@ -812,7 +836,8 @@
                         content: a.content
                     }))
                     : undefined
-            });
+            }, { signal: controller.signal });
+            if (!stillOwner()) return;
             playSent();
             // Start tracking delivery — we'll hand off to the toast/tray in
             // Layout.svelte which polls /v1/messages/send/:id/status with
@@ -825,10 +850,15 @@
             }
             onClose();
         } catch (err) {
-            const detail = err instanceof ApiError ? (err.detail || err.title) : (err as Error).message;
-            showToast('error', detail || 'Send failed');
+            if (stillOwner() && (err as Error)?.name !== 'AbortError') {
+                const detail = err instanceof ApiError ? (err.detail || err.title) : (err as Error).message;
+                showToast('error', detail || 'Send failed');
+            }
         } finally {
-            sending = false;
+            if (authState.activeUser === ownerUser && observedUser === ownerUser && accountEpoch === ownerEpoch) {
+                sending = false;
+            }
+            if (sendAbort === controller) sendAbort = null;
         }
     }
 </script>

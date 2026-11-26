@@ -119,6 +119,71 @@ test('removeSession forgets the remembered credentials of that account', async (
     assert.equal(kc.recallCreds('b@x.test'), null);
 });
 
+test('a pending token renewal updates its account without stealing active focus', async () => {
+    const n = env();
+    const auth = await load('auth.mjs', n);
+    const kc = await import(urlOf('keychain.mjs'));
+    kc.rememberCreds('a@x.test', 'pw-a');
+    auth.upsertSession({ user: 'a@x.test', token: 'old-a', expiresAt: FAR });
+    auth.upsertSession({ user: 'b@x.test', token: 'token-b', expiresAt: FAR });
+    auth.switchTo('a@x.test');
+
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    let markStarted;
+    const started = new Promise((resolve) => { markStarted = resolve; });
+    globalThis.fetch = async () => {
+        markStarted();
+        await gate;
+        return {
+            ok: true,
+            status: 201,
+            json: async () => ({ token: 'fresh-a', expiresAt: new Date(FAR + 60_000).toISOString() })
+        };
+    };
+
+    const renewal = auth.tryRenewSession('a@x.test');
+    await started;
+    auth.switchTo('b@x.test');
+    release();
+
+    assert.equal(await renewal, true);
+    assert.equal(auth.authState.activeUser, 'b@x.test');
+    assert.equal(auth.authState.sessions.find((s) => s.user === 'a@x.test').token, 'fresh-a');
+    assert.equal(auth.authState.sessions.find((s) => s.user === 'b@x.test').token, 'token-b');
+});
+
+test('a renewal finishing after sign-out does not restore remembered credentials', async () => {
+    const n = env();
+    const auth = await load('auth.mjs', n);
+    const kc = await import(urlOf('keychain.mjs'));
+    kc.rememberCreds('a@x.test', 'pw-a');
+    auth.upsertSession({ user: 'a@x.test', token: 'old-a', expiresAt: FAR });
+
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    let markStarted;
+    const started = new Promise((resolve) => { markStarted = resolve; });
+    globalThis.fetch = async () => {
+        markStarted();
+        await gate;
+        return {
+            ok: true,
+            status: 201,
+            json: async () => ({ token: 'fresh-a', expiresAt: new Date(FAR + 60_000).toISOString() })
+        };
+    };
+
+    const renewal = auth.tryRenewSession('a@x.test');
+    await started;
+    auth.removeSession('a@x.test');
+    release();
+
+    assert.equal(await renewal, false);
+    assert.equal(auth.authState.sessions.some((s) => s.user === 'a@x.test'), false);
+    assert.equal(kc.recallCreds('a@x.test'), null);
+});
+
 test('logoutRemote forgets credentials and revokes the token with DELETE /v1/auth/session', async () => {
     const n = env({ base: 'https://api.test' });
     const auth = await load('auth.mjs', n);

@@ -1,7 +1,14 @@
 <script lang="ts">
     import { ui, showToast } from '../lib/store.svelte';
+    import { authState } from '../lib/auth.svelte';
     import { summarizeMessage, draftReply, extractActions, translateMessage, ApiError } from '../lib/api';
     import Icon from './Icon.svelte';
+
+    let observedUser = authState.activeUser;
+    $effect(() => {
+        const user = authState.activeUser;
+        if (user !== observedUser) observedUser = user;
+    });
 
     interface Props {
         onClose: () => void;
@@ -22,59 +29,92 @@
         return `${headers}\n\n${body}`;
     }
 
+    function stillShowing(user: string | null, path: string, uid: number): boolean {
+        return authState.activeUser === user
+            && observedUser === user
+            && ui.selectedPath === path
+            && ui.detail?.uid === uid;
+    }
+
     async function runSummarize() {
         if (!ui.detail) return;
+        const user = authState.activeUser;
+        if (!user || user !== observedUser) return;
+        const path = ui.selectedPath;
+        const uid = ui.detail.uid;
+        const body = bodyForAi();
         ui.aiSummaryLoading = true;
         ui.aiSummaryError = null;
         try {
-            const r = await summarizeMessage(bodyForAi());
+            const r = await summarizeMessage(body);
+            if (!stillShowing(user, path, uid)) return;
             ui.aiSummary = r.content;
         } catch (err) {
-            ui.aiSummaryError = describe(err, 'Summarize failed');
+            if (stillShowing(user, path, uid)) ui.aiSummaryError = describe(err, 'Summarize failed');
         } finally {
-            ui.aiSummaryLoading = false;
+            if (stillShowing(user, path, uid)) ui.aiSummaryLoading = false;
         }
     }
 
     async function runDraft() {
         if (!ui.detail) return;
+        const user = authState.activeUser;
+        if (!user || user !== observedUser) return;
+        const path = ui.selectedPath;
+        const uid = ui.detail.uid;
+        const body = bodyForAi();
+        const draftIntent = intent;
         ui.aiDraftLoading = true;
         ui.aiDraftError = null;
         try {
-            const r = await draftReply(bodyForAi(), intent);
+            const r = await draftReply(body, draftIntent);
+            if (!stillShowing(user, path, uid)) return;
             ui.aiDraft = r.content;
         } catch (err) {
-            ui.aiDraftError = describe(err, 'Draft failed');
+            if (stillShowing(user, path, uid)) ui.aiDraftError = describe(err, 'Draft failed');
         } finally {
-            ui.aiDraftLoading = false;
+            if (stillShowing(user, path, uid)) ui.aiDraftLoading = false;
         }
     }
 
     async function runActions() {
         if (!ui.detail) return;
+        const user = authState.activeUser;
+        if (!user || user !== observedUser) return;
+        const path = ui.selectedPath;
+        const uid = ui.detail.uid;
+        const body = bodyForAi();
         ui.aiActionsLoading = true;
         ui.aiActionsError = null;
         try {
-            const r = await extractActions(bodyForAi());
+            const r = await extractActions(body);
+            if (!stillShowing(user, path, uid)) return;
             ui.aiActions = r.content;
         } catch (err) {
-            ui.aiActionsError = describe(err, 'Action extraction failed');
+            if (stillShowing(user, path, uid)) ui.aiActionsError = describe(err, 'Action extraction failed');
         } finally {
-            ui.aiActionsLoading = false;
+            if (stillShowing(user, path, uid)) ui.aiActionsLoading = false;
         }
     }
 
     async function runTranslate() {
         if (!ui.detail) return;
+        const user = authState.activeUser;
+        if (!user || user !== observedUser) return;
+        const path = ui.selectedPath;
+        const uid = ui.detail.uid;
+        const body = bodyForAi();
+        const language = ui.aiTranslateLang;
         ui.aiTranslateLoading = true;
         ui.aiTranslateError = null;
         try {
-            const r = await translateMessage(bodyForAi(), ui.aiTranslateLang);
+            const r = await translateMessage(body, language);
+            if (!stillShowing(user, path, uid)) return;
             ui.aiTranslate = r.content;
         } catch (err) {
-            ui.aiTranslateError = describe(err, 'Translation failed');
+            if (stillShowing(user, path, uid)) ui.aiTranslateError = describe(err, 'Translation failed');
         } finally {
-            ui.aiTranslateLoading = false;
+            if (stillShowing(user, path, uid)) ui.aiTranslateLoading = false;
         }
     }
 

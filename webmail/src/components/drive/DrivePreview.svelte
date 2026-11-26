@@ -2,6 +2,7 @@
     import { getObjectUrl, fetchBlob } from '../../lib/drive-api';
     import { renderMarkdown } from '../../lib/markdown';
     import { showToast } from '../../lib/store.svelte';
+    import { authState } from '../../lib/auth.svelte';
     import Icon from '../Icon.svelte';
 
     interface Props {
@@ -20,43 +21,67 @@
     let textContent = $state<string | null>(null);
     let isMarkdownFile = $state(false);
     let officeUrl = $state('');
+    let officeAbort: AbortController | null = null;
 
     // Each fetch below is tied to the item that started it: switching files
     // quickly must not paint the previous file's content, and a failed
     // request must surface as a toast instead of an unhandled rejection.
     $effect(() => {
         const current = item;
+        const user = authState.activeUser;
         officeUrl = '';
-        if (!current) {
+        officeAbort?.abort(new DOMException('Drive item changed', 'AbortError'));
+        officeAbort = null;
+        if (!current || !user) {
             url = '';
             textContent = null;
             isMarkdownFile = false;
             return;
         }
         let stale = false;
-        const fail = () => { if (!stale) showToast('error', `Could not load preview of ${current.name}`); };
+        const controller = new AbortController();
+        const stillCurrent = () =>
+            !stale && !controller.signal.aborted
+            && authState.activeUser === user && item === current;
+        const fail = () => { if (stillCurrent()) showToast('error', `Could not load preview of ${current.name}`); };
         url = '';
-        getObjectUrl(current.path, PREVIEW_URL_TTL_SEC).then((u) => { if (!stale) url = u; }).catch(fail);
+        getObjectUrl(current.path, PREVIEW_URL_TTL_SEC, controller.signal)
+            .then((u) => { if (stillCurrent()) url = u; })
+            .catch(fail);
         textContent = null;
         isMarkdownFile = false;
         if (isMarkdown(current.name) || isTextCode(current.name)) {
-            fetchBlob(current.path).then((b) => b.text()).then((t) => {
-                if (stale) return;
+            fetchBlob(current.path, controller.signal).then((b) => b.text()).then((t) => {
+                if (!stillCurrent()) return;
                 textContent = t;
                 isMarkdownFile = isMarkdown(current.name);
             }).catch(fail);
         }
-        return () => { stale = true; };
+        return () => {
+            stale = true;
+            controller.abort(new DOMException('Drive item changed', 'AbortError'));
+            officeAbort?.abort(new DOMException('Drive item changed', 'AbortError'));
+            officeAbort = null;
+        };
     });
 
     async function openOfficeViewer() {
         if (!item) return;
         const current = item;
+        const user = authState.activeUser;
+        if (!user) return;
+        officeAbort?.abort();
+        const controller = new AbortController();
+        officeAbort = controller;
         try {
-            const u = await getObjectUrl(current.path, OFFICE_URL_TTL_SEC);
-            if (item === current) officeUrl = u;
+            const u = await getObjectUrl(current.path, OFFICE_URL_TTL_SEC, controller.signal);
+            if (!controller.signal.aborted && authState.activeUser === user && item === current) officeUrl = u;
         } catch {
-            showToast('error', `Could not load preview of ${current.name}`);
+            if (!controller.signal.aborted && authState.activeUser === user) {
+                showToast('error', `Could not load preview of ${current.name}`);
+            }
+        } finally {
+            if (officeAbort === controller) officeAbort = null;
         }
     }
 
@@ -109,13 +134,22 @@
     let pdfBytes = $state<ArrayBuffer | null>(null);
     $effect(() => {
         const current = item;
+        const user = authState.activeUser;
         pdfBytes = null;
-        if (!current || !isPdf(current.name)) return;
+        if (!current || !user || !isPdf(current.name)) return;
         let stale = false;
-        fetchBlob(current.path).then((b) => b.arrayBuffer()).then((ab) => {
-            if (!stale) pdfBytes = ab;
-        }).catch(() => { if (!stale) showToast('error', `Could not load preview of ${current.name}`); });
-        return () => { stale = true; };
+        const controller = new AbortController();
+        fetchBlob(current.path, controller.signal).then((b) => b.arrayBuffer()).then((ab) => {
+            if (!stale && !controller.signal.aborted && authState.activeUser === user && item === current) pdfBytes = ab;
+        }).catch(() => {
+            if (!stale && !controller.signal.aborted && authState.activeUser === user) {
+                showToast('error', `Could not load preview of ${current.name}`);
+            }
+        });
+        return () => {
+            stale = true;
+            controller.abort(new DOMException('Drive item changed', 'AbortError'));
+        };
     });
 
     $effect(() => {
