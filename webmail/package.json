@@ -47,7 +47,7 @@
     },
     "devDependencies": {
         "@playwright/test": "^1.65.1",
-        "@sveltejs/vite-plugin-svelte": "^7.3.1",
+        "@sveltejs/vite-plugin-svelte": "^7.3.2",
         "@tsconfig/svelte": "^5.0.9",
         "@typescript/native-preview": "7.0.0-dev.20260707.2",
         "esbuild": "^0.28.2",
