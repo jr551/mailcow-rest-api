@@ -24,7 +24,7 @@
     "homepage": "https://github.com/jr551/mailcow-rest-api-webmail#readme",
     "license": "MIT",
     "dependencies": {
-        "@lucide/svelte": "^1.77.0",
+        "@lucide/svelte": "^1.78.0",
         "@melt-ui/svelte": "^0.86.6",
         "@tiptap/core": "^3.35.0",
         "@tiptap/extension-image": "^3.35.0",
