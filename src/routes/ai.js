@@ -13,7 +13,7 @@ const {
 const llm = require('../llm');
 const config = require('../config');
 const { problem } = require('../errors');
-const { scrubMessages, scrubMessagesPii } = require('../secret-scrub');
+const { scrubMessages, scrubMessagesPii, scrubText } = require('../secret-scrub');
 const { sendDecoys } = require('../llm-decoys');
 
 // Loopback / RFC1918 / link-local hosts are treated as local — the PII pass
@@ -483,20 +483,11 @@ module.exports = async function aiRoutes(app, opts = {}) {
     // it should surface as an honest "couldn't load models: <reason>" line
     // under a still-usable free-text field. The one thing that *is* a real
     // error is "no key anywhere", which stays a 501.
-    app.get('/v1/ai/models', {
-        schema: {
-            tags: ['ai'],
-            summary: 'List the models the configured AI provider offers',
-            description: 'Probes GET {baseUrl}/models on the provider with the server-held (or client-supplied, when LLM_ALLOW_CLIENT_OVERRIDE is on) key, and returns the catalog for the Settings model combobox. The key is never returned. Answers 200 with `{ models: [], error }` when the provider is unreachable, rejects the credentials, or returns an unreadable body; 501 only when no API key is configured at all.',
-            querystring: modelsQuerySchema,
-            response: { 200: modelListSchema, 501: problemSchema }
-        }
-    }, async (req) => {
+    async function handleModelList(req, q) {
         // Same override gate as every other AI route: when the operator sets
-        // LLM_ALLOW_CLIENT_OVERRIDE=false the query is ignored and we probe
+        // LLM_ALLOW_CLIENT_OVERRIDE=false the override is ignored and we probe
         // the server's own provider. Otherwise a user who typed a custom Base
         // URL in Settings gets that endpoint's catalog, not the server's.
-        const q = req.query || {};
         // Build the override from *present* query params only. resolveProvider
         // spreads the override over the server config, so a key present with
         // an `undefined` value would clobber it with undefined and wipe it.
@@ -555,15 +546,33 @@ module.exports = async function aiRoutes(app, opts = {}) {
         } finally {
             await closeDispatcher(dispatcher);
         }
+        let detail = scrubText(String(result.detail || ''), {});
+        if (provider.apiKey) detail = detail.split(provider.apiKey).join('[redacted]');
         const value = result.ok
             ? { models: result.models }
-            : { models: [], error: `${result.title}: ${result.detail}` };
+            : { models: [], error: `${result.title}: ${detail}` };
         writeModelListCache(key, value);
         if (!result.ok) {
             req.log.warn({ detail: value.error }, 'AI model catalog probe failed');
         }
         return value;
-    });
+    }
+
+    const modelListSchemaOptions = {
+        tags: ['ai'],
+        summary: 'List the models the configured AI provider offers',
+        description: 'Probes GET {baseUrl}/models on the provider with the server-held (or client-supplied, when LLM_ALLOW_CLIENT_OVERRIDE is on) key, and returns the catalog for the Settings model combobox. The key is never returned. POST accepts the override in its body so custom provider keys do not enter URL/access logs. Answers 200 with `{ models: [], error }` when the provider is unreachable, rejects the credentials, or returns an unreadable body; 501 only when no API key is configured at all.',
+        response: { 200: modelListSchema, 501: problemSchema }
+    };
+    // GET remains for older cached bundles and server-default discovery.
+    app.get('/v1/ai/models', {
+        schema: { ...modelListSchemaOptions, querystring: modelsQuerySchema }
+    }, async (req) => handleModelList(req, req.query || {}));
+    // Preferred for a custom provider: the key is in the request body, which
+    // the request logger does not record, rather than the URL.
+    app.post('/v1/ai/models', {
+        schema: { ...modelListSchemaOptions, body: modelsQuerySchema }
+    }, async (req) => handleModelList(req, req.body || {}));
 
     // Tell authenticated clients how to reach the model. The provider key
     // never leaves this process: `baseUrl` points back at our own

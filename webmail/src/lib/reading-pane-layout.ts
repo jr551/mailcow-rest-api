@@ -1,11 +1,18 @@
 /** Outlook.com-style reading pane placement (View → Reading pane). */
 
+import type { IconName } from './icons';
+
 export type ReadingPaneLayout = 'right' | 'bottom' | 'hidden';
 
-export const READING_PANE_LAYOUTS: { id: ReadingPaneLayout; label: string; outlookLabel: string }[] = [
-    { id: 'right', label: 'Right', outlookLabel: 'Show on the right' },
-    { id: 'bottom', label: 'Bottom', outlookLabel: 'Show on the bottom' },
-    { id: 'hidden', label: 'Hidden', outlookLabel: 'Hide' }
+export const READING_PANE_LAYOUTS: {
+    id: ReadingPaneLayout;
+    label: string;
+    outlookLabel: string;
+    icon: IconName;
+}[] = [
+    { id: 'right', label: 'Right', outlookLabel: 'Show on the right', icon: 'panelRight' },
+    { id: 'bottom', label: 'Bottom', outlookLabel: 'Show on the bottom', icon: 'panelBottom' },
+    { id: 'hidden', label: 'Hidden', outlookLabel: 'Hide', icon: 'eyeOff' }
 ];
 
 export function sanitizeReadingPaneLayout(raw: unknown): ReadingPaneLayout {

@@ -214,6 +214,80 @@ test('GET /v1/ai/models returns a catalog and never echoes the key', async () =>
     }
 });
 
+test('POST /v1/ai/models keeps a custom provider key out of the URL and response', async () => {
+    const config = require('../../src/config');
+    const savedOverride = config.ai.allowClientOverride;
+    const realListModels = llm.listModels;
+    config.ai.allowClientOverride = true;
+    let seen = null;
+    llm.listModels = async ({ provider }) => {
+        seen = { baseUrl: provider.baseUrl, apiKey: provider.apiKey };
+        return { ok: true, models: [{ id: 'body-key-model' }] };
+    };
+    const app = await makeApp();
+    try {
+        const res = await app.inject({
+            method: 'POST',
+            url: '/v1/ai/models',
+            headers: { authorization: BASIC, 'content-type': 'application/json' },
+            payload: { kind: 'openai', baseUrl: 'https://93.184.216.34/v1', apiKey: 'sk-post-body-secret' }
+        });
+        assert.equal(res.statusCode, 200);
+        assert.deepEqual(seen, { baseUrl: 'https://93.184.216.34/v1', apiKey: 'sk-post-body-secret' });
+        assert.ok(!res.body.includes('sk-post-body-secret'));
+        assert.deepEqual(JSON.parse(res.body).models, [{ id: 'body-key-model' }]);
+    } finally {
+        llm.listModels = realListModels;
+        config.ai.allowClientOverride = savedOverride;
+        await app.close();
+    }
+});
+
+test('POST /v1/ai/models scrubs a provider-reflected key from error details', async () => {
+    const config = require('../../src/config');
+    const savedOverride = config.ai.allowClientOverride;
+    const realListModels = llm.listModels;
+    config.ai.allowClientOverride = true;
+    const apiKey = 'provider-echo-secret-value';
+    llm.listModels = async () => ({
+        ok: false,
+        status: 502,
+        title: 'AI provider rejected our credentials',
+        detail: `upstream echoed credential ${apiKey}`
+    });
+    const app = await makeApp();
+    try {
+        const res = await app.inject({
+            method: 'POST',
+            url: '/v1/ai/models',
+            headers: { authorization: BASIC, 'content-type': 'application/json' },
+            payload: { kind: 'openai', baseUrl: 'https://93.184.216.35/v1', apiKey }
+        });
+        assert.equal(res.statusCode, 200);
+        assert.ok(!res.body.includes(apiKey));
+        assert.match(JSON.parse(res.body).error, /\[redacted\]/);
+    } finally {
+        llm.listModels = realListModels;
+        config.ai.allowClientOverride = savedOverride;
+        await app.close();
+    }
+});
+
+test('POST /v1/ai/models requires auth', async () => {
+    const app = await makeApp();
+    try {
+        const res = await app.inject({
+            method: 'POST',
+            url: '/v1/ai/models',
+            headers: { 'content-type': 'application/json' },
+            payload: {}
+        });
+        assert.equal(res.statusCode, 401);
+    } finally {
+        await app.close();
+    }
+});
+
 // Each of these route tests sets a distinct `config.ai.baseUrl`. The route
 // memoizes the catalog per provider — failures included, deliberately — so
 // tests sharing a provider would share a cache slot and read each other's

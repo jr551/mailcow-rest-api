@@ -11,11 +11,12 @@
     // they switched to inbox/calendar/etc.
 
     import { backgroundTasks, cancelBackgroundTask } from '../lib/background-tasks.svelte';
+    import { authState } from '../lib/auth.svelte';
     import { aiState } from '../lib/ai-threads.svelte';
     import { ui } from '../lib/store.svelte';
     import { toolDisplay } from '../lib/tool-icons';
 
-    let tasks = $derived(backgroundTasks().active);
+    let tasks = $derived(backgroundTasks().active.filter((task) => task.accountUser === authState.activeUser));
 
     // Tap the pill to jump to the originating chat thread. Mobile and
     // desktop have different routing primitives — sniff the URL to

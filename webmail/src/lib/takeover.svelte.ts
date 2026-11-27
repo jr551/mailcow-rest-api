@@ -33,15 +33,21 @@ import {
     type TakeoverActivityItem,
     listTakeoverActivity as apiListActivity
 } from './api';
+import { authState } from './auth.svelte';
+import { untrack } from 'svelte';
 
 const DISMISS_KEY = 'webmail.takeover-dismissed.v1';
 const DISMISS_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+function dismissalKey(user: string | null): string | null {
+    return user ? `${DISMISS_KEY}.${encodeURIComponent(user)}` : null;
+}
 
 // Dismissed notice ids → when, pruned on load. A record (not a Set) so it
 // serialises straight to localStorage and stale ids age out on their own.
-function readDismissed(): Record<string, number> {
+function readDismissed(user: string | null): Record<string, number> {
     try {
-        const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(DISMISS_KEY) : null;
+        const key = dismissalKey(user);
+        const raw = key && typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null;
         const parsed: unknown = raw ? JSON.parse(raw) : {};
         const now = Date.now();
         const kept: Record<string, number> = {};
@@ -78,10 +84,41 @@ const state = $state({
      *  this open. One window per open, like the PWA update prompt. */
     dismissed: false,
     /** Persisted per-item notice dismissals (id → timestamp). */
-    dismissedIds: readDismissed()
+    dismissedIds: readDismissed(authState.activeUser)
 });
 
 export const takeover = state;
+let scopeUser = authState.activeUser;
+let scopeEpoch = 0;
+
+function ownsScope(user: string | null, epoch: number): boolean {
+    return authState.activeUser === user && scopeUser === user && scopeEpoch === epoch;
+}
+
+$effect.root(() => {
+    $effect(() => {
+        const user = authState.activeUser;
+        if (user === scopeUser) return;
+        scopeUser = user;
+        scopeEpoch += 1;
+        Object.assign(state, {
+            status: null,
+            items: [],
+            senders: [],
+            loaded: false,
+            sendersLoaded: false,
+            activity: [],
+            activityLoaded: false,
+            sendersBusy: false,
+            unavailable: false,
+            error: null,
+            busy: false,
+            dismissed: false,
+            dismissedIds: readDismissed(user)
+        });
+        if (user) untrack(() => { void loadTakeover(); });
+    });
+});
 
 // The item the "couldn't continue" window shows: the oldest blocked item
 // whose notice has not been dismissed. Functions, not exported $derived —
@@ -99,31 +136,40 @@ export function takeoverActive(): boolean {
 // One lockstep behaviour shared by first load and every mutation: the store
 // mirrors exactly what the server reports (the server clamps the knobs and
 // returns the effective values).
-async function refresh(): Promise<void> {
+async function refresh(user = scopeUser, epoch = scopeEpoch): Promise<boolean> {
+    if (!ownsScope(user, epoch)) return false;
     const [status, items, senders] = await Promise.all([
         getTakeover(),
         listTakeoverNeedsInput(),
         listTakeoverSenders()
     ]);
+    if (!ownsScope(user, epoch)) return false;
     state.status = status;
     state.items = items;
     state.senders = senders;
     state.sendersLoaded = true;
+    return true;
 }
 
 export async function loadTakeover(): Promise<void> {
-    if (state.loaded || state.unavailable) return;
+    const user = scopeUser;
+    const epoch = scopeEpoch;
+    if (!user || !ownsScope(user, epoch) || state.loaded || state.unavailable) return;
     try {
-        await refresh();
+        await refresh(user, epoch);
     } catch (e) {
+        if (!ownsScope(user, epoch)) return;
         if (e instanceof ApiError && e.status === 404) state.unavailable = true;
         else state.error = (e as Error).message || 'Could not load the assistant status';
     } finally {
-        state.loaded = true;
+        if (ownsScope(user, epoch)) state.loaded = true;
     }
 }
 
 export async function setTakeoverEnabled(on: boolean): Promise<void> {
+    const user = scopeUser;
+    const epoch = scopeEpoch;
+    if (!user || !ownsScope(user, epoch)) return;
     state.busy = true;
     try {
         // OFF goes through /stop, which disables AND clears the blocked
@@ -131,19 +177,28 @@ export async function setTakeoverEnabled(on: boolean): Promise<void> {
         // a plain settings write; the server starts polling for this user.
         if (on) await updateTakeover({ enabled: true });
         else await stopTakeover();
-        await refresh();
+        if (!ownsScope(user, epoch)) return;
+        await refresh(user, epoch);
+    } catch (err) {
+        if (ownsScope(user, epoch)) throw err;
     } finally {
-        state.busy = false;
+        if (ownsScope(user, epoch)) state.busy = false;
     }
 }
 
 export async function setTakeoverKnobs(patch: Partial<TakeoverSettings>): Promise<void> {
+    const user = scopeUser;
+    const epoch = scopeEpoch;
+    if (!user || !ownsScope(user, epoch)) return;
     state.busy = true;
     try {
         await updateTakeover(patch);
-        await refresh();
+        if (!ownsScope(user, epoch)) return;
+        await refresh(user, epoch);
+    } catch (err) {
+        if (ownsScope(user, epoch)) throw err;
     } finally {
-        state.busy = false;
+        if (ownsScope(user, epoch)) state.busy = false;
     }
 }
 
@@ -155,70 +210,102 @@ export async function setTakeoverKnobs(patch: Partial<TakeoverSettings>): Promis
 /** Add a sender rule. The server validates the pattern (full address or
  *  @domain, ≤200 chars), caps at 50 rules and rejects duplicates. */
 export async function addSenderRule(input: TakeoverSenderInput): Promise<void> {
+    const user = scopeUser;
+    const epoch = scopeEpoch;
+    if (!user || !ownsScope(user, epoch)) return;
     state.sendersBusy = true;
     try {
         await apiAddTakeoverSender(input);
-        await refresh();
+        if (!ownsScope(user, epoch)) return;
+        await refresh(user, epoch);
+    } catch (err) {
+        if (ownsScope(user, epoch)) throw err;
     } finally {
-        state.sendersBusy = false;
+        if (ownsScope(user, epoch)) state.sendersBusy = false;
     }
 }
 
 /** Change a rule's instructions, autoSend or signReplies. */
 export async function saveSenderRule(id: string, patch: TakeoverSenderPatch): Promise<void> {
+    const user = scopeUser;
+    const epoch = scopeEpoch;
+    if (!user || !ownsScope(user, epoch)) return;
     state.sendersBusy = true;
     try {
         await apiUpdateTakeoverSender(id, patch);
-        await refresh();
+        if (!ownsScope(user, epoch)) return;
+        await refresh(user, epoch);
+    } catch (err) {
+        if (ownsScope(user, epoch)) throw err;
     } finally {
-        state.sendersBusy = false;
+        if (ownsScope(user, epoch)) state.sendersBusy = false;
     }
 }
 
 /** Remove a rule — the assistant immediately stops handling that sender. */
 export async function removeSenderRule(id: string): Promise<void> {
+    const user = scopeUser;
+    const epoch = scopeEpoch;
+    if (!user || !ownsScope(user, epoch)) return;
     state.sendersBusy = true;
     try {
         await apiDeleteTakeoverSender(id);
-        await refresh();
+        if (!ownsScope(user, epoch)) return;
+        await refresh(user, epoch);
+    } catch (err) {
+        if (ownsScope(user, epoch)) throw err;
     } finally {
-        state.sendersBusy = false;
+        if (ownsScope(user, epoch)) state.sendersBusy = false;
     }
 }
 
 /** "Resume with advice" — the answer feeds the next draft, which still
  *  waits for approval. Never sends. */
 export async function answerTakeoverItem(id: string, advice: string): Promise<void> {
+    const user = scopeUser;
+    const epoch = scopeEpoch;
+    if (!user || !ownsScope(user, epoch)) return;
     state.busy = true;
     try {
         await answerTakeoverNeedsInput(id, advice);
+        if (!ownsScope(user, epoch)) return;
         state.dismissed = true;
-        await refresh();
+        await refresh(user, epoch);
+    } catch (err) {
+        if (ownsScope(user, epoch)) throw err;
     } finally {
-        state.busy = false;
+        if (ownsScope(user, epoch)) state.busy = false;
     }
 }
 
 /** Per-item "stop" — the assistant closes the item and leaves the thread. */
 export async function stopTakeoverItem(id: string): Promise<void> {
+    const user = scopeUser;
+    const epoch = scopeEpoch;
+    if (!user || !ownsScope(user, epoch)) return;
     state.busy = true;
     try {
         await dismissTakeoverNeedsInput(id);
+        if (!ownsScope(user, epoch)) return;
         state.dismissed = true;
-        await refresh();
+        await refresh(user, epoch);
+    } catch (err) {
+        if (ownsScope(user, epoch)) throw err;
     } finally {
-        state.busy = false;
+        if (ownsScope(user, epoch)) state.busy = false;
     }
 }
 
 /** Close the window without choosing. Persisted so it does not nag on
  *  every inbox open; the server queue is untouched. */
 export function dismissTakeoverNotice(id: string): void {
+    if (!scopeUser || !ownsScope(scopeUser, scopeEpoch)) return;
     state.dismissedIds = { ...state.dismissedIds, [id]: Date.now() };
     state.dismissed = true;
     try {
-        if (typeof localStorage !== 'undefined') {
-            localStorage.setItem(DISMISS_KEY, JSON.stringify(state.dismissedIds));
+        const key = dismissalKey(scopeUser);
+        if (key && typeof localStorage !== 'undefined') {
+            localStorage.setItem(key, JSON.stringify(state.dismissedIds));
         }
     } catch {
         // Storage blocked or full — the session dismissal still holds.
@@ -230,13 +317,16 @@ export function dismissTakeoverNotice(id: string): void {
  *  rule form, while history is display-only — a hiccup here must not gate
  *  either. Older servers (404) leave the list empty and the section hidden. */
 export async function loadTakeoverActivity(): Promise<void> {
-    if (state.unavailable) return;
+    const user = scopeUser;
+    const epoch = scopeEpoch;
+    if (!user || !ownsScope(user, epoch) || state.unavailable) return;
     try {
-        state.activity = await apiListActivity();
+        const activity = await apiListActivity();
+        if (ownsScope(user, epoch)) state.activity = activity;
     } catch (e) {
-        if (e instanceof ApiError && e.status === 404) return;
+        if (!ownsScope(user, epoch) || (e instanceof ApiError && e.status === 404)) return;
         // Activity is best-effort: log nothing loud, just stay empty.
     } finally {
-        state.activityLoaded = true;
+        if (ownsScope(user, epoch)) state.activityLoaded = true;
     }
 }

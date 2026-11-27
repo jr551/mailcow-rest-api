@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { scrubText } = require('../secret-scrub');
 
 // Append-only telemetry sink. The webmail's error doctor POSTs every
 // reportable incident here; we write a single JSON-line per error to
@@ -17,6 +18,27 @@ const MAX_FIELD_CHARS = 4000;            // cap individual fields
 function clip(s, max = MAX_FIELD_CHARS) {
     if (typeof s !== 'string') return undefined;
     return s.length > max ? s.slice(0, max) + `…(+${s.length - max})` : s;
+}
+
+function scrub(s, max = MAX_FIELD_CHARS) {
+    if (typeof s !== 'string') return undefined;
+    return clip(scrubText(stripUrlQueries(s), {}).replace(CAPABILITY_PATH_RE, '$1[redacted]'), max);
+}
+
+// A failed search or signed share link can put credentials and private text
+// in the query/fragment. Diagnostics need the route, not those values. Old
+// clients may still send the full URL, so strip it again at the sink.
+const CAPABILITY_PATH_RE = /(\/v1\/(?:public\/(?:ical|event)|messages\/(?:approve|deny)|webhook-inbox|webhook-message)\/|\/v1\/webhook-staging\/[^/?]+\/)[^/?#]+/g;
+const URL_WITH_QUERY_RE = /(?:https?:\/\/|\/(?:v1|imap-rest)\/)[^\s<>"']+/gi;
+
+function stripUrlQueries(text) {
+    return text.replace(URL_WITH_QUERY_RE, (value) => value.split(/[?#]/, 1)[0]);
+}
+
+function scrubUrl(s, max = 1000) {
+    if (typeof s !== 'string') return undefined;
+    const path = s.split(/[?#]/, 1)[0].replace(CAPABILITY_PATH_RE, '$1[redacted]');
+    return scrub(path, max);
 }
 
 // The POST endpoint is public and appends up to 32 KB a call, so the log
@@ -182,15 +204,15 @@ module.exports = async function telemetryRoutes(app, { logPath }) {
             ip: req.ip || req.socket?.remoteAddress || null,
             user: null,
             type: typeof b.type === 'string' ? b.type : 'unknown',
-            message: clip(b.message) || '(no message)',
+            message: scrub(b.message) || '(no message)',
             status: typeof b.status === 'number' ? b.status : null,
-            url: clip(b.url, 1000),
-            page: clip(b.page, 1000),
-            stack: clip(b.stack),
-            detail: clip(b.detail),
-            ua: clip(b.userAgent, 500),
-            sid: clip(b.sessionId, 80),
-            sha: clip(b.buildSha, 80)
+            url: scrubUrl(b.url),
+            page: scrubUrl(b.page),
+            stack: scrub(b.stack),
+            detail: scrub(b.detail),
+            ua: scrub(b.userAgent, 500),
+            sid: scrub(b.sessionId, 80),
+            sha: scrub(b.buildSha, 80)
         };
         try {
             await fs.promises.appendFile(target, JSON.stringify(entry) + '\n');

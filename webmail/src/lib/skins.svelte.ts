@@ -110,8 +110,10 @@ export const SKINS: Skin[] = [
                  * user picks one of the warm lights. */
                 .topbar .btn-ghost,
                 .topbar .theme-toggle { color: var(--text-on-accent) !important; }
+                .topbar .user { color: var(--text-on-accent) !important; }
                 .topbar .btn-ghost:hover,
-                .topbar .theme-toggle:hover {
+                .topbar .theme-toggle:hover,
+                .topbar .user:hover {
                     background: color-mix(in srgb, var(--text-on-accent) 15%, transparent) !important;
                     color: var(--text-on-accent) !important;
                 }
@@ -1063,7 +1065,11 @@ function applyCurrentSkin() {
     // style.
     const vars: Record<string, string> = {
         ...base,
-        ...buildOverrides(state.semantics)
+        // An untouched profile must keep the active skin's own semantic
+        // palette. Applying the generic defaults over every skin replaced
+        // carefully contrasted warning/success/danger colours with values
+        // that fail AA on both light and dark surfaces.
+        ...(state.semanticsEdited ? buildOverrides(state.semantics) : {})
     };
     const accent = state.accentOverride
         ? accentOverrideVars(state.accentOverride)

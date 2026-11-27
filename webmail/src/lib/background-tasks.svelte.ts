@@ -21,6 +21,7 @@ import { appendMessage } from './ai-threads.svelte';
 import { chatTurn, DESTRUCTIVE_TOOLS, type ChatMessage, type GrantableCapability } from './chat.svelte';
 import { playNotify } from './sounds.svelte';
 import { showToast } from './store.svelte';
+import { authState } from './auth.svelte';
 
 const MAX_RUNTIME_MS = 30 * 60 * 1000;
 const DEFAULT_BG_MAX_STEPS = 100;
@@ -28,6 +29,7 @@ const DEFAULT_BG_MAX_STEPS = 100;
 interface ActiveTask {
     id: string;
     threadId: string;
+    accountUser: string | null;
     description: string;
     startedAt: number;
     abort: AbortController;
@@ -49,6 +51,20 @@ const state = $state<TasksState>({ active: [] });
 
 export function backgroundTasks(): TasksState { return state; }
 
+let observedUser = authState.activeUser;
+$effect.root(() => {
+    $effect(() => {
+        const user = authState.activeUser;
+        if (user === observedUser) return;
+        observedUser = user;
+        for (const task of state.active) {
+            if (task.accountUser !== user) {
+                task.abort.abort(new DOMException('Active account changed', 'AbortError'));
+            }
+        }
+    });
+});
+
 function activeTaskFor(threadId: string): ActiveTask | undefined {
     return state.active.find((t) => t.threadId === threadId);
 }
@@ -60,6 +76,7 @@ export function cancelBackgroundTask(id: string) {
 
 interface StartOpts {
     threadId: string;
+    accountUser?: string | null;
     description: string;
     instruction: string;
     /** Tool catalog to make available — defaults to whatever the AI surface
@@ -109,14 +126,19 @@ function refreshBeforeUnloadGuard() {
 }
 
 export function startBackgroundTask(opts: StartOpts): { taskId: string; alreadyRunning: boolean } {
+    const accountUser = opts.accountUser === undefined ? authState.activeUser : opts.accountUser;
+    if (authState.activeUser !== accountUser) {
+        throw new DOMException('Active account changed', 'AbortError');
+    }
     const existing = activeTaskFor(opts.threadId);
-    if (existing) return { taskId: existing.id, alreadyRunning: true };
+    if (existing?.accountUser === accountUser) return { taskId: existing.id, alreadyRunning: true };
 
     const id = `bg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     const abort = new AbortController();
     const task: ActiveTask = {
         id,
         threadId: opts.threadId,
+        accountUser,
         description: opts.description.slice(0, 200),
         startedAt: Date.now(),
         abort,
@@ -137,6 +159,7 @@ export function startBackgroundTask(opts: StartOpts): { taskId: string; alreadyR
 
     void runBackgroundTask({
         ...opts,
+        accountUser,
         taskId: id,
         abort,
         cleanup: () => {
@@ -192,6 +215,7 @@ async function runBackgroundTask(opts: RunOpts): Promise<void> {
 
         for await (const ev of chatTurn(history, {
             signal: opts.abort.signal,
+            accountUser: opts.accountUser,
             // Withhold irreversible tools. A background task runs with no
             // one to consent, on content that can carry injected
             // instructions — so the capability simply isn't offered rather
@@ -207,7 +231,7 @@ async function runBackgroundTask(opts: RunOpts): Promise<void> {
             confirmWrite: () => Promise.resolve(false),
             subagentDepth: 0,
             onProgress: (p) => {
-                if (!live) return;
+                if (!live || opts.abort.signal.aborted || authState.activeUser !== opts.accountUser) return;
                 live.lastActivityAt = Date.now();
                 if (p.kind === 'tool' && p.name) {
                     live.currentTool = p.name;
@@ -235,20 +259,25 @@ async function runBackgroundTask(opts: RunOpts): Promise<void> {
         const elapsedMs = Date.now() - start;
         const summary = (acc || '_(no output)_').trim();
         const header = `🛎️ **Background task done** — ${opts.description.slice(0, 120)}\n\n_Ran for ${formatElapsed(elapsedMs)}, ${toolCount} tool ${toolCount === 1 ? 'call' : 'calls'}._\n\n`;
-        appendMessage(opts.threadId, { role: 'assistant', content: header + summary });
-        playNotify();
-        notifyDesktop(`Background task done`, opts.description.slice(0, 120));
+        if (!opts.abort.signal.aborted && authState.activeUser === opts.accountUser) {
+            appendMessage(opts.threadId, { role: 'assistant', content: header + summary });
+            playNotify();
+            notifyDesktop(`Background task done`, opts.description.slice(0, 120));
+        }
     } catch (err) {
         const aborted = (err as Error)?.name === 'AbortError' || opts.abort.signal.aborted;
+        const accountChanged = (opts.abort.signal.reason as Error | undefined)?.message === 'Active account changed';
         const reason = aborted
             ? (opts.abort.signal.reason instanceof Error ? opts.abort.signal.reason.message : 'cancelled')
             : ((err as Error)?.message || 'unknown error');
         const header = aborted
             ? `🛑 **Background task stopped** — ${opts.description.slice(0, 120)}\n\n_${reason}._\n\n`
             : `⚠️ **Background task failed** — ${opts.description.slice(0, 120)}\n\n_${reason}._\n\n`;
-        appendMessage(opts.threadId, { role: 'assistant', content: header + (acc.trim() || '_(no partial output)_') });
-        playNotify();
-        notifyDesktop(`Background task ${aborted ? 'stopped' : 'failed'}`, opts.description.slice(0, 120));
+        if (!accountChanged && authState.activeUser === opts.accountUser) {
+            appendMessage(opts.threadId, { role: 'assistant', content: header + (acc.trim() || '_(no partial output)_') });
+            playNotify();
+            notifyDesktop(`Background task ${aborted ? 'stopped' : 'failed'}`, opts.description.slice(0, 120));
+        }
     } finally {
         opts.cleanup();
     }

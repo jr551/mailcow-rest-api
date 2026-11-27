@@ -98,8 +98,10 @@ async function request<T>(method: string, url: string, body?: unknown, retried =
     });
     // Same silent re-mint as api.ts: an expired token shouldn't bounce the
     // user out of a panel they opened on purpose.
-    if (res.status === 401 && !retried) {
-        if (await tryRenewSession()) return request<T>(method, url, body, true);
+    if (res.status === 401 && !retried && s && getSession()?.user === s.user) {
+        if (await tryRenewSession(s.user) && getSession()?.user === s.user) {
+            return request<T>(method, url, body, true);
+        }
     }
     if (!res.ok) {
         let detail = `${res.status} ${res.statusText}`;

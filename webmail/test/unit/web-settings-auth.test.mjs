@@ -31,6 +31,7 @@ process.on('exit', () => { try { rmSync(tmp, { recursive: true, force: true }); 
 const urlOf = (f) => pathToFileURL(path.join(tmp, f)).href;
 const MODULES = {
     './keychain': 'keychain.mjs',
+    './account-context': 'account-context.mjs',
     './auth.svelte': 'auth.mjs',
     './settings.svelte': 'settings.mjs',
     './settings-sync': 'sync.mjs',
@@ -42,6 +43,7 @@ const MODULES = {
 
 for (const [src, out] of [
     ['keychain.ts', 'keychain.mjs'],
+    ['account-context.ts', 'account-context.mjs'],
     ['auth.svelte.ts', 'auth.mjs'],
     ['settings.svelte.ts', 'settings.mjs'],
     ['settings-sync.ts', 'sync.mjs'],
@@ -117,6 +119,71 @@ test('removeSession forgets the remembered credentials of that account', async (
     auth.removeSession('b@x.test');
     assert.deepEqual(kc.rememberedUsers(), ['a@x.test']);
     assert.equal(kc.recallCreds('b@x.test'), null);
+});
+
+test('a pending token renewal updates its account without stealing active focus', async () => {
+    const n = env();
+    const auth = await load('auth.mjs', n);
+    const kc = await import(urlOf('keychain.mjs'));
+    kc.rememberCreds('a@x.test', 'pw-a');
+    auth.upsertSession({ user: 'a@x.test', token: 'old-a', expiresAt: FAR });
+    auth.upsertSession({ user: 'b@x.test', token: 'token-b', expiresAt: FAR });
+    auth.switchTo('a@x.test');
+
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    let markStarted;
+    const started = new Promise((resolve) => { markStarted = resolve; });
+    globalThis.fetch = async () => {
+        markStarted();
+        await gate;
+        return {
+            ok: true,
+            status: 201,
+            json: async () => ({ token: 'fresh-a', expiresAt: new Date(FAR + 60_000).toISOString() })
+        };
+    };
+
+    const renewal = auth.tryRenewSession('a@x.test');
+    await started;
+    auth.switchTo('b@x.test');
+    release();
+
+    assert.equal(await renewal, true);
+    assert.equal(auth.authState.activeUser, 'b@x.test');
+    assert.equal(auth.authState.sessions.find((s) => s.user === 'a@x.test').token, 'fresh-a');
+    assert.equal(auth.authState.sessions.find((s) => s.user === 'b@x.test').token, 'token-b');
+});
+
+test('a renewal finishing after sign-out does not restore remembered credentials', async () => {
+    const n = env();
+    const auth = await load('auth.mjs', n);
+    const kc = await import(urlOf('keychain.mjs'));
+    kc.rememberCreds('a@x.test', 'pw-a');
+    auth.upsertSession({ user: 'a@x.test', token: 'old-a', expiresAt: FAR });
+
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    let markStarted;
+    const started = new Promise((resolve) => { markStarted = resolve; });
+    globalThis.fetch = async () => {
+        markStarted();
+        await gate;
+        return {
+            ok: true,
+            status: 201,
+            json: async () => ({ token: 'fresh-a', expiresAt: new Date(FAR + 60_000).toISOString() })
+        };
+    };
+
+    const renewal = auth.tryRenewSession('a@x.test');
+    await started;
+    auth.removeSession('a@x.test');
+    release();
+
+    assert.equal(await renewal, false);
+    assert.equal(auth.authState.sessions.some((s) => s.user === 'a@x.test'), false);
+    assert.equal(kc.recallCreds('a@x.test'), null);
 });
 
 test('logoutRemote forgets credentials and revokes the token with DELETE /v1/auth/session', async () => {
@@ -231,6 +298,7 @@ test('sanitizeSnapshot keeps only known, synced, valid settings', async () => {
             "llm": { "kind": "openai", "apiKey": "sk-x", "baseUrl": "https://evil.test" },
             "useCustomLlm": true,
             "permanentSignIn": true,
+            "errorTelemetry": true,
             "clientRules": [1],
             "somethingElse": 1,
             "pageSize": 5000000,
@@ -265,13 +333,13 @@ test('sanitizeSnapshot rejects malformed envelopes', async () => {
     assert.equal(sync.sanitizeSnapshot({ v: 1, ts: 1, settings: [] }), null);
 });
 
-test('the pushed snapshot never carries the LLM key or permanentSignIn', async () => {
-    const n = env({ settings: { useCustomLlm: true, llm: { kind: 'openai', apiKey: 'sk-secret', baseUrl: 'https://p.test' }, permanentSignIn: true } });
+test('the pushed snapshot never carries the LLM key, permanentSignIn or telemetry consent', async () => {
+    const n = env({ settings: { useCustomLlm: true, llm: { kind: 'openai', apiKey: 'sk-secret', baseUrl: 'https://p.test' }, permanentSignIn: true, errorTelemetry: true } });
     const sync = await load('sync.mjs', n);
     const snap = sync.snapshotNow();
     const text = JSON.stringify(snap);
     assert.ok(!text.includes('sk-secret'));
-    for (const k of ['llm', 'useCustomLlm', 'permanentSignIn']) assert.ok(!(k in snap.settings), k);
+    for (const k of ['llm', 'useCustomLlm', 'permanentSignIn', 'errorTelemetry']) assert.ok(!(k in snap.settings), k);
     assert.ok('density' in snap.settings);
 });
 

@@ -27,7 +27,7 @@ test.describe('mobile webmail', () => {
         await expect(firstRow.locator('.dot')).toBeVisible();
 
         // Starred message shows star icon
-        const starredRow = page.locator('.msg-row').nth(2);
+        const starredRow = page.locator('.msg-row').filter({ hasText: 'Morgan Blake' });
         await expect(starredRow.locator('.star-mark')).toBeVisible();
 
         await page.waitForTimeout(400);
@@ -51,6 +51,7 @@ test.describe('mobile webmail', () => {
     });
 
     test('long press on message opens action sheet with AI summarize', async ({ page }) => {
+        await page.addInitScript(() => localStorage.setItem('webmail.settings.v1', JSON.stringify({ aiFeatures: true })));
         await page.goto('/webmail/mobile/');
         await page.fill('input[type="email"]', MOCK_USER);
         await page.fill('input[type="password"]', 'hunter2');
@@ -131,11 +132,11 @@ test.describe('mobile webmail', () => {
         await page.click('button:has-text("Sign in")');
 
         await page.locator('.segment:has-text("Unread")').click();
-        // Only one unread message in mocks
-        await expect(page.locator('.msg-row')).toHaveCount(1);
+        // Six unread and two starred messages in the current fixtures.
+        await expect(page.locator('.msg-row')).toHaveCount(6);
 
         await page.locator('.segment:has-text("Starred")').click();
-        await expect(page.locator('.msg-row')).toHaveCount(1);
+        await expect(page.locator('.msg-row')).toHaveCount(2);
 
         await page.locator('.segment:has-text("All")').click();
         await expect(page.locator('.msg-row')).toHaveCount(18);
@@ -160,7 +161,7 @@ test.describe('mobile webmail', () => {
         await page.addInitScript(() => {
             localStorage.setItem('webmail.settings.v1', JSON.stringify({
                 llm: { kind: 'openai', preset: 'openai', apiKey: 'sk-test', baseUrl: '', model: '' },
-                useCustomLlm: true, density: 'comfortable', listFilter: 'all'
+                useCustomLlm: true, aiFeatures: true, density: 'comfortable', listFilter: 'all'
             }));
         });
 
@@ -284,13 +285,14 @@ test.describe('mobile webmail', () => {
     });
 
     test('phishing scan shows purple warning on suspicious email', async ({ page }) => {
+        await page.addInitScript(() => localStorage.setItem('webmail.settings.v1', JSON.stringify({ aiFeatures: true, phishingScan: true })));
         await page.goto('/webmail/mobile/');
         await page.fill('input[type="email"]', MOCK_USER);
         await page.fill('input[type="password"]', 'hunter2');
         await page.click('button:has-text("Sign in")');
 
-        // Open the invoice message (msg-row-1000 is second row)
-        await page.locator('.msg-row').nth(1).click();
+        // Open the invoice message.
+        await page.locator('.msg-row').filter({ hasText: 'Acme Billing' }).click();
         await expect(page.locator('.message-view')).toBeVisible();
 
         // Wait for phishing overlay
@@ -305,6 +307,7 @@ test.describe('mobile webmail', () => {
     });
 
     test('safe email does not show phishing warning', async ({ page }) => {
+        await page.addInitScript(() => localStorage.setItem('webmail.settings.v1', JSON.stringify({ aiFeatures: true, phishingScan: true })));
         await page.goto('/webmail/mobile/');
         await page.fill('input[type="email"]', MOCK_USER);
         await page.fill('input[type="password"]', 'hunter2');

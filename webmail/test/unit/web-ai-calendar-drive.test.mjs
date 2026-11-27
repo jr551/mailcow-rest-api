@@ -56,6 +56,30 @@ test('drive folders are deleted recursively, not just their placeholder', () => 
     assert.ok(api.includes('continuation-token'), 'deleteFolder pages through the listing');
 });
 
+test('Drive requests and attachment uploads stop at account boundaries', () => {
+    const src = read('lib/drive.svelte.ts');
+    assert.ok(src.includes("operation.controller.abort(new DOMException('Active account changed'"));
+    assert.ok(src.includes('function ownsOperation(operation: DriveOperation)'));
+    assert.match(src, /saveAttachmentToDrive[\s\S]*putObject\(path, file,[\s\S]*controller\.signal\)/);
+    assert.match(src, /if \(!ownsOperation\(operation\)\) return;[\s\S]*trackedUpload\.loaded/);
+    assert.ok(src.includes('if (ownsScope(user, epoch)) await loadPath(base)'));
+    const api = read('lib/drive-api.ts');
+    assert.ok(api.includes('const client = aws;\n    const config = cfg;'), 'each async request snapshots the originating S3 client/config');
+    assert.ok(api.includes('signal?.addEventListener(\'abort\', onAbort'));
+    assert.ok(api.includes('client.fetch(url, { signal })'));
+    assert.ok(api.includes('signal?: AbortSignal): Promise<string>'));
+    assert.ok(api.includes('if (signal?.aborted) throw signal.reason'));
+    const picker = read('components/drive/DriveFolderPicker.svelte');
+    assert.ok(picker.includes('const cfg = await getDriveConfig()'));
+    assert.ok(picker.includes('authState.activeUser !== user || sequence !== requestSequence'));
+    const preview = read('components/drive/DrivePreview.svelte');
+    assert.ok(preview.includes('getObjectUrl(current.path, PREVIEW_URL_TTL_SEC, controller.signal)'));
+    assert.ok(preview.includes('fetchBlob(current.path, controller.signal)'));
+    const item = read('components/drive/DriveItemCard.svelte');
+    assert.ok(item.includes('getObjectUrl(current.path, undefined, controller.signal)'));
+    assert.ok(item.includes('authState.activeUser === user && item === current'));
+});
+
 test('drive toolbar confirms bulk delete', () => {
     const src = read('components/drive/DriveToolbar.svelte');
     assert.ok(/confirm\(/.test(src));
@@ -90,7 +114,7 @@ test('calendar storage is scoped to the signed-in account and colours are valida
     assert.ok(src.includes('resetForUser'));
     assert.ok(src.includes('function safeColor'));
     assert.ok(!/color: (s|c|sub)\.color \|\| DEFAULT_COLOR/.test(src), 'raw colours never reach state');
-    assert.ok(read('lib/phishing-scan.ts').includes("getSession()?.user"), 'phishing cache key includes the account');
+    assert.match(read('lib/phishing-scan.ts'), /makeCacheKey\(path, uid, user\)/, 'the cache write uses the scan owner, not whichever account is active later');
 });
 
 test('calendar edit creates before deleting and delete failures surface', () => {
@@ -125,10 +149,35 @@ test('chat only runs offered tools and asks before risky calls', () => {
     assert.ok(src.includes('uidSegment(args.uid)'));
 });
 
+test('AI turns pin tool requests and background work to the originating account', () => {
+    const chat = read('lib/chat.svelte.ts');
+    assert.ok(chat.includes('accountUser?: string | null'));
+    assert.ok(chat.includes('assertChatOwner(accountUser, opts.signal)'));
+    assert.ok(chat.includes('session: ownerSession?.user === accountUser ? ownerSession : null'));
+    assert.ok(chat.includes('execTool(tc.name, parsed, toolRequest)'));
+    assert.ok(chat.includes("yield { type: 'tool_call', toolName: tc.name, toolArgs: parsed };\n            assertChatOwner(accountUser, opts.signal);"));
+    const background = read('lib/background-tasks.svelte.ts');
+    assert.ok(background.includes("task.abort.abort(new DOMException('Active account changed'"));
+    assert.ok(background.includes('accountUser: opts.accountUser'));
+    const app = read('components/ai/ChatApp.svelte');
+    assert.ok(app.includes("abortCtrl?.abort(new DOMException('Active account changed'"));
+    assert.ok(app.includes('accountUser: ownerUser'));
+    const mobile = read('mobile/components/AiChatView.svelte');
+    assert.ok(mobile.includes("abortCtrl?.abort(new DOMException('Active account changed'"));
+    assert.ok(mobile.includes('accountUser: user'));
+    const voice = read('components/ai/VoiceChat.svelte');
+    assert.ok(voice.includes("onClose();"));
+    assert.ok(voice.includes('accountUser: ownerUser'));
+    const bubble = read('components/ChatBot.svelte');
+    assert.ok(bubble.includes("abortCtrl?.abort(new DOMException('Active account changed'"));
+    assert.ok(bubble.includes('accountUser: user'));
+});
+
 test('stopping a chat turn denies parked approvals and aborts the tool loop', () => {
     const chat = read('lib/chat.svelte.ts');
     assert.ok(chat.includes('awaitConsent('));
-    assert.ok(/opts\.signal\?\.aborted\) throw abortError\(\)/.test(chat));
+    assert.ok(/signal\?\.aborted[\s\S]*throw abortError\(\)/.test(chat));
+    assert.ok(chat.includes('assertChatOwner(accountUser, opts.signal)'));
     const app = read('components/ai/ChatApp.svelte');
     assert.ok(/function stop\(\) \{[^}]*denyAllPending\(\)/.test(app));
 });

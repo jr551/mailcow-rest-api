@@ -30,7 +30,7 @@ import { SKINS, setSkin, setCustomAccent, isKnownSkin, skinState } from './skins
 import { folderPrefs, setFolderIcon } from './folder-prefs.svelte';
 import { ui, showToast } from './store.svelte';
 import { maybeFlagCooldown, aiCooldownLabel } from './ai-cooldown.svelte';
-import { bearerHeader, getSession } from './auth.svelte';
+import { authState, bearerHeader, getSession, type Session } from './auth.svelte';
 import { apiUrl } from './api';
 import { setTools } from './ai-threads.svelte';
 
@@ -625,15 +625,31 @@ export const TOOLS: ToolDef[] = [
 
 // ---------- Tool dispatch ----------
 
-async function rest(path: string, init: RequestInit = {}): Promise<unknown> {
-    const session = getSession();
+interface ChatToolRequest {
+    accountUser: string | null;
+    session: Session | null;
+    signal?: AbortSignal;
+}
+
+function assertChatOwner(accountUser: string | null, signal?: AbortSignal): void {
+    if (signal?.aborted
+        || authState.activeUser !== accountUser
+        || (getSession()?.user ?? null) !== accountUser) {
+        throw abortError();
+    }
+}
+
+async function rest(path: string, init: RequestInit, context: ChatToolRequest): Promise<unknown> {
+    assertChatOwner(context.accountUser, context.signal);
+    const session = context.session;
     if (!session) throw new Error('No active session');
     const headers: Record<string, string> = {
         ...(init.headers as Record<string, string> | undefined),
         authorization: bearerHeader(session)
     };
     if (init.body) headers['content-type'] = 'application/json';
-    const res = await fetch(apiUrl(path), { ...init, headers });
+    const res = await fetch(apiUrl(path), { ...init, headers, signal: context.signal });
+    assertChatOwner(context.accountUser, context.signal);
     if (res.status === 204) return null;
     const ct = res.headers.get('content-type') || '';
     if (!res.ok) {
@@ -641,34 +657,39 @@ async function rest(path: string, init: RequestInit = {}): Promise<unknown> {
         try {
             if (ct.includes('json')) {
                 const j = await res.json();
+                assertChatOwner(context.accountUser, context.signal);
                 detail = j.detail || j.title || detail;
             }
         } catch { /* ignore */ }
         throw new Error(detail);
     }
-    return ct.includes('json') ? res.json() : res.text();
+    const result = ct.includes('json') ? await res.json() : await res.text();
+    assertChatOwner(context.accountUser, context.signal);
+    return result;
 }
 
-async function execTool(name: string, args: Record<string, unknown>): Promise<unknown> {
+async function execTool(name: string, args: Record<string, unknown>, context: ChatToolRequest): Promise<unknown> {
+    assertChatOwner(context.accountUser, context.signal);
+    const toolRest = (path: string, init: RequestInit = {}) => rest(path, init, context);
     switch (name) {
         case 'list_mailboxes':
-            return rest(`/v1/mailboxes${args.counts ? '?counts=true' : ''}`);
+            return toolRest(`/v1/mailboxes${args.counts ? '?counts=true' : ''}`);
         case 'search_messages': {
             const q = new URLSearchParams();
             if (args.search) q.set('search', String(args.search));
             if (args.page !== undefined) q.set('page', String(args.page));
             if (args.pageSize !== undefined) q.set('pageSize', String(args.pageSize));
             const qs = q.toString();
-            return rest(`/v1/mailboxes/${encodeURIComponent(String(args.path))}/messages${qs ? '?' + qs : ''}`);
+            return toolRest(`/v1/mailboxes/${encodeURIComponent(String(args.path))}/messages${qs ? '?' + qs : ''}`);
         }
         case 'get_message':
-            return rest(`/v1/mailboxes/${encodeURIComponent(String(args.path))}/messages/${uidSegment(args.uid)}`);
+            return toolRest(`/v1/mailboxes/${encodeURIComponent(String(args.path))}/messages/${uidSegment(args.uid)}`);
         case 'summarise_email': {
             // Fetch the message envelope + body, then ship the body
             // through the existing /v1/ai/summarize endpoint. Returns
             // { subject, from, summary } so the model can quote the
             // bits that matter without re-asking for envelope details.
-            const detail = await rest(`/v1/mailboxes/${encodeURIComponent(String(args.path))}/messages/${uidSegment(args.uid)}`) as {
+            const detail = await toolRest(`/v1/mailboxes/${encodeURIComponent(String(args.path))}/messages/${uidSegment(args.uid)}`) as {
                 envelope?: { subject?: string; from?: { name?: string | null; address?: string | null }[] };
                 text?: string;
                 html?: string;
@@ -676,7 +697,7 @@ async function execTool(name: string, args: Record<string, unknown>): Promise<un
             const fromAddr = detail.envelope?.from?.[0];
             const text = (detail.text || (detail.html || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()).slice(0, 12000);
             const maxWords = Math.max(30, Math.min(300, Number(args.maxWords) || 80));
-            const sum = await rest('/v1/ai/summarize', {
+            const sum = await toolRest('/v1/ai/summarize', {
                 method: 'POST',
                 body: JSON.stringify({ text, maxWords })
             }) as { content?: string };
@@ -688,7 +709,7 @@ async function execTool(name: string, args: Record<string, unknown>): Promise<un
         }
         case 'move_message': {
             const path = encodeURIComponent(String(args.path));
-            return rest(`/v1/mailboxes/${path}/messages/${uidSegment(args.uid)}/move`, {
+            return toolRest(`/v1/mailboxes/${path}/messages/${uidSegment(args.uid)}/move`, {
                 method: 'PUT',
                 body: JSON.stringify({ path: String(args.destination) })
             });
@@ -702,25 +723,25 @@ async function execTool(name: string, args: Record<string, unknown>): Promise<un
             else if (op === 'star') body.add = ['\\Flagged'];
             else if (op === 'unstar') body.remove = ['\\Flagged'];
             else throw new Error('op must be one of read | unread | star | unstar');
-            return rest(`/v1/mailboxes/${path}/messages/${uidSegment(args.uid)}/flags`, {
+            return toolRest(`/v1/mailboxes/${path}/messages/${uidSegment(args.uid)}/flags`, {
                 method: 'PUT',
                 body: JSON.stringify(body)
             });
         }
         case 'delete_message': {
             const path = encodeURIComponent(String(args.path));
-            return rest(`/v1/mailboxes/${path}/messages/${uidSegment(args.uid)}`, { method: 'DELETE' });
+            return toolRest(`/v1/mailboxes/${path}/messages/${uidSegment(args.uid)}`, { method: 'DELETE' });
         }
         case 'list_mail_rules':
-            return rest('/v1/me/mail-rules');
+            return toolRest('/v1/me/mail-rules');
         case 'add_mail_rule':
-            return rest('/v1/me/mail-rules', { method: 'POST', body: JSON.stringify(args) });
+            return toolRest('/v1/me/mail-rules', { method: 'POST', body: JSON.stringify(args) });
         case 'remove_mail_rule':
-            return rest(`/v1/me/mail-rules/${encodeURIComponent(String(args.id))}`, { method: 'DELETE' });
+            return toolRest(`/v1/me/mail-rules/${encodeURIComponent(String(args.id))}`, { method: 'DELETE' });
         case 'block_sender':
-            return rest('/v1/me/blocked-senders', { method: 'POST', body: JSON.stringify({ sender: args.sender }) });
+            return toolRest('/v1/me/blocked-senders', { method: 'POST', body: JSON.stringify({ sender: args.sender }) });
         case 'send_message':
-            return rest('/v1/messages/send', { method: 'POST', body: JSON.stringify(args) });
+            return toolRest('/v1/messages/send', { method: 'POST', body: JSON.stringify(args) });
         case 'list_calendars': {
             // Merge CalDAV calendars + subscribed external feeds into one
             // list so the model can reason over the user's full calendar
@@ -728,9 +749,15 @@ async function execTool(name: string, args: Record<string, unknown>): Promise<un
             // only so it doesn't try to write to them.
             type CalDav = { id: string; displayName?: string; color?: string | null; primary?: boolean };
             type Sub = { id: string; name: string; color?: string | null };
+            const optional = <T>(path: string, fallback: T): Promise<unknown | T> =>
+                toolRest(path).catch((err) => {
+                    assertChatOwner(context.accountUser, context.signal);
+                    if ((err as Error)?.name === 'AbortError') throw err;
+                    return fallback;
+                });
             const [cal, sub] = await Promise.all([
-                rest('/v1/me/calendars').catch(() => ({ calendars: [] as CalDav[] })),
-                rest('/v1/me/calendar-subscriptions').catch(() => ({ subscriptions: [] as Sub[] }))
+                optional('/v1/me/calendars', { calendars: [] as CalDav[] }),
+                optional('/v1/me/calendar-subscriptions', { subscriptions: [] as Sub[] })
             ]);
             const calendars = ((cal as { calendars?: CalDav[] }).calendars || []).map((c) => ({
                 id: c.id,
@@ -758,27 +785,27 @@ async function execTool(name: string, args: Record<string, unknown>): Promise<un
             // Subscription IDs come back from listSubscriptions; if we can
             // find one matching, hit the subscription events route.
             try {
-                const subs = await rest('/v1/me/calendar-subscriptions') as { subscriptions?: { id: string }[] };
+                const subs = await toolRest('/v1/me/calendar-subscriptions') as { subscriptions?: { id: string }[] };
                 const isSub = (subs.subscriptions || []).some((s) => s.id === calId);
                 if (isSub) {
-                    return rest(`/v1/me/calendar-subscriptions/${encodeURIComponent(calId)}/events?${q.toString()}`);
+                    return toolRest(`/v1/me/calendar-subscriptions/${encodeURIComponent(calId)}/events?${q.toString()}`);
                 }
             } catch { /* fall through to caldav */ }
-            return rest(`/v1/me/calendars/${encodeURIComponent(calId)}/events?${q.toString()}`);
+            return toolRest(`/v1/me/calendars/${encodeURIComponent(calId)}/events?${q.toString()}`);
         }
         case 'get_event':
-            return rest(
+            return toolRest(
                 `/v1/me/calendars/${encodeURIComponent(String(args.calendar))}/events/${encodeURIComponent(String(args.uid))}`
             );
         case 'create_event': {
             const { calendar, ...rest_ } = args;
-            return rest(
+            return toolRest(
                 `/v1/me/calendars/${encodeURIComponent(String(calendar))}/events`,
                 { method: 'POST', body: JSON.stringify(rest_) }
             );
         }
         case 'delete_event':
-            return rest(
+            return toolRest(
                 `/v1/me/calendars/${encodeURIComponent(String(args.calendar))}/events/${encodeURIComponent(String(args.uid))}`,
                 { method: 'DELETE' }
             );
@@ -955,7 +982,7 @@ async function execTool(name: string, args: Record<string, unknown>): Promise<un
             const query = String(args.query || '').trim();
             if (!query) throw new Error('query is required');
             const count = Math.max(1, Math.min(10, Number(args.count) || 5));
-            return rest('/v1/ai/web-search', {
+            return toolRest('/v1/ai/web-search', {
                 method: 'POST',
                 body: JSON.stringify({ query, count })
             });
@@ -1160,8 +1187,19 @@ export async function* chatTurn(
          *  tool call, step) so the UI can show what's happening
          *  without re-routing through chatTurn events. */
         onProgress?: (ev: { kind: 'tool' | 'step' | 'message'; name?: string; step?: number; text?: string }) => void;
+        /** Account that owns this turn; tool requests never follow a later
+         *  active-account switch. Defaults to the account at turn start. */
+        accountUser?: string | null;
     } = {}
 ): AsyncGenerator<ChatTurnEvent, void, unknown> {
+    const ownerSession = getSession();
+    const accountUser = opts.accountUser === undefined ? ownerSession?.user ?? null : opts.accountUser;
+    assertChatOwner(accountUser, opts.signal);
+    const toolRequest: ChatToolRequest = {
+        accountUser,
+        session: ownerSession?.user === accountUser ? ownerSession : null,
+        signal: opts.signal
+    };
     if (!isChatConfigured()) {
         yield { type: 'error', text: 'Configure an OpenAI-compatible provider + API key in Settings → AI.' };
         return;
@@ -1208,6 +1246,7 @@ export async function* chatTurn(
     }
 
     for (let step = 0; step < maxSteps; step++) {
+        assertChatOwner(accountUser, opts.signal);
         opts.onProgress?.({ kind: 'step', step });
         // Request timing — surfaces in DevTools so the user can tell whether
         // a slow turn is the wire (large payloads), the provider (reasoning
@@ -1229,6 +1268,7 @@ export async function* chatTurn(
             reasoning_effort: 'low'
         });
         const t0 = performance.now();
+        assertChatOwner(accountUser, opts.signal);
         const res = await fetch(`${baseUrl}/chat/completions`, {
             method: 'POST',
             headers: {
@@ -1238,6 +1278,7 @@ export async function* chatTurn(
             body: reqBody,
             signal: opts.signal
         });
+        assertChatOwner(accountUser, opts.signal);
         const t1 = performance.now();
         console.debug(
             `[chat] step=${step} model=${model} reqBytes=${reqBody.length} histMsgs=${messages.length} latencyMs=${Math.round(t1 - t0)}`
@@ -1249,6 +1290,7 @@ export async function* chatTurn(
                 const j = await res.json();
                 detail = j?.error?.message || j?.message || detail;
             } catch { /* not JSON */ }
+            assertChatOwner(accountUser, opts.signal);
             // LiteLLM returns 429 + "Budget has been exceeded" when the
             // per-user daily cap is reached. Surface a friendlier toast
             // and a short error in the chat so the user knows it'll reset.
@@ -1272,6 +1314,7 @@ export async function* chatTurn(
             return;
         }
         const body = await res.json();
+        assertChatOwner(accountUser, opts.signal);
         const choice = body?.choices?.[0];
         const msg = choice?.message;
         if (!msg) {
@@ -1321,10 +1364,11 @@ export async function* chatTurn(
         });
 
         for (const tc of toolCalls) {
-            if (opts.signal?.aborted) throw abortError();
+            assertChatOwner(accountUser, opts.signal);
             let parsed: Record<string, unknown> = {};
             try { parsed = JSON.parse(tc.arguments || '{}'); } catch { /* tolerate empty */ }
             yield { type: 'tool_call', toolName: tc.name, toolArgs: parsed };
+            assertChatOwner(accountUser, opts.signal);
 
             // Only run tools that were actually offered for this turn. A
             // hallucinated or injected name must not reach execTool just
@@ -1351,7 +1395,7 @@ export async function* chatTurn(
                 const granted = validCap && opts.confirmPermission
                     ? await awaitConsent(opts.confirmPermission({ capability: cap as GrantableCapability, reason }), opts.signal)
                     : false;
-                if (opts.signal?.aborted) throw abortError();
+                assertChatOwner(accountUser, opts.signal);
                 if (validCap && granted) {
                     // Actually flip the toggle so the capability takes effect
                     // (model swap to Sonar/`:online` for webSearch, prompt
@@ -1383,7 +1427,7 @@ export async function* chatTurn(
                 const approved = opts.confirmWrite
                     ? await awaitConsent(opts.confirmWrite({ name: tc.name, args: parsed }), opts.signal)
                     : false;
-                if (opts.signal?.aborted) throw abortError();
+                assertChatOwner(accountUser, opts.signal);
                 if (!approved) {
                     messages.push({
                         role: 'tool',
@@ -1414,6 +1458,7 @@ export async function* chatTurn(
                         result = { error: 'Missing instruction.' };
                     } else {
                         const { startBackgroundTask } = await import('./background-tasks.svelte');
+                        assertChatOwner(accountUser, opts.signal);
                         const out = startBackgroundTask({
                             threadId: opts.threadId,
                             description: desc || 'Background task',
@@ -1421,7 +1466,8 @@ export async function* chatTurn(
                             tools: toolCatalog,
                             systemPrompt,
                             modelOverride: opts.modelOverride,
-                            history
+                            history,
+                            accountUser
                         });
                         result = out.alreadyRunning
                             ? { ok: false, alreadyRunning: true, taskId: out.taskId, note: 'Another background task is already running on this thread. Tell the user to wait or cancel that one first.' }
@@ -1453,6 +1499,7 @@ export async function* chatTurn(
                             let subToolCount = 0;
                             for await (const ev of chatTurn(subHistory, {
                                 signal: opts.signal,
+                                accountUser,
                                 tools: toolCatalog,
                                 systemPrompt,
                                 modelOverride: opts.modelOverride,
@@ -1488,8 +1535,10 @@ export async function* chatTurn(
             } else {
                 opts.onProgress?.({ kind: 'tool', name: tc.name });
                 try {
-                    result = await execTool(tc.name, parsed);
+                    result = await execTool(tc.name, parsed, toolRequest);
+                    assertChatOwner(accountUser, opts.signal);
                 } catch (err) {
+                    assertChatOwner(accountUser, opts.signal);
                     result = { error: (err as Error).message };
                 }
             }
@@ -1509,6 +1558,7 @@ export async function* chatTurn(
     // larger budget instead of giving up — the user gets a "switching
     // to long task" message and a notification when it finishes.
     if (opts.threadId) {
+        assertChatOwner(accountUser, opts.signal);
         const continuedHistory: ChatMessage[] = [];
         for (const m of messages.slice(1)) {
             const c = openAiMessageToChat(m);
@@ -1516,6 +1566,7 @@ export async function* chatTurn(
         }
         try {
             const { startBackgroundTask } = await import('./background-tasks.svelte');
+            assertChatOwner(accountUser, opts.signal);
             const out = startBackgroundTask({
                 threadId: opts.threadId,
                 description: 'Continuing your request',
@@ -1524,6 +1575,7 @@ export async function* chatTurn(
                 systemPrompt,
                 modelOverride: opts.modelOverride,
                 history: continuedHistory,
+                accountUser,
                 maxSteps: 100
             });
             if (out.alreadyRunning) {

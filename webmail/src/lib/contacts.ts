@@ -39,8 +39,10 @@ async function request<T>(method: string, url: string, body?: unknown, retried =
         headers,
         body: body === undefined ? undefined : JSON.stringify(body)
     });
-    if (res.status === 401 && !retried) {
-        if (await tryRenewSession()) return request<T>(method, url, body, true);
+    if (res.status === 401 && !retried && s && getSession()?.user === s.user) {
+        if (await tryRenewSession(s.user) && getSession()?.user === s.user) {
+            return request<T>(method, url, body, true);
+        }
     }
     if (!res.ok) {
         let detail = `${res.status} ${res.statusText}`;

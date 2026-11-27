@@ -294,14 +294,14 @@
 
 <aside class="sidebar" aria-label="Mailbox navigation">
     <div class="compose-row">
-        <button type="button" class="btn btn-primary compose" onclick={onCompose} data-testid="compose-btn">
+        <button type="button" class="btn btn-primary compose" aria-label="Compose new message" onclick={onCompose} data-testid="compose-btn">
             <Icon name="plus" size={16} />
             <span>Compose</span>
         </button>
         {#if onRefresh}
             <button
                 type="button"
-                class={`btn btn-primary refresh-btn ${refreshSpinning ? 'spinning' : ''}`}
+                class={`btn btn-ghost refresh-btn ${refreshSpinning ? 'spinning' : ''}`}
                 onclick={handleRefresh}
                 title="Refresh inbox"
                 aria-label="Refresh inbox"
@@ -354,6 +354,7 @@
                                 class:expanded
                                 class:drop-target={dropTargetPath === node.path}
                                 class:ai-folder={isAiFolder(node.label)}
+                                aria-label={prettyFolder(node.label)}
                                 draggable={onRename ? true : undefined}
                                 onclick={() => onSelect(node.path)}
                                 oncontextmenu={(e) => openMenu(e, node.path)}
@@ -454,6 +455,7 @@
                             type="button"
                             class="folder shortcut"
                             class:active={embedUrl === sc.url}
+                            aria-label={sc.title}
                             onclick={() => onShortcut(sc)}
                             title={sc.description || sc.url}
                             data-testid={`shortcut-${sc.title}`}
@@ -486,7 +488,7 @@
             <Icon name="chevronRight" size={11} />
         </span>
         <div class="sidebar-footer">
-            <button type="button" class="footer-btn new-folder" onclick={() => doCreate(null)} data-testid="sidebar-new-folder">
+            <button type="button" class="footer-btn new-folder" aria-label="Create new folder" onclick={() => doCreate(null)} data-testid="sidebar-new-folder">
                 <Icon name="plus" size={13} />
                 <span>New folder</span>
             </button>
@@ -495,6 +497,7 @@
                     type="button"
                     class="footer-btn"
                     onclick={collapseAll}
+                    aria-label="Collapse every nested folder"
                     title="Collapse every nested folder"
                     data-testid="sidebar-collapse-all"
                 >
@@ -508,6 +511,7 @@
                         type="button"
                         class={`footer-btn ${bulkRunning ? 'picking' : ''}`}
                         bind:this={stylePickerBtn}
+                        aria-label={bulkRunning ? 'Cancel automatic folder icons' : 'Automatically pick folder icons'}
                         onclick={toggleStylePicker}
                         title={bulkRunning
                             ? 'Click to cancel'
@@ -628,9 +632,11 @@
     }
     @media (max-width: 720px) {
         .sidebar { padding: 12px 6px; }
-        .sidebar .name, .sidebar-footer { display: none; }
+        .sidebar .name { display: none; }
         .compose span { display: none; }
         .compose { padding: 10px; aspect-ratio: 1 / 1; justify-content: center; }
+        .sidebar-footer .footer-btn span { display: none; }
+        .sidebar-footer .footer-btn { justify-content: center; padding: 8px 0; }
     }
     .compose-row {
         display: flex;
@@ -644,17 +650,17 @@
         font-weight: 600;
         box-shadow: var(--shadow-sm);
     }
-    /* Refresh inherits btn-primary so it tracks the active theme accent —
-     * matches compose visually so the two read as a paired action. */
+    /* Keep refresh secondary so Compose remains the clear primary action. */
     .refresh-btn {
         flex: 0 0 auto;
         display: inline-grid;
         place-items: center;
         width: 40px;
         padding: 0;
-        box-shadow: var(--shadow-sm);
+        border: 1px solid var(--border-subtle);
+        color: var(--text-secondary);
     }
-    .refresh-btn:hover { transform: translateY(-1px); }
+    .refresh-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
     .refresh-btn:active { transform: translateY(0); }
     .refresh-btn .refresh-icon {
         display: inline-flex;
@@ -792,9 +798,8 @@
     .folder:hover {
         background: var(--bg-hover);
         color: var(--text-primary);
-        transform: translateX(1px);
     }
-    .folder { transition: background-color var(--transition-fast), color var(--transition-fast), transform 120ms ease; }
+    .folder { transition: background-color var(--transition-fast), color var(--transition-fast); }
     .folder.active {
         background: var(--bg-selected);
         color: var(--accent-text);
@@ -891,7 +896,8 @@
         opacity: 0;
         transition: transform 200ms cubic-bezier(0.2, 0.7, 0.2, 1), opacity 200ms;
     }
-    .footer-zone.open .sidebar-footer {
+    .footer-zone.open .sidebar-footer,
+    .footer-zone:focus-within .sidebar-footer {
         transform: translateY(0);
         opacity: 1;
     }

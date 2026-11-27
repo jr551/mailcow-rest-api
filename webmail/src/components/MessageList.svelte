@@ -6,7 +6,7 @@
     import Avatar from './Avatar.svelte';
     import VipBadge from './VipBadge.svelte';
     import { settings, setListFilter, setReadingPaneLayout, isVipAddress, type ListFilter } from '../lib/settings.svelte';
-    import { READING_PANE_LAYOUTS } from '../lib/reading-pane-layout';
+    import { READING_PANE_LAYOUTS, type ReadingPaneLayout } from '../lib/reading-pane-layout';
     import { getCachedScan } from '../lib/phishing-scan';
     import Icon from './Icon.svelte';
     import { buildThreads, type Thread } from '../lib/threads';
@@ -24,10 +24,11 @@
     import { domainPattern, rootDomainPattern } from '../lib/domain-scope';
     import { addMailRule } from '../lib/api';
     import { listOutboundWebhooks, isOutboundWebhooksUnavailable } from '../lib/outbound-webhooks';
+    import { authState } from '../lib/auth.svelte';
 
     interface ScanState { scanned: number; total: number; reason: string }
     interface Props {
-        onSelect: (uid: number) => void;
+        onSelect: (uid: number, mailbox?: string) => void;
         onStar: (uid: number) => void;
         onUnread: (uid: number) => void;
         onTrash: (uid: number) => void;
@@ -64,7 +65,7 @@
     // the keyboard path). They are deliberately not the render position:
     // see ctxPos / placeCtx for why the final position cannot be known until
     // the menu has been measured on screen.
-    let ctx = $state<{ uid: number; x: number; y: number } | null>(null);
+    let ctx = $state<{ uid: number; mailbox?: string; x: number; y: number } | null>(null);
     // Resolved viewport position for the menu, written by placeCtx() once the
     // menu is in the document and has a measurable box. Rendered from this,
     // not from ctx.x/ctx.y.
@@ -201,10 +202,10 @@
         if (submenuOpen()) void tick().then(placeCtx);
     });
 
-    function openCtx(e: MouseEvent, uid: number) {
+    function openCtx(e: MouseEvent, uid: number, mailbox?: string) {
         e.preventDefault();
         e.stopPropagation();
-        ctx = { uid, x: e.clientX, y: e.clientY };
+        ctx = { uid, mailbox, x: e.clientX, y: e.clientY };
         // Anchor only. The rendered position comes from placeCtx() once the
         // menu is measurable, so nothing has to be re-guessed here — the
         // previous `top: ${ctx.y}px` wrote the raw pointer Y and that IS
@@ -371,7 +372,7 @@
      * it at the last physical mouse position, which can be metres away from
      * the row. Anchor to the row's own rect instead.
      */
-    function openCtxKeyboard(e: KeyboardEvent, uid: number) {
+    function openCtxKeyboard(e: KeyboardEvent, uid: number, mailbox?: string) {
         if (e.key !== 'F10' && e.key !== 'ContextMenu') return;
         if (!e.shiftKey && e.key !== 'ContextMenu') return;
         const el = e.currentTarget as HTMLElement;
@@ -384,7 +385,7 @@
         // measurement in placeCtx() supersedes it and also flips above the
         // row, which this could never do: for a row in the lower third,
         // `r.bottom + 4` is already past where the menu can fit below.
-        ctx = { uid, x: r.left + 24, y: r.bottom + 4 };
+        ctx = { uid, mailbox, x: r.left + 24, y: r.bottom + 4 };
         ctxPos = null;
         ctxRow = el;
         // Same highlight as the pointer path, so the row the keyboard menu
@@ -394,8 +395,13 @@
         ctxSelectRow(uid);
         void tick().then(() => focusCtxItem(0));
     }
-    function rowOf(uid: number) {
-        return ui.messages.find((m) => m.uid === uid);
+    function rowOf(uid: number, mailbox?: string) {
+        const matches = ui.messages.filter((m) => m.uid === uid);
+        if (mailbox) return matches.find((m) => m.mailbox === mailbox);
+        // UIDs are unique only within a mailbox. If an aggregate result is
+        // missing its source folder, refuse an ambiguous match instead of
+        // silently acting on the first row with the same UID.
+        return matches.length === 1 ? matches[0] : undefined;
     }
 
     // Folder destinations for the context menu's Move submenu. Deliberately
@@ -454,15 +460,18 @@
      */
     async function loadWebhookTargets() {
         if (webhookLoading) return;
+        const user = authState.activeUser;
         webhookLoading = true;
         webhookNote = null;
         try {
             const { webhooks } = await listOutboundWebhooks();
+            if (authState.activeUser !== user) return;
             webhookItems = webhooks.map((w) => ({ key: w.id, label: w.label || w.url }));
             if (!webhooks.length) {
                 webhookNote = 'No webhooks yet — add one in Settings → Outbound webhooks.';
             }
         } catch (err) {
+            if (authState.activeUser !== user) return;
             webhookItems = [];
             // 404/501 means the SERVER has no such endpoint. Anything else
             // is a different failure, and saying "not available on this
@@ -472,7 +481,7 @@
                 ? 'Outbound webhooks are not available on this server.'
                 : 'Could not load your webhooks — try again in a moment.';
         } finally {
-            webhookLoading = false;
+            if (authState.activeUser === user) webhookLoading = false;
         }
     }
 
@@ -487,7 +496,9 @@
     async function sendSenderToWebhook(webhookId: string) {
         const target = ctx?.uid;
         if (target == null) return;
-        const from = rowOf(target)?.envelope?.from?.[0]?.address;
+        const mailbox = ctx?.mailbox;
+        const user = authState.activeUser;
+        const from = rowOf(target, mailbox)?.envelope?.from?.[0]?.address;
         closeCtx();
         if (!from) {
             showToast('error', 'That message has no sender address to match on');
@@ -503,6 +514,7 @@
                 condition: { type: 'from-contains', value: from },
                 action: { type: 'webhook', webhookId }
             });
+            if (authState.activeUser !== user) return;
             // The future-only wording is the single most common source of
             // "I made the rule and nothing happened" — Sieve runs on arrival,
             // nothing re-runs against the mailbox. RuleFromMessageDialog
@@ -510,6 +522,7 @@
             // rather than inventing a third variant of it.
             showToast('success', `Mail from ${from} will go to that webhook as it arrives`);
         } catch (err) {
+            if (authState.activeUser !== user) return;
             const msg = err instanceof Error ? err.message : 'Could not create the rule';
             showToast('error', msg);
         }
@@ -610,18 +623,18 @@
     // Centralised row-select used by both click and keyboard activation
     // so the per-user click sound (Settings → Sounds) reliably fires
     // regardless of input modality.
-    function selectRow(uid: number) {
+    function selectRow(uid: number, mailbox?: string) {
         playClick();
-        onSelect(uid);
+        onSelect(uid, mailbox);
     }
 
-    function rowKey(e: KeyboardEvent, uid: number) {
+    function rowKey(e: KeyboardEvent, uid: number, mailbox?: string) {
         // Keys from the nested select / star / archive / trash buttons bubble
         // here; swallowing them would cancel the button's own click.
         if (e.target !== e.currentTarget) return;
         if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
-            selectRow(uid);
+            selectRow(uid, mailbox);
         }
     }
 
@@ -718,9 +731,8 @@
     // AI calendar-scan modal state. Toggled from the icon button next to AI sort.
     let eventsScanOpen = $state(false);
 
-    // UIDs currently being processed by a client-side rule. The row
-    // wears a glassy shimmer (and a pop-away on `done`) so the user
-    // sees something happen rather than a silent disappearance.
+    // UIDs currently being processed by a client-side rule. A static rail
+    // marks work in progress; completion gets a brief exit transition.
     let ruleAnimUids = $state(new Set<number>());
     let ruleDoneUids = $state(new Set<number>());
     // Registered via $effect so it is torn down with the component. As a
@@ -784,6 +796,8 @@
         // is off, but nothing should reach a paid model call through a
         // stale handler, a queued click, or a future entry point.
         if (!settings.aiFeatures) return;
+        const user = authState.activeUser;
+        if (!user) return;
         const msgs = ui.messages;
         if (msgs.length === 0) {
             aiRankings = [];
@@ -808,22 +822,22 @@
             {
                 signal: ctrl.signal,
                 onProgress: (done, total) => {
-                    if (gen === aiSortGen) aiSortProgress = { done, total };
+                    if (gen === aiSortGen && authState.activeUser === user) aiSortProgress = { done, total };
                 }
             }
         )
             .then((res) => {
-                if (gen !== aiSortGen) return;
+                if (gen !== aiSortGen || authState.activeUser !== user) return;
                 aiRankings = res.rankings;
                 playSortDone();
             })
             .catch((err) => {
-                if (gen !== aiSortGen) return;
+                if (gen !== aiSortGen || authState.activeUser !== user) return;
                 if (err instanceof DOMException && err.name === 'AbortError') return;
                 aiSortError = err instanceof Error ? err.message : 'AI sort failed';
             })
             .finally(() => {
-                if (gen !== aiSortGen) return;
+                if (gen !== aiSortGen || authState.activeUser !== user) return;
                 aiSortLoading = false;
                 // Hold the "done" state briefly so the user gets visual confirmation.
                 setTimeout(() => { aiSortProgress = null; }, 800);
@@ -838,21 +852,27 @@
 
     function runSweepAlongside() {
         if (sweepRunning) return;
+        const user = authState.activeUser;
+        if (!user) return;
         sweepRunning = true;
         sweepDismissed = false;
         sweepAbort?.abort();
         sweepAbort = new AbortController();
         runSpamSweep({ signal: sweepAbort.signal })
             .then((out) => {
+                if (authState.activeUser !== user) return;
                 sweepResults = out.candidates;
                 sweepDestSpam = out.spamPath;
                 sweepDestTrash = out.trashPath;
             })
             .catch((err) => {
+                if (authState.activeUser !== user) return;
                 if (err instanceof DOMException && err.name === 'AbortError') return;
                 showToast('error', `Spam sweep failed: ${err instanceof Error ? err.message : 'unknown error'}`);
             })
-            .finally(() => { sweepRunning = false; });
+            .finally(() => {
+                if (authState.activeUser === user) sweepRunning = false;
+            });
     }
 
     // A bulk run owns ui.bulkProgress until it finishes. The tail timer that
@@ -874,6 +894,8 @@
 
     async function applySweep(kind: 'spam' | 'phishing') {
         if (!sweepResults || sweepBulkBusy) return;
+        const user = authState.activeUser;
+        if (!user) return;
         const dest = kind === 'spam' ? sweepDestSpam : sweepDestTrash;
         if (!dest) {
             showToast('error', kind === 'spam' ? 'No Spam folder found.' : 'No Trash folder found.');
@@ -887,13 +909,14 @@
         const run = startBulkProgress(kind === 'spam' ? `Moving to Spam` : `Moving to Trash`, items.length);
         try {
             const r = await bulkMove(items, dest, (done, _total, failed) => reportBulkProgress(run, done, failed));
+            if (authState.activeUser !== user) return;
             endBulkProgress(run);
             showToast('success', `Moved ${r.moved} message${r.moved === 1 ? '' : 's'} to ${dest}${r.failed ? ` (${r.failed} failed)` : ''}.`);
             const movedUids = new Set(r.movedItems.map((i) => i.uid));
             sweepResults = sweepResults.filter((c) => !movedUids.has(c.uid));
             if (sweepResults.length === 0) sweepDismissed = true;
         } finally {
-            sweepBulkBusy = false;
+            if (authState.activeUser === user) sweepBulkBusy = false;
         }
     }
 
@@ -901,12 +924,19 @@
     // "Move to…" submenu when multiple rows are selected; the single-
     // row path still goes through onMove() per the existing flow.
     async function bulkMoveSelected(dest: string) {
+        if (ui.searchScope === 'all') {
+            showToast('info', 'Open a message first to manage results in their folders.');
+            return false;
+        }
         const sel = Array.from(ui.selected);
         if (sel.length <= 1) return false;
+        const user = authState.activeUser;
+        if (!user) return false;
         const items = sel.map((uid) => ({ path: ui.selectedPath, uid }));
         const run = startBulkProgress(`Moving to ${dest.split('/').pop() || dest}`, items.length);
         try {
             const r = await bulkMove(items, dest, (done, _total, failed) => reportBulkProgress(run, done, failed));
+            if (authState.activeUser !== user) return false;
             endBulkProgress(run);
             showToast('success', `Moved ${r.moved} message${r.moved === 1 ? '' : 's'} to ${dest}${r.failed ? ` (${r.failed} failed)` : ''}.`);
             // Drop what moved from the visible list immediately — server-side
@@ -916,7 +946,7 @@
             ui.messages = ui.messages.filter((m) => !movedUids.has(m.uid));
             ui.selected = new Set(sel.filter((uid) => !movedUids.has(uid)));
         } catch {
-            endBulkProgress(run, 0);
+            if (authState.activeUser === user) endBulkProgress(run, 0);
         }
         return true;
     }
@@ -930,7 +960,7 @@
     }
 
     // Treat anything with internalDate within the last 10 minutes as
-    // "fresh" — drives the .fresh sparkle animation in the row.
+    // "fresh" — drives the quiet accent rail in the row.
     const FRESH_WINDOW_MS = 10 * 60 * 1000;
     function isFresh(d: string | null | undefined): boolean {
         if (!d) return false;
@@ -1032,7 +1062,13 @@
      */
     let categoryActionBusy = $state(false);
     async function runCategoryAction(cat: AiCat, action: 'archive' | 'trash' | 'markRead') {
+        if (ui.searchScope === 'all') {
+            showToast('info', 'Open a message first to manage results in their folders.');
+            return;
+        }
         if (categoryActionBusy) return;
+        const user = authState.activeUser;
+        if (!user) return;
         const uids = uidsForCategory(cat);
         if (uids.length === 0) return;
         const items = uids.map((uid) => ({ path: ui.selectedPath, uid }));
@@ -1045,12 +1081,16 @@
                 const marked = new Set<number>();
                 let failed = 0;
                 for (const { path, uid } of items) {
+                    if (authState.activeUser !== user) break;
                     try {
                         await modifyFlags(path, uid, { add: ['\\Seen'] });
+                        if (authState.activeUser !== user) break;
                         marked.add(uid);
                     } catch { failed++; }
+                    if (authState.activeUser !== user) break;
                     reportBulkProgress(run, marked.size + failed, failed);
                 }
+                if (authState.activeUser !== user) return;
                 endBulkProgress(run);
                 showToast(failed ? 'error' : 'success', `Marked ${marked.size} ${meta.label.toLowerCase()} message${marked.size === 1 ? '' : 's'} read${failed ? ` (${failed} failed)` : ''}.`);
                 // Reflect locally without a refetch — the seen-flag flip is
@@ -1059,7 +1099,7 @@
                     ? { ...m, flags: m.flags.includes('\\Seen') ? m.flags : [...m.flags, '\\Seen'] }
                     : m);
             } finally {
-                categoryActionBusy = false;
+                if (authState.activeUser === user) categoryActionBusy = false;
             }
             return;
         }
@@ -1068,8 +1108,10 @@
         let dest: string | null = null;
         try {
             const mboxes = await listMailboxes({ counts: false });
+            if (authState.activeUser !== user) return;
             dest = action === 'archive' ? findArchiveFolder(mboxes) : findTrashFolder(mboxes);
         } catch { /* ignore — handled below */ }
+        if (authState.activeUser !== user) return;
         if (!dest) {
             showToast('error', action === 'archive'
                 ? 'No Archive folder found. Create one in your IMAP account first.'
@@ -1086,6 +1128,7 @@
         const run = startBulkProgress(`${action === 'archive' ? 'Archiving' : 'Moving to Trash'} ${meta.label.toLowerCase()}`, items.length);
         try {
             const r = await bulkMove(items, dest, (done, _total, failed) => reportBulkProgress(run, done, failed));
+            if (authState.activeUser !== user) return;
             endBulkProgress(run);
             showToast('success', `${action === 'archive' ? 'Archived' : 'Trashed'} ${r.moved} message${r.moved === 1 ? '' : 's'}${r.failed ? ` (${r.failed} failed)` : ''}.`);
             // Drop what moved from the visible list — the server view will catch up.
@@ -1096,9 +1139,9 @@
             for (const id of ui.selected) if (!movedUids.has(id)) nextSel.add(id);
             ui.selected = nextSel;
         } catch {
-            endBulkProgress(run, 0);
+            if (authState.activeUser === user) endBulkProgress(run, 0);
         } finally {
-            categoryActionBusy = false;
+            if (authState.activeUser === user) categoryActionBusy = false;
         }
     }
 
@@ -1141,6 +1184,27 @@
         return last.charAt(0).toUpperCase() + last.slice(1);
     }
 
+    function onReadingPaneKey(e: KeyboardEvent, id: ReadingPaneLayout) {
+        const layouts = READING_PANE_LAYOUTS;
+        const at = layouts.findIndex((layout) => layout.id === id);
+        if (at < 0) return;
+        let next = at;
+        if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = (at + 1) % layouts.length;
+        else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = (at - 1 + layouts.length) % layouts.length;
+        else if (e.key === 'Home') next = 0;
+        else if (e.key === 'End') next = layouts.length - 1;
+        else return;
+        e.preventDefault();
+        // Layout's global mail shortcuts also listen for arrows. This radio
+        // group owns the key while focus is inside it.
+        e.stopPropagation();
+        const target = layouts[next];
+        setReadingPaneLayout(target.id);
+        (e.currentTarget as HTMLElement).parentElement
+            ?.querySelector<HTMLElement>(`[data-testid="reading-pane-layout-${target.id}"]`)
+            ?.focus();
+    }
+
     // Slow-load detector. Quick loads (cached / cache-warm IMAP folders)
     // shouldn't flash an overlay — only show it after ~280ms of waiting,
     // long enough that the user has registered the folder switch and
@@ -1152,6 +1216,50 @@
         if (!ui.messagesLoading) { loadingSlow = false; return; }
         const t = setTimeout(() => { loadingSlow = true; }, 280);
         return () => clearTimeout(t);
+    });
+
+    // MessageList stays mounted while the user changes accounts. Clear its
+    // component-local state too: stale rankings, context menus and dialogs
+    // must not be carried into another mailbox with coincidentally matching
+    // UIDs.
+    let observedUser = authState.activeUser;
+    $effect(() => {
+        const user = authState.activeUser;
+        if (user === observedUser) return;
+        observedUser = user;
+
+        aiSortAbort?.abort();
+        aiSortGen++;
+        aiSortLoading = false;
+        aiSortError = null;
+        aiSortProgress = null;
+        aiRankings = [];
+        aiSortStartTs = 0;
+
+        sweepAbort?.abort();
+        sweepAbort = null;
+        sweepRunning = false;
+        sweepResults = null;
+        sweepDestSpam = null;
+        sweepDestTrash = null;
+        sweepDismissed = false;
+        sweepBulkBusy = false;
+        categoryActionBusy = false;
+
+        expandedThreads = new Set();
+        ruleAnimUids = new Set();
+        ruleDoneUids = new Set();
+        ctx = null;
+        ctxPos = null;
+        ctxRow = null;
+        ruleFromMessage = null;
+        aiRulesOpen = false;
+        aiRulesSender = null;
+        eventsScanOpen = false;
+        webhookItems = null;
+        webhookLoading = false;
+        webhookNote = null;
+        ui.bulkProgress = null;
     });
 </script>
 
@@ -1173,10 +1281,16 @@
                         role="radio"
                         class:active={settings.readingPaneLayout === layout.id}
                         aria-checked={settings.readingPaneLayout === layout.id}
+                        aria-label={layout.outlookLabel}
                         title={layout.outlookLabel}
+                        tabindex={settings.readingPaneLayout === layout.id ? 0 : -1}
+                        onkeydown={(e) => onReadingPaneKey(e, layout.id)}
                         onclick={() => setReadingPaneLayout(layout.id)}
                         data-testid={`reading-pane-layout-${layout.id}`}
-                    >{layout.label}</button>
+                    >
+                        <Icon name={layout.icon} size={14} />
+                        <span class="sr-only">{layout.label}</span>
+                    </button>
                 {/each}
             </div>
         </div>
@@ -1246,13 +1360,16 @@
             </button>
         </div>
         {/if}
-        {#if filtered.length > 0}
+        {#if filtered.length > 0 && ui.searchScope !== 'all'}
             {@const allSelected = ui.selected.size > 0 && filtered.every((m) => ui.selected.has(m.uid))}
             <button
                 type="button"
                 class="chip select-all-chip"
                 class:active={allSelected}
                 title={allSelected
+                    ? `Clear selection (${ui.selected.size})`
+                    : `Select all ${filtered.length} visible messages`}
+                aria-label={allSelected
                     ? `Clear selection (${ui.selected.size})`
                     : `Select all ${filtered.length} visible messages`}
                 onclick={() => allSelected ? clearSelection() : (ui.selected = new Set(filtered.map((m) => m.uid)))}
@@ -1265,7 +1382,7 @@
                         </svg>
                     {/if}
                 </span>
-                <span>{allSelected ? `${ui.selected.size} selected` : 'Select all'}</span>
+                <span class="sr-only">{allSelected ? `${ui.selected.size} selected` : 'Select all'}</span>
             </button>
         {/if}
         {#each FILTERS as f (f.value)}
@@ -1370,24 +1487,20 @@
             ? Math.round((aiSortProgress.done / aiSortProgress.total) * 100)
             : 0}
         {@const elapsedMs = Date.now() - aiSortStartTs}
-        <div class="ai-sort-glass" role="status" aria-live="polite" data-testid="ai-sort-progress">
-            <div class="glass-row glass-head">
-                <span class="glass-spinner" aria-hidden="true">
-                    <span class="orb"></span>
-                    <span class="orb"></span>
-                    <span class="orb"></span>
-                </span>
-                <strong class="glass-title">AI sort</strong>
+        <div class="ai-sort-progress" role="status" aria-live="polite" data-testid="ai-sort-progress">
+            <div class="progress-row progress-head">
+                <span class="spinner" style="width:15px;height:15px" aria-hidden="true"></span>
+                <strong class="progress-title">AI sort</strong>
                 {#if aiSortProgress && aiSortProgress.total > 0}
-                    <span class="glass-counter">batch {aiSortProgress.done}/{aiSortProgress.total}</span>
+                    <span class="progress-counter">batch {aiSortProgress.done}/{aiSortProgress.total}</span>
                 {/if}
-                <span class="glass-spacer"></span>
-                <span class="glass-elapsed">{Math.max(0, Math.round(elapsedMs / 1000))}s</span>
+                <span class="progress-spacer"></span>
+                <span class="progress-elapsed">{Math.max(0, Math.round(elapsedMs / 1000))}s</span>
             </div>
-            <div class="glass-bar" aria-hidden="true">
-                <span class="glass-fill" style={`--pct: ${Math.max(8, progPct)}%`}></span>
+            <div class="progress-bar" aria-hidden="true">
+                <span class="progress-fill" style={`--pct: ${Math.max(8, progPct)}%`}></span>
             </div>
-            <div class="glass-row glass-detail">
+            <div class="progress-row progress-detail">
                 {#if aiSortProgress && aiSortProgress.total > 0}
                     Scoring relevance & category — {progPct}%
                 {:else if sweepRunning}
@@ -1549,7 +1662,7 @@
                         class:rule-popping={ruleDoneUids.has(headMsg.uid)}
                         role="button"
                         tabindex="0"
-                        draggable="true"
+                        draggable={ui.searchScope === 'folder'}
                         ondragstart={(e) => {
                             // Drag every uid in the thread so move/archive
                             // operations affect the whole conversation. If
@@ -1569,19 +1682,23 @@
                             document.body.dataset.draggingUids = String(uids.length);
                         }}
                         ondragend={() => { delete document.body.dataset.draggingUids; }}
-                        onclick={() => { if (isThread) toggleThread(t.id); selectRow(headMsg.uid); }}
-                        onkeydown={(e) => { rowKey(e, headMsg.uid); openCtxKeyboard(e, headMsg.uid); }}
-                        oncontextmenu={(e) => openCtx(e, headMsg.uid)}
+                        onclick={() => { if (isThread) toggleThread(t.id); selectRow(headMsg.uid, headMsg.mailbox); }}
+                        onkeydown={(e) => { rowKey(e, headMsg.uid, headMsg.mailbox); openCtxKeyboard(e, headMsg.uid, headMsg.mailbox); }}
+                        oncontextmenu={(e) => openCtx(e, headMsg.uid, headMsg.mailbox)}
                         data-testid={`msg-row-${headMsg.uid}`}
                     >
                         <span class="unread-dot" aria-hidden="true"></span>
                         <button
                             type="button"
                             class={`avatar-slot ${headSelected ? 'is-checked' : ''}`}
-                            title={headSelected ? 'Deselect' : 'Select'}
-                            aria-pressed={headSelected}
-                            aria-label={headSelected ? 'Deselect message' : 'Select message'}
-                            onclick={(e) => { e.stopPropagation(); toggleSelected(headMsg.uid); }}
+                            title={ui.searchScope === 'all' ? 'Open message' : headSelected ? 'Deselect' : 'Select'}
+                            aria-pressed={ui.searchScope === 'all' ? undefined : headSelected}
+                            aria-label={ui.searchScope === 'all' ? 'Open message' : headSelected ? 'Deselect message' : 'Select message'}
+                            onclick={(e) => {
+                                e.stopPropagation();
+                                if (ui.searchScope === 'all') selectRow(headMsg.uid, headMsg.mailbox);
+                                else toggleSelected(headMsg.uid);
+                            }}
                             data-testid={`msg-row-check-${headMsg.uid}`}
                         >
                             {#if headIsSms}
@@ -1620,6 +1737,11 @@
                             <span class="subject truncate">
                                 {#if headIsTracked}
                                     <span class="spy-mark" title="Open-tracking notification" aria-label="Tracking notification"><Icon name="spy" size={12} /></span>
+                                {/if}
+                                {#if headIsPhishing}
+                                    <span class="risk-badge phishing" title="This message was flagged as a phishing risk">Phishing risk</span>
+                                {:else if headIsSpam}
+                                    <span class="risk-badge spam" title="This message was flagged as spam">Spam</span>
                                 {/if}
                                 {#if headDanger >= 3}
                                     <span class="danger-badge" data-level={headDanger}>{headDanger === 4 ? 'CRITICAL' : 'HIGH'}</span>
@@ -1720,9 +1842,9 @@
                                         class:starred={childStarred}
                                         role="button"
                                         tabindex="0"
-                                        onclick={() => selectRow(childMsg.uid)}
-                                        onkeydown={(e) => { rowKey(e, childMsg.uid); openCtxKeyboard(e, childMsg.uid); }}
-                                        oncontextmenu={(e) => openCtx(e, childMsg.uid)}
+                                        onclick={() => selectRow(childMsg.uid, childMsg.mailbox)}
+                                        onkeydown={(e) => { rowKey(e, childMsg.uid, childMsg.mailbox); openCtxKeyboard(e, childMsg.uid, childMsg.mailbox); }}
+                                        oncontextmenu={(e) => openCtx(e, childMsg.uid, childMsg.mailbox)}
                                         data-testid={`msg-row-child-${childMsg.uid}`}
                                     >
                                         <span class="thread-spine" aria-hidden="true"></span>
@@ -1869,7 +1991,7 @@
 />
 
 {#if ctx}
-    {@const m = rowOf(ctx.uid)}
+    {@const m = rowOf(ctx.uid, ctx.mailbox)}
     {#if m}
         {@const isUnread = unread(m.flags)}
         {@const isFlagged = flagged(m.flags)}
@@ -1897,7 +2019,7 @@
             oncontextmenu={(e) => e.preventDefault()}
             data-testid="msg-ctx"
         >
-            <li><button type="button" role="menuitem" onclick={() => { selectRow(ctx!.uid); closeCtx(); }}>
+            <li><button type="button" role="menuitem" onclick={() => { selectRow(ctx!.uid, ctx!.mailbox); closeCtx(); }}>
                 <Icon name="mail" size={12} /> Open
             </button></li>
             <li><button type="button" role="menuitem" onclick={() => { onStar(ctx!.uid); closeCtx(); }}>
@@ -2111,10 +2233,14 @@
         overflow: hidden;
     }
     .reading-pane-quick button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 24px;
         border: none;
         background: transparent;
-        padding: 3px 8px;
-        font-size: 11px;
+        padding: 0;
         color: var(--text-secondary);
         cursor: pointer;
     }
@@ -2124,52 +2250,19 @@
         color: var(--text-primary);
         font-weight: 600;
     }
-    /* Glowing accent button for the AI inbox briefing — sweeps a subtle
-     * shimmer across itself so the eye finds it even at a glance. */
+    /* AI is an optional action, not an alert; keep its styling quiet. */
     .ai-summary-btn {
         color: var(--accent-text);
-        background: linear-gradient(135deg,
-            color-mix(in srgb, var(--accent) 18%, transparent),
-            color-mix(in srgb, var(--accent) 8%, transparent));
+        background: var(--accent-soft);
         border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
         font-weight: 600;
-        position: relative;
-        overflow: hidden;
-        animation: ai-sum-breathe 3s ease-in-out infinite;
-        box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent);
         padding: 2px 7px;
         font-size: 11px;
         gap: 3px;
     }
-    .ai-summary-btn::before {
-        content: '';
-        position: absolute;
-        inset: 0;
-        background: linear-gradient(120deg,
-            transparent 30%,
-            color-mix(in srgb, white 38%, transparent) 50%,
-            transparent 70%);
-        transform: translateX(-100%);
-        animation: ai-sum-sweep 4.5s ease-in-out infinite;
-        pointer-events: none;
-    }
     .ai-summary-btn:hover {
-        background: linear-gradient(135deg,
-            color-mix(in srgb, var(--accent) 26%, transparent),
-            color-mix(in srgb, var(--accent) 14%, transparent));
+        background: color-mix(in srgb, var(--accent) 18%, var(--bg-surface));
         color: var(--accent-text);
-    }
-    @keyframes ai-sum-breathe {
-        0%, 100% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent), 0 0 0 0 color-mix(in srgb, var(--accent) 30%, transparent); }
-        50%      { box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent), 0 0 8px 2px color-mix(in srgb, var(--accent) 32%, transparent); }
-    }
-    @keyframes ai-sum-sweep {
-        0%, 60% { transform: translateX(-100%); }
-        100%    { transform: translateX(220%); }
-    }
-    @media (prefers-reduced-motion: reduce) {
-        .ai-summary-btn { animation: none; }
-        .ai-summary-btn::before { display: none; }
     }
     .filter-chips {
         flex: 0 0 auto;
@@ -2235,8 +2328,8 @@
         border: 1px solid transparent;
         transition: background-color var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
     }
-    .chip:hover { background: var(--bg-hover); color: var(--text-primary); transform: translateY(-0.5px); }
-    .chip { transition: background-color var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast), transform 120ms ease; }
+    .chip:hover { background: var(--bg-hover); color: var(--text-primary); }
+    .chip { transition: background-color var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast); }
     .chip.active {
         background: var(--accent-soft);
         color: var(--accent-text);
@@ -2246,7 +2339,11 @@
     .select-all-chip {
         display: inline-flex;
         align-items: center;
-        gap: 6px;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        padding: 0;
+        gap: 0;
     }
     .cat-quick-spacer {
         flex: 0 0 1px;
@@ -2366,154 +2463,63 @@
     }
     .ai-seg .ai-seg-label { line-height: 1; }
     .ai-seg-sort.active {
-        color: white;
-        background: linear-gradient(135deg, var(--accent), #d268f4);
+        color: var(--text-on-accent);
+        background: var(--accent);
     }
-    .ai-seg-sort.active:hover { filter: brightness(1.08); color: white; }
+    .ai-seg-sort.active:hover { filter: brightness(1.04); color: var(--text-on-accent); }
     .ai-seg:disabled { opacity: 0.75; cursor: wait; }
     @media (prefers-reduced-motion: reduce) {
         .ai-seg, .ai-seg-sort.active { transition: none; }
     }
 
-    /* Glass-morph progress card for AI sort. Sticks until the run
-     * completes; the user clicking elsewhere doesn't dismiss it. */
-    .ai-sort-glass {
+    /* Quiet progress card; the standard spinner and bar communicate activity. */
+    .ai-sort-progress {
         position: relative;
         margin: 0 12px 8px;
         padding: 10px 14px 12px;
-        border-radius: 14px;
-        background:
-            linear-gradient(135deg,
-                color-mix(in srgb, var(--accent) 16%, transparent),
-                color-mix(in srgb, #d268f4 12%, transparent) 60%,
-                color-mix(in srgb, var(--accent) 8%, transparent));
-        backdrop-filter: blur(14px) saturate(1.4);
-        -webkit-backdrop-filter: blur(14px) saturate(1.4);
-        border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border-subtle));
-        box-shadow:
-            0 8px 24px -8px color-mix(in srgb, var(--accent) 35%, transparent),
-            inset 0 1px 0 rgba(255, 255, 255, 0.45);
+        border-radius: var(--radius-md);
+        background: var(--accent-soft);
+        border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border-subtle));
+        box-shadow: var(--shadow-sm);
         color: var(--text-primary);
         font-size: 12.5px;
-        overflow: hidden;
     }
-    .ai-sort-glass::before {
-        /* Slow rainbow shimmer — ties the visual tone to the active Sort segment
-         * gradient without being noisy. */
-        content: '';
-        position: absolute;
-        inset: -50% -10% auto -10%;
-        height: 200%;
-        background: conic-gradient(
-            from 0deg,
-            transparent 0deg,
-            color-mix(in srgb, var(--accent) 14%, transparent) 60deg,
-            transparent 120deg,
-            color-mix(in srgb, #d268f4 18%, transparent) 200deg,
-            transparent 280deg,
-            color-mix(in srgb, var(--accent) 14%, transparent) 360deg);
-        opacity: 0.55;
-        animation: glass-spin 8s linear infinite;
-        pointer-events: none;
-        z-index: 0;
-    }
-    @keyframes glass-spin { to { transform: rotate(360deg); } }
-    .ai-sort-glass > * { position: relative; z-index: 1; }
-    .glass-row {
+    .progress-row {
         display: flex;
         align-items: center;
         gap: 10px;
     }
-    .glass-head { margin-bottom: 8px; }
-    .glass-spacer { flex: 1; }
-    .glass-title { font-weight: 700; letter-spacing: 0.01em; }
-    .glass-counter, .glass-elapsed {
+    .progress-head { margin-bottom: 8px; }
+    .progress-spacer { flex: 1; }
+    .progress-title { font-weight: 700; letter-spacing: 0.01em; }
+    .progress-counter, .progress-elapsed {
         font-size: 11px;
         font-variant-numeric: tabular-nums;
         color: var(--text-secondary);
         padding: 2px 7px;
         border-radius: 999px;
-        background: rgba(255, 255, 255, 0.45);
-        border: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
+        background: color-mix(in srgb, var(--bg-surface) 70%, transparent);
+        border: 1px solid var(--border-subtle);
     }
-    .glass-detail {
+    .progress-detail {
         font-size: 11.5px;
         color: var(--text-secondary);
         margin-top: 6px;
     }
-    .glass-spinner {
-        display: inline-flex;
-        gap: 4px;
-        align-items: center;
-    }
-    .glass-spinner .orb {
-        width: 7px;
-        height: 7px;
-        border-radius: 50%;
-        background: linear-gradient(135deg, var(--accent), #d268f4);
-        box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 70%, transparent);
-        animation: glass-bounce 1.05s ease-in-out infinite;
-    }
-    .glass-spinner .orb:nth-child(2) { animation-delay: 0.12s; }
-    .glass-spinner .orb:nth-child(3) { animation-delay: 0.24s; }
-    @keyframes glass-bounce {
-        0%, 80%, 100% { transform: translateY(0); opacity: 0.55; }
-        40%           { transform: translateY(-4px); opacity: 1; }
-    }
-    .glass-bar {
+    .progress-bar {
         position: relative;
         height: 6px;
         border-radius: 3px;
-        background: rgba(255, 255, 255, 0.35);
+        background: color-mix(in srgb, var(--accent) 14%, var(--bg-surface));
         overflow: hidden;
     }
-    .glass-fill {
+    .progress-fill {
         position: absolute;
         left: 0; top: 0; bottom: 0;
         width: var(--pct, 8%);
-        background: linear-gradient(90deg, var(--accent), #d268f4);
-        box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 60%, transparent);
+        background: var(--accent);
         transition: width 280ms cubic-bezier(0.25, 0.8, 0.25, 1);
         border-radius: 3px;
-    }
-    .glass-fill::after {
-        /* Diagonal stripe that travels along the fill so even at low
-         * percentages the bar reads as live, not stuck. */
-        content: '';
-        position: absolute;
-        inset: 0;
-        background-image: linear-gradient(
-            45deg,
-            rgba(255, 255, 255, 0.35) 25%,
-            transparent 25%,
-            transparent 50%,
-            rgba(255, 255, 255, 0.35) 50%,
-            rgba(255, 255, 255, 0.35) 75%,
-            transparent 75%);
-        background-size: 14px 14px;
-        animation: glass-stripe 700ms linear infinite;
-    }
-    @keyframes glass-stripe { to { background-position: 14px 0; } }
-    @media (prefers-reduced-motion: reduce) {
-        .ai-sort-glass::before,
-        .glass-spinner .orb,
-        .glass-fill::after { animation: none; }
-    }
-    :global(html.dark) .ai-sort-glass,
-    :global([data-theme="dark"]) .ai-sort-glass {
-        box-shadow:
-            0 8px 24px -8px color-mix(in srgb, var(--accent) 35%, transparent),
-            inset 0 1px 0 rgba(255, 255, 255, 0.08);
-    }
-    :global(html.dark) .glass-counter,
-    :global(html.dark) .glass-elapsed,
-    :global([data-theme="dark"]) .glass-counter,
-    :global([data-theme="dark"]) .glass-elapsed {
-        background: rgba(255, 255, 255, 0.06);
-    }
-    :global(html.dark) .glass-bar,
-    :global([data-theme="dark"]) .glass-bar {
-        background: rgba(255, 255, 255, 0.08);
     }
 
     .ai-sort-suggest {
@@ -2523,11 +2529,7 @@
         padding: 8px 14px;
         margin: 0 12px 8px;
         font-size: 12.5px;
-        background: linear-gradient(
-            135deg,
-            color-mix(in srgb, var(--accent) 12%, var(--bg-surface)),
-            color-mix(in srgb, #d268f4 8%, var(--bg-surface))
-        );
+        background: color-mix(in srgb, var(--accent) 8%, var(--bg-surface));
         border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border-subtle));
         border-radius: 10px;
         color: var(--text-primary);
@@ -2637,64 +2639,22 @@
     :global(.shell[data-density="compact"]) .row-main { gap: 0; }
     :global(.shell[data-density="compact"]) .row .from { font-size: 12.5px; }
     :global(.shell[data-density="compact"]) .row .subject { font-size: 12.5px; }
-    .row:hover {
-        background: var(--bg-hover);
-        transform: translateY(-0.5px);
-        z-index: 1;
-    }
-    .row {
-        transition: background-color var(--transition-fast), box-shadow var(--transition-fast), transform 120ms ease;
-    }
+    .row:hover { background: var(--bg-hover); z-index: 1; }
     .row.selected {
         background: var(--bg-selected);
         box-shadow: inset 3px 0 0 var(--accent);
     }
     .row.unread { background: var(--bg-surface); }
-    /* "Fresh": arrived in the last 10 minutes. Soft sparkly halo so the
-       user instantly spots brand-new mail without any extra UI element. */
+    /* Fresh mail gets a quiet edge rather than a persistent animated halo. */
     .row.fresh {
-        position: relative;
-        background:
-            radial-gradient(120% 220% at 0% 50%,
-                color-mix(in srgb, var(--accent) 18%, transparent) 0%,
-                transparent 55%),
-            var(--bg-surface);
-        animation: fresh-pulse 2.4s ease-in-out infinite;
+        background: var(--bg-surface);
+        box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 70%, transparent);
     }
-    .row.fresh::after {
-        content: '';
-        position: absolute;
-        inset: 0;
-        pointer-events: none;
-        background-image:
-            radial-gradient(circle at 12% 26%, color-mix(in srgb, var(--accent) 80%, white) 0 1.4px, transparent 2px),
-            radial-gradient(circle at 32% 78%, color-mix(in srgb, var(--accent) 70%, white) 0 1.2px, transparent 2px),
-            radial-gradient(circle at 78% 18%, color-mix(in srgb, #d268f4 70%, white) 0 1.2px, transparent 2px),
-            radial-gradient(circle at 92% 64%, color-mix(in srgb, var(--accent) 80%, white) 0 1.4px, transparent 2px);
-        opacity: 0.85;
-        animation: fresh-twinkle 1.8s ease-in-out infinite;
-    }
-    @keyframes fresh-pulse {
-        0%, 100% { box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 70%, transparent); }
-        50%      { box-shadow: inset 3px 0 0 var(--accent), 0 0 14px color-mix(in srgb, var(--accent) 22%, transparent); }
-    }
-    @keyframes fresh-twinkle {
-        0%, 100% { opacity: 0.35; transform: scale(0.9); }
-        50%      { opacity: 0.95; transform: scale(1.1); }
-    }
-    @media (prefers-reduced-motion: reduce) {
-        .row.fresh, .row.fresh::after { animation: none; }
-    }
-    /* Read rows get a subtle inset bezel — like a softly-pressed button.
-     * Distinguishes them from the punchier unread rows without making
-     * them look 'disabled'. */
+    /* Read and unread rows share one surface; typography and the unread rail
+     * provide hierarchy without a second background treatment. */
     .row:not(.unread):not(.selected) {
-        background: linear-gradient(180deg,
-            color-mix(in srgb, var(--bg-base) 96%, var(--text-tertiary)) 0%,
-            var(--bg-base) 60%);
-        box-shadow:
-            inset 0 1px 1px color-mix(in srgb, var(--text-primary) 5%, transparent),
-            inset 0 -1px 0 color-mix(in srgb, var(--text-primary) 2%, transparent);
+        background: var(--bg-surface);
+        box-shadow: none;
         color: var(--text-secondary);
     }
     .row:not(.unread):not(.selected) .from,
@@ -2755,16 +2715,12 @@
         justify-content: center;
         border-radius: 50%;
         color: var(--text-on-accent);
-        background: linear-gradient(135deg,
-            var(--accent),
-            color-mix(in srgb, var(--accent) 70%, #ffffff));
+        background: var(--accent);
         opacity: 0;
         transform: scale(0.85);
         transition: opacity 140ms ease, transform 140ms cubic-bezier(0.34, 1.56, 0.64, 1);
         pointer-events: none;
-        box-shadow:
-            0 0 0 2px var(--bg-canvas, #fff),
-            0 2px 8px color-mix(in srgb, var(--accent) 40%, transparent);
+        box-shadow: 0 0 0 2px var(--bg-canvas, #fff);
     }
     .check :global(svg) {
         transition: transform 180ms cubic-bezier(0.34, 1.56, 0.64, 1);
@@ -2776,23 +2732,16 @@
     .avatar-slot.is-checked .check { opacity: 1; transform: scale(1); }
     .avatar-slot.is-checked .check :global(svg) { transform: scale(1); }
     .avatar-slot.is-checked .avatar { opacity: 0; }
-    /* Subtle ring on the row when bulk-selected — pairs nicely with
-     * the chunky check + matches the row hover treatment. */
+    /* Selected rows use one restrained accent wash and rail. */
     .row.bulk-selected {
-        background: linear-gradient(90deg,
-            color-mix(in srgb, var(--accent) 18%, var(--bg-surface)),
-            var(--accent-soft) 60%);
+        background: color-mix(in srgb, var(--accent) 12%, var(--bg-surface));
         box-shadow: inset 3px 0 0 var(--accent);
     }
-    .row.bulk-selected:hover { background: color-mix(in srgb, var(--accent) 22%, var(--bg-surface)); }
-    /* Starred rows get a subtle rotating yellow glow that travels around
-     * the border — like a soft lighthouse beam highlighting importance. */
-    /* Tracking (spy) rows — bright green glow like a live surveillance indicator. */
+    .row.bulk-selected:hover { background: color-mix(in srgb, var(--accent) 16%, var(--bg-surface)); }
+    /* A tracking notice is identified by its icon and a restrained rail. */
     .row.spy-tracked {
-        position: relative;
-        background: linear-gradient(90deg, color-mix(in srgb, #10b981 10%, var(--bg-surface)) 0%, var(--bg-surface) 50%);
-        box-shadow: inset 4px 0 0 #10b981, inset 0 0 14px color-mix(in srgb, #10b981 10%, transparent);
-        animation: spy-pulse-glow 2.4s ease-in-out infinite;
+        background: var(--bg-surface);
+        box-shadow: inset 3px 0 0 color-mix(in srgb, #10b981 55%, var(--border-subtle));
     }
     .spy-mark {
         display: inline-flex;
@@ -2805,33 +2754,18 @@
         color: #fff;
         background: #10b981;
         border-radius: 50%;
-        box-shadow: 0 0 6px color-mix(in srgb, #10b981 50%, transparent);
+        box-shadow: none;
     }
     .row.spy-tracked .subject {
-        color: #6ee7b7;
-        font-weight: 700;
-    }
-    @keyframes spy-pulse-glow {
-        0%, 100% {
-            box-shadow: inset 4px 0 0 #10b981, inset 0 0 14px color-mix(in srgb, #10b981 10%, transparent), 0 0 0 0 transparent;
-        }
-        50% {
-            box-shadow: inset 4px 0 0 #10b981, inset 0 0 22px color-mix(in srgb, #10b981 20%, transparent), 0 0 10px -2px color-mix(in srgb, #10b981 30%, transparent);
-        }
-    }
-    @media (prefers-reduced-motion: reduce) {
-        .row.spy-tracked { animation: none; }
+        color: var(--text-primary);
+        font-weight: 600;
     }
 
     /* Notification rows — system alerts (Jellyfin etc) and our own
        open-tracking notices. Compact accent strip, hide from-name, lift
        the subject as the headline. */
     .row.notice-row {
-        background: linear-gradient(
-            90deg,
-            color-mix(in srgb, var(--accent) 6%, var(--bg-surface)) 0%,
-            var(--bg-surface) 60%
-        );
+        background: color-mix(in srgb, var(--accent) 4%, var(--bg-surface));
         box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 60%, transparent);
     }
     .row.notice-row .from { display: none; }
@@ -2840,20 +2774,12 @@
         color: var(--text-primary);
     }
     .row.notice-row.spy-tracked {
-        background: linear-gradient(
-            90deg,
-            color-mix(in srgb, var(--warning, #d97706) 10%, var(--bg-surface)) 0%,
-            var(--bg-surface) 60%
-        );
+        background: color-mix(in srgb, var(--warning-soft) 55%, var(--bg-surface));
         box-shadow: inset 3px 0 0 color-mix(in srgb, var(--warning, #d97706) 70%, transparent);
         animation: none;
     }
     .row.sms-row {
-        background: linear-gradient(
-            90deg,
-            color-mix(in srgb, #16a34a 10%, var(--bg-surface)) 0%,
-            var(--bg-surface) 60%
-        );
+        background: color-mix(in srgb, #16a34a 5%, var(--bg-surface));
         box-shadow: inset 3px 0 0 #16a34a;
     }
     .sms-avatar {
@@ -2868,108 +2794,46 @@
         flex-shrink: 0;
     }
 
-    /* AI sort category accents — left stripe so the category reads at a
-       glance in a long list without crowding the row layout.
-       human → red (extreme relevance, real person)
-       important → amber
-       marketing → blue (per spec)
-       info → no stripe (default neutral) */
+    /* AI sort categories retain a narrow rail; broad tinted gradients
+       previously competed with unread, selected, and security states. */
     /* Family — warm pink/rose, our top tier. Sits above "human" in
      * priority; visually distinct so the user spots a parent / sibling
      * email at a glance even in a crowded list. */
     .row.ai-cat-family {
         box-shadow: inset 3px 0 0 #ec4899;
-        background: linear-gradient(
-            90deg,
-            color-mix(in srgb, #ec4899 12%, var(--bg-surface)) 0%,
-            var(--bg-surface) 55%
-        );
+        background: color-mix(in srgb, #ec4899 5%, var(--bg-surface));
     }
     .row.ai-cat-human {
         box-shadow: inset 3px 0 0 #dc2626;
-        background: linear-gradient(
-            90deg,
-            color-mix(in srgb, #dc2626 9%, var(--bg-surface)) 0%,
-            var(--bg-surface) 50%
-        );
+        background: color-mix(in srgb, #dc2626 4%, var(--bg-surface));
     }
     .row.ai-cat-important {
         box-shadow: inset 3px 0 0 #d97706;
-        background: linear-gradient(
-            90deg,
-            color-mix(in srgb, #d97706 8%, var(--bg-surface)) 0%,
-            var(--bg-surface) 50%
-        );
+        background: color-mix(in srgb, #d97706 4%, var(--bg-surface));
     }
     .row.ai-cat-marketing {
         box-shadow: inset 3px 0 0 #2563eb;
-        background: linear-gradient(
-            90deg,
-            color-mix(in srgb, #2563eb 8%, var(--bg-surface)) 0%,
-            var(--bg-surface) 50%
-        );
+        background: color-mix(in srgb, #2563eb 4%, var(--bg-surface));
     }
     /* .row.ai-cat-info is deliberately unstyled — an info-category row gets
        no tint or marker; this was an intentionally empty ruleset. */
-    .row.starred {
-        position: relative;
-        animation: star-orbit-glow 3s linear infinite;
-    }
-    @keyframes star-orbit-glow {
-        0%, 100% {
-            box-shadow:
-                inset 0 0 10px color-mix(in srgb, var(--star) 5%, transparent),
-                -2px -2px 8px -2px color-mix(in srgb, var(--star) 22%, transparent),
-                2px 2px 2px -2px transparent;
-        }
-        25% {
-            box-shadow:
-                inset 0 0 10px color-mix(in srgb, var(--star) 5%, transparent),
-                2px -2px 8px -2px color-mix(in srgb, var(--star) 22%, transparent),
-                -2px 2px 2px -2px transparent;
-        }
-        50% {
-            box-shadow:
-                inset 0 0 10px color-mix(in srgb, var(--star) 5%, transparent),
-                2px 2px 8px -2px color-mix(in srgb, var(--star) 22%, transparent),
-                -2px -2px 2px -2px transparent;
-        }
-        75% {
-            box-shadow:
-                inset 0 0 10px color-mix(in srgb, var(--star) 5%, transparent),
-                -2px 2px 8px -2px color-mix(in srgb, var(--star) 22%, transparent),
-                2px -2px 2px -2px transparent;
-        }
-    }
-    @media (prefers-reduced-motion: reduce) {
-        .row.starred { animation: none; }
-    }
-    /* AI danger-level glows — thick borders + background tints + subject colours.
-     * Designed to be impossible to miss at a glance. */
+    /* Severity stays scannable through a static rail, badge, and soft tint. */
     .row.danger-4 {
-        background: linear-gradient(90deg, color-mix(in srgb, #ef4444 18%, var(--bg-surface)) 0%, var(--bg-surface) 60%);
-        box-shadow: inset 4px 0 0 #ef4444, inset 0 0 20px color-mix(in srgb, #ef4444 12%, transparent);
-        animation: danger-pulse-4 2s ease-in-out infinite;
+        background: color-mix(in srgb, #ef4444 9%, var(--bg-surface));
+        box-shadow: inset 3px 0 0 #ef4444;
     }
     .row.danger-3 {
-        background: linear-gradient(90deg, color-mix(in srgb, #f97316 14%, var(--bg-surface)) 0%, var(--bg-surface) 55%);
-        box-shadow: inset 4px 0 0 #f97316, inset 0 0 16px color-mix(in srgb, #f97316 10%, transparent);
-        animation: danger-pulse-3 2.4s ease-in-out infinite;
+        background: color-mix(in srgb, #f97316 8%, var(--bg-surface));
+        box-shadow: inset 3px 0 0 #f97316;
     }
     .row.danger-2 {
-        background: linear-gradient(90deg, color-mix(in srgb, #eab308 10%, var(--bg-surface)) 0%, var(--bg-surface) 50%);
-        box-shadow: inset 4px 0 0 #eab308, inset 0 0 12px color-mix(in srgb, #eab308 8%, transparent);
-        animation: danger-pulse-2 2.8s ease-in-out infinite;
+        background: color-mix(in srgb, #eab308 7%, var(--bg-surface));
+        box-shadow: inset 3px 0 0 #eab308;
     }
     .row.danger-1 {
-        background: linear-gradient(90deg, color-mix(in srgb, #22c55e 8%, var(--bg-surface)) 0%, var(--bg-surface) 45%);
-        box-shadow: inset 4px 0 0 #22c55e, inset 0 0 10px color-mix(in srgb, #22c55e 6%, transparent);
-        animation: danger-pulse-1 3.2s ease-in-out infinite;
+        background: color-mix(in srgb, #22c55e 6%, var(--bg-surface));
+        box-shadow: inset 3px 0 0 #22c55e;
     }
-    .row.danger-4 .subject { color: #fca5a5; font-weight: 700; }
-    .row.danger-3 .subject { color: #fdba74; font-weight: 700; }
-    .row.danger-2 .subject { color: #fde047; font-weight: 600; }
-    .row.danger-1 .subject { color: #86efac; font-weight: 600; }
     .danger-badge {
         display: inline-flex;
         align-items: center;
@@ -2981,6 +2845,28 @@
         font-weight: 800;
         letter-spacing: 0.04em;
         line-height: 1.4;
+    }
+    .risk-badge {
+        display: inline-flex;
+        align-items: center;
+        margin-right: 5px;
+        padding: 1px 6px;
+        border: 1px solid currentColor;
+        border-radius: 999px;
+        font-size: 10px;
+        font-weight: 650;
+        line-height: 1.4;
+        white-space: nowrap;
+    }
+    .risk-badge.phishing {
+        color: var(--text-primary);
+        background: color-mix(in srgb, #ef4444 10%, var(--bg-surface));
+        border-color: #ef4444;
+    }
+    .risk-badge.spam {
+        color: var(--text-primary);
+        background: color-mix(in srgb, #eab308 10%, var(--bg-surface));
+        border-color: #d97706;
     }
     /* Folder badge — only stamped on rows during all-folders search.
        Keeps the user oriented when the same hit could be in any of N
@@ -3038,47 +2924,35 @@
         background: color-mix(in srgb, var(--accent) 22%, transparent);
         color: var(--accent-text);
     }
-    /* Family — pink/rose. Sits at the top of the visual stack so a
-     * parent / sibling email is impossible to miss. */
+    /* Category colours stay in compact flat pills instead of spreading
+       across the row background. */
     .cat-pill.cat-family {
-        background: linear-gradient(135deg,
-            color-mix(in srgb, #ec4899 28%, var(--bg-surface)),
-            color-mix(in srgb, #ec4899 12%, var(--bg-surface)));
+        background: color-mix(in srgb, #ec4899 18%, var(--bg-surface));
         color: #9d174d;
         border-color: color-mix(in srgb, #ec4899 36%, transparent);
     }
     .cat-pill.cat-human {
-        background: linear-gradient(135deg,
-            color-mix(in srgb, #22c55e 22%, var(--bg-surface)),
-            color-mix(in srgb, #22c55e 8%, var(--bg-surface)));
+        background: color-mix(in srgb, #22c55e 15%, var(--bg-surface));
         color: #126b35;
         border-color: color-mix(in srgb, #22c55e 28%, transparent);
     }
     .cat-pill.cat-important {
-        background: linear-gradient(135deg,
-            color-mix(in srgb, #f59e0b 22%, var(--bg-surface)),
-            color-mix(in srgb, #f59e0b 8%, var(--bg-surface)));
+        background: color-mix(in srgb, #f59e0b 16%, var(--bg-surface));
         color: #7c4a00;
         border-color: color-mix(in srgb, #f59e0b 30%, transparent);
     }
     .cat-pill.cat-purchase {
-        background: linear-gradient(135deg,
-            color-mix(in srgb, #8b5cf6 22%, var(--bg-surface)),
-            color-mix(in srgb, #8b5cf6 8%, var(--bg-surface)));
+        background: color-mix(in srgb, #8b5cf6 15%, var(--bg-surface));
         color: #4d2dab;
         border-color: color-mix(in srgb, #8b5cf6 30%, transparent);
     }
     .cat-pill.cat-notification {
-        background: linear-gradient(135deg,
-            color-mix(in srgb, #3b82f6 22%, var(--bg-surface)),
-            color-mix(in srgb, #3b82f6 8%, var(--bg-surface)));
+        background: color-mix(in srgb, #3b82f6 15%, var(--bg-surface));
         color: #1d4ed8;
         border-color: color-mix(in srgb, #3b82f6 30%, transparent);
     }
     .cat-pill.cat-marketing {
-        background: linear-gradient(135deg,
-            color-mix(in srgb, #94a3b8 22%, var(--bg-surface)),
-            color-mix(in srgb, #94a3b8 8%, var(--bg-surface)));
+        background: color-mix(in srgb, #94a3b8 15%, var(--bg-surface));
         color: #475569;
         border-color: color-mix(in srgb, #94a3b8 30%, transparent);
     }
@@ -3103,91 +2977,40 @@
     .danger-badge[data-level="4"] {
         background: #ef4444;
         color: #fff;
-        box-shadow: 0 0 6px color-mix(in srgb, #ef4444 50%, transparent);
     }
     .danger-badge[data-level="3"] {
         background: #f97316;
         color: #fff;
-        box-shadow: 0 0 4px color-mix(in srgb, #f97316 40%, transparent);
-    }
-    @keyframes danger-pulse-4 {
-        0%, 100% { box-shadow: inset 4px 0 0 #ef4444, inset 0 0 20px color-mix(in srgb, #ef4444 12%, transparent), 0 0 0 0 transparent; }
-        50%      { box-shadow: inset 4px 0 0 #ef4444, inset 0 0 28px color-mix(in srgb, #ef4444 22%, transparent), 0 0 12px -2px color-mix(in srgb, #ef4444 30%, transparent); }
-    }
-    @keyframes danger-pulse-3 {
-        0%, 100% { box-shadow: inset 4px 0 0 #f97316, inset 0 0 16px color-mix(in srgb, #f97316 10%, transparent), 0 0 0 0 transparent; }
-        50%      { box-shadow: inset 4px 0 0 #f97316, inset 0 0 22px color-mix(in srgb, #f97316 18%, transparent), 0 0 10px -2px color-mix(in srgb, #f97316 25%, transparent); }
-    }
-    @keyframes danger-pulse-2 {
-        0%, 100% { box-shadow: inset 4px 0 0 #eab308, inset 0 0 12px color-mix(in srgb, #eab308 8%, transparent), 0 0 0 0 transparent; }
-        50%      { box-shadow: inset 4px 0 0 #eab308, inset 0 0 18px color-mix(in srgb, #eab308 14%, transparent), 0 0 8px -2px color-mix(in srgb, #eab308 20%, transparent); }
-    }
-    @keyframes danger-pulse-1 {
-        0%, 100% { box-shadow: inset 4px 0 0 #22c55e, inset 0 0 10px color-mix(in srgb, #22c55e 6%, transparent), 0 0 0 0 transparent; }
-        50%      { box-shadow: inset 4px 0 0 #22c55e, inset 0 0 14px color-mix(in srgb, #22c55e 10%, transparent), 0 0 6px -2px color-mix(in srgb, #22c55e 15%, transparent); }
-    }
-    @media (prefers-reduced-motion: reduce) {
-        .row.danger-1, .row.danger-2, .row.danger-3, .row.danger-4 { animation: none; }
     }
 
-    /* Scam (was: phishing) risk rows — deep purple/violet wash so
-     * scams are visually distinct from spam (amber). The two warnings
-     * mean different things and shouldn't share a palette. */
+    /* Security warnings keep a semantic danger/warning treatment without
+     * animated effects or a palette that competes with the skin. */
     .row.phishing-risk {
-        position: relative;
-        background: linear-gradient(90deg, color-mix(in srgb, #7c3aed 10%, var(--bg-surface)) 0%, var(--bg-surface) 55%);
-        box-shadow: inset 4px 0 0 #7c3aed, inset 0 0 10px color-mix(in srgb, #7c3aed 10%, transparent);
-    }
-    .row.phishing-risk .subject { color: #c4b5fd; font-weight: 600; }
-    .row.phishing-risk::after {
-        content: '';
-        position: absolute;
-        bottom: 0;
-        left: 12%;
-        width: 2px;
-        height: 18px;
-        border-radius: 50%;
-        background: linear-gradient(to top, color-mix(in srgb, #a78bfa 70%, transparent), transparent);
-        filter: blur(1.5px);
-        opacity: 0;
-        animation: stinky-wisp 2.4s ease-out infinite;
-        pointer-events: none;
-    }
-    .row.phishing-risk::before {
-        content: '';
-        position: absolute;
-        bottom: 0;
-        left: 28%;
-        width: 2px;
-        height: 14px;
-        border-radius: 50%;
-        background: linear-gradient(to top, color-mix(in srgb, #8b5cf6 60%, transparent), transparent);
-        filter: blur(1.5px);
-        opacity: 0;
-        animation: stinky-wisp 2.1s ease-out infinite 0.7s;
-        pointer-events: none;
-    }
-    @keyframes stinky-wisp {
-        0%   { transform: translateY(0) scaleX(1) scaleY(0.3); opacity: 0; }
-        15%  { opacity: 0.7; }
-        50%  { transform: translateY(-10px) scaleX(1.4) scaleY(1.2) translateX(3px); opacity: 0.45; }
-        100% { transform: translateY(-22px) scaleX(2) scaleY(2) translateX(-2px); opacity: 0; }
-    }
-    @media (prefers-reduced-motion: reduce) {
-        .row.phishing-risk::after, .row.phishing-risk::before { animation: none; opacity: 0.35; }
+        background: color-mix(in srgb, #ef4444 8%, var(--bg-surface));
+        box-shadow: inset 3px 0 0 #ef4444;
     }
 
     /* Spam risk rows — amber wash with a left rail. Visually distinct
      * from scam (purple) so a glance tells you which problem the row
      * has. Spam = annoying; scam = dangerous. */
     .row.spam-risk:not(.phishing-risk) {
-        background: linear-gradient(90deg, color-mix(in srgb, #f59e0b 9%, var(--bg-surface)) 0%, var(--bg-surface) 55%);
-        box-shadow: inset 4px 0 0 #f59e0b, inset 0 0 8px color-mix(in srgb, #f59e0b 8%, transparent);
+        background: color-mix(in srgb, #eab308 8%, var(--bg-surface));
+        box-shadow: inset 3px 0 0 #d97706;
     }
-    .row.spam-risk:not(.phishing-risk) .subject {
-        color: #d97706;
-        font-weight: 500;
+
+    /* Selection is the strongest row state; preserve it over freshness,
+     * categories, tracking notices, and risk tints. Their labels remain. */
+    .row.selected,
+    .row.bulk-selected {
+        background: var(--bg-selected);
+        box-shadow: inset 3px 0 0 var(--accent);
     }
+    .row.selected:hover,
+    .row.bulk-selected:hover {
+        background: color-mix(in srgb, var(--accent) 16%, var(--bg-selected));
+    }
+    .row.selected .subject,
+    .row.bulk-selected .subject { color: var(--text-primary); }
 
     .row-main {
         min-width: 0;
@@ -3294,7 +3117,8 @@
         align-items: center;
         gap: 2px;
         padding: 2px 6px;
-        background: linear-gradient(90deg, transparent 0, var(--bg-hover) 16px, var(--bg-hover) 100%);
+        background: var(--bg-surface);
+        border: 1px solid var(--border-subtle);
         border-radius: var(--radius-sm);
         opacity: 0;
         pointer-events: none;
@@ -3306,7 +3130,7 @@
         pointer-events: auto;
     }
     .row:hover.selected .row-actions {
-        background: linear-gradient(90deg, transparent 0, var(--bg-selected) 16px, var(--bg-selected) 100%);
+        background: var(--bg-selected);
     }
     .icon-btn {
         padding: 6px;
@@ -3320,42 +3144,8 @@
         color: var(--star);
         opacity: 1;
         background: color-mix(in srgb, var(--star) 10%, transparent);
-        animation: star-glow 2.4s ease-in-out infinite;
     }
     .row .icon-btn.star-on { opacity: 1; }
-    @keyframes star-glow {
-        0%, 100% {
-            box-shadow: 0 0 0 0 color-mix(in srgb, var(--star) 0%, transparent),
-                        inset 0 0 0 0 color-mix(in srgb, var(--star) 0%, transparent);
-        }
-        50% {
-            box-shadow: 0 0 8px 2px color-mix(in srgb, var(--star) 35%, transparent),
-                        inset 0 0 6px 1px color-mix(in srgb, var(--star) 15%, transparent);
-        }
-    }
-    @media (prefers-reduced-motion: reduce) {
-        .icon-btn.star-on { animation: none; }
-    }
-    /* Gentle gold halo around the filled star SVG so the eye lands on it. */
-    .icon-btn.star-on :global(svg) {
-        filter:
-            drop-shadow(0 0 3px color-mix(in srgb, var(--star) 80%, transparent))
-            drop-shadow(0 0 8px color-mix(in srgb, var(--star) 45%, transparent));
-        animation: star-breathe 2.6s ease-in-out infinite;
-    }
-    @keyframes star-breathe {
-        0%, 100% { filter:
-            drop-shadow(0 0 3px color-mix(in srgb, var(--star) 80%, transparent))
-            drop-shadow(0 0 8px color-mix(in srgb, var(--star) 45%, transparent));
-        }
-        50%      { filter:
-            drop-shadow(0 0 5px color-mix(in srgb, var(--star) 95%, transparent))
-            drop-shadow(0 0 14px color-mix(in srgb, var(--star) 55%, transparent));
-        }
-    }
-    @media (prefers-reduced-motion: reduce) {
-        .icon-btn.star-on :global(svg) { animation: none; }
-    }
     .state {
         flex: 1;
         display: flex;
@@ -3384,29 +3174,15 @@
         font-size: 12px;
     }
 
-    /* Client-side rule animation: while a rule is running on a row
-     * (.rule-running), an indigo shimmer sweeps across it so the user
-     * sees the AI is doing something. When the action finishes
-     * (.rule-popping), the row scales down + slides out with a
-     * glassy fade — feels like the message is "lifted away" by an
-     * invisible hand. The actual list refresh then drops it for real. */
+    /* Running rules use a static accent rail; completion keeps a brief
+     * exit transition so the row's removal remains understandable. */
     .row.rule-running {
-        position: relative;
-        background: linear-gradient(
-            90deg,
-            transparent 0%,
-            color-mix(in srgb, var(--accent) 12%, transparent) 50%,
-            transparent 100%);
-        background-size: 200% 100%;
-        animation: rule-shimmer 1.6s ease-in-out infinite;
+        background: color-mix(in srgb, var(--accent) 9%, var(--bg-surface));
+        box-shadow: inset 3px 0 0 var(--accent);
     }
     .row.rule-popping {
         animation: rule-pop 360ms cubic-bezier(0.4, 0.0, 1, 1) forwards;
         pointer-events: none;
-    }
-    @keyframes rule-shimmer {
-        0%   { background-position: 100% 50%; }
-        100% { background-position: -100% 50%; }
     }
     @keyframes rule-pop {
         0%   { transform: scale(1) translateX(0);   opacity: 1; filter: blur(0); }
@@ -3414,7 +3190,6 @@
         100% { transform: scale(0.6) translateX(40px); opacity: 0; filter: blur(2px); }
     }
     @media (prefers-reduced-motion: reduce) {
-        .row.rule-running { animation: none; }
         .row.rule-popping { animation: none; opacity: 0.4; }
     }
 </style>

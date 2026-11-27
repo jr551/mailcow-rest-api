@@ -22,7 +22,8 @@ process.on('exit', () => { try { rmSync(tmp, { recursive: true, force: true }); 
 const stubsUrl = pathToFileURL(path.join(tmp, 'stubs.mjs')).href;
 writeFileSync(path.join(tmp, 'stubs.mjs'),
     'export const calls = { listMessages: [], moveMessage: [] };\n'
-    + 'export const hooks = { move: async () => {}, total: 1000 };\n'
+    + 'export const hooks = { move: async () => {}, total: 1000, activeUser: "test@example.test" };\n'
+    + 'export const getSession = () => hooks.activeUser ? { user: hooks.activeUser } : null;\n'
     + 'export const listMailboxes = async () => [{ path: "INBOX", name: "INBOX", specialUse: "\\\\Inbox" }];\n'
     + 'export const listMessages = async (_p, o) => {\n'
     + '  calls.listMessages.push({ ...o });\n'
@@ -101,6 +102,7 @@ test('spam sweep stops paging when the inbox runs out', async () => {
 
 test('bulkMove reports failures and returns only the items that moved', async () => {
     const stubs = await import(stubsUrl);
+    stubs.hooks.activeUser = 'test@example.test';
     stubs.hooks.move = async (uid) => { if (uid === 2) throw new Error('nope'); };
     const sweep = await load('lib/spam-sweep.ts', 'sweep3');
     const progress = [];
@@ -115,7 +117,50 @@ test('bulkMove reports failures and returns only the items that moved', async ()
     assert.deepEqual(progress, [[1, 3, 0], [2, 3, 1], [3, 3, 1]]);
 });
 
+test('bulkMove stops before the next item after an account switch', async () => {
+    const stubs = await import(stubsUrl);
+    stubs.hooks.activeUser = 'first@example.test';
+    stubs.calls.moveMessage.length = 0;
+    stubs.hooks.move = async () => { stubs.hooks.activeUser = 'second@example.test'; };
+    const sweep = await load('lib/spam-sweep.ts', 'sweep4');
+    const progress = [];
+    const r = await sweep.bulkMove(
+        [1, 2, 3].map((uid) => ({ path: 'INBOX', uid })),
+        'Trash',
+        (done, total, failed) => progress.push([done, total, failed])
+    );
+    assert.equal(r.moved, 1);
+    assert.deepEqual(stubs.calls.moveMessage, [1]);
+    assert.deepEqual(progress, []);
+});
+
 const read = (p) => readFileSync(src(p), 'utf8');
+
+test('mobile inbox requests and mutations stay scoped to the account that started them', () => {
+    const inbox = read('mobile/components/InboxView.svelte');
+    assert.ok(inbox.includes('function stillOwner(user: string | null, epoch: number)'));
+    assert.ok(inbox.includes('if (await tryRenewSession(user) && stillCurrent())'));
+    assert.ok(inbox.includes('detailAbort?.abort(new DOMException(\'Active account changed\''));
+    assert.ok(inbox.includes('if (!stillCurrent()) return;'));
+    assert.ok(inbox.includes('if (mobileState.searchScope === \'all\') cancelGlobalSearch();'));
+    assert.ok(inbox.includes('aiSortAbort?.abort(new DOMException(\'Active account changed\''));
+
+    const message = read('mobile/components/MessageView.svelte');
+    assert.ok(message.includes('function stillCurrentMessage(user: string | null, epoch: number'));
+    assert.ok(message.includes('headers: { authorization: bearerHeader(session) }'));
+    assert.ok(message.includes('folderPickerOwner = user'));
+
+    const actionSheet = read('mobile/components/MessageActionSheet.svelte');
+    assert.ok(actionSheet.includes('summaryAbort?.abort(new DOMException(\'Active account changed\''));
+    assert.ok(actionSheet.includes('summarizeMessage(bodyForAi(), 120, { signal: controller.signal })'));
+
+    for (const path of ['components/Compose.svelte', 'mobile/components/ComposeView.svelte']) {
+        const compose = read(path);
+        assert.ok(compose.includes('Active account changed'));
+        assert.ok(compose.includes('sendStub({'));
+        assert.ok(compose.includes('{ signal: controller.signal }'));
+    }
+});
 
 test('compose escapes model-written reply text before inserting it as HTML', () => {
     const compose = read('components/Compose.svelte');

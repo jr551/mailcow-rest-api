@@ -12,6 +12,7 @@
     import { chatTurn, TOOLS, META_TOOLS, SYSTEM_PROMPT, generateThreadTitle, isChatConfigured, type ChatMessage, type GrantableCapability } from '../../lib/chat.svelte';
     import { settings, capabilities } from '../../lib/settings.svelte';
     import { ui, showToast } from '../../lib/store.svelte';
+    import { authState } from '../../lib/auth.svelte';
     import {
         voicePrefs, setVoiceEnabled, isVoiceAvailable,
         speakWithElevenLabs, stopSpeaking,
@@ -31,6 +32,9 @@
     let input = $state('');
     let sending = $state(false);
     let abortCtrl: AbortController | null = null;
+    let accountEpoch = 0;
+    let runEpoch = 0;
+    let observedUser = authState.activeUser;
     // Drives a one-shot glow on the latest assistant bubble after a
     // reply lands — see the .done-flash class below. Cleared by an
     // $effect 2.4s after it sets, which yanks the class so a future
@@ -53,6 +57,7 @@
     // clicks Approve or Deny. Multiple writes in one turn queue up.
     interface PendingWrite {
         threadId: string;
+        accountUser: string | null;
         name: string;
         args: Record<string, unknown>;
         resolve: (ok: boolean) => void;
@@ -62,6 +67,7 @@
      *  Each card stays visible until the user clicks Allow or Deny. */
     interface PendingPermission {
         threadId: string;
+        accountUser: string | null;
         capability: GrantableCapability;
         reason: string;
         resolve: (ok: boolean) => void;
@@ -98,19 +104,43 @@
     let lastSpokenIdx = $state(-1);
     let voiceModeOpen = $state(false);
 
+    $effect(() => {
+        const user = authState.activeUser;
+        if (user === observedUser) return;
+        observedUser = user;
+        accountEpoch += 1;
+        runEpoch += 1;
+        abortCtrl?.abort(new DOMException('Active account changed', 'AbortError'));
+        abortCtrl = null;
+        denyAllPending();
+        sending = false;
+        input = '';
+        pendingImages = [];
+        stopListening();
+        stopSpeaking();
+        lastSpokenIdx = -1;
+        doneFlashThreadId = null;
+        doneFlashStamp = 0;
+    });
+
     function startListening() {
         if (listening || !isSttAvailable()) return;
+        const user = authState.activeUser;
+        const epoch = accountEpoch;
+        const stillCurrent = () => authState.activeUser === user && accountEpoch === epoch;
         recognizer = createSpeechRecognizer();
         if (!recognizer) return;
         listening = true;
         interimTranscript = '';
         let stash = '';
         recognizer.onResult((txt, isFinal) => {
+            if (!stillCurrent()) return;
             interimTranscript = txt;
             if (isFinal) stash += txt + ' ';
         });
         recognizer.onEnd(() => {
             listening = false;
+            if (!stillCurrent()) return;
             const final = (stash + interimTranscript).trim();
             interimTranscript = '';
             if (final) {
@@ -124,6 +154,7 @@
         });
         recognizer.onError((err) => {
             listening = false;
+            if (!stillCurrent()) return;
             interimTranscript = '';
             if (err !== 'no-speech' && err !== 'aborted') {
                 if (err === 'network') {
@@ -142,10 +173,14 @@
 
     async function speakMessage(text: string) {
         if (!voicePrefs.enabled || !isVoiceAvailable()) return;
+        const user = authState.activeUser;
+        const epoch = accountEpoch;
         try {
             await speakWithElevenLabs(text);
         } catch (err) {
-            showToast('error', (err as Error).message || 'Voice playback failed');
+            if (authState.activeUser === user && accountEpoch === epoch) {
+                showToast('error', (err as Error).message || 'Voice playback failed');
+            }
         }
     }
 
@@ -167,14 +202,15 @@
     });
 
     function answerWrite(p: PendingWrite, ok: boolean) {
-        p.resolve(ok);
+        p.resolve(ok && authState.activeUser === p.accountUser);
         pendingWrites = pendingWrites.filter((x) => x !== p);
     }
     function answerPermission(p: PendingPermission, ok: boolean) {
         // On Allow we flip the toggle here so the *next* model step already
         // sees the new capability — saves the model from having to ask again.
-        if (ok) setTools({ [p.capability]: true });
-        p.resolve(ok);
+        const allowed = ok && authState.activeUser === p.accountUser;
+        if (allowed) setTools({ [p.capability]: true });
+        p.resolve(allowed);
         pendingPermissions = pendingPermissions.filter((x) => x !== p);
     }
     // Deny every open card (Stop pressed) so the parked turn can unwind.
@@ -202,7 +238,9 @@
     });
 
     let active = $derived(aiState.threads.find((t) => t.id === aiState.activeId) ?? null);
-    let bgTask = $derived(active ? backgroundTasks().active.find((t) => t.threadId === active.id) : undefined);
+    let bgTask = $derived(active
+        ? backgroundTasks().active.find((t) => t.threadId === active.id && t.accountUser === authState.activeUser)
+        : undefined);
 
     // Tool catalog assembled from tickboxes. Email-access uses the existing
     // MCP catalog; without it the LLM still gets META_TOOLS so it can ask
@@ -310,6 +348,9 @@
         const text = input.trim();
         const images = pendingImages.slice();
         if ((!text && !images.length) || sending) return;
+        const user = authState.activeUser;
+        if (user !== observedUser) return;
+        const epoch = accountEpoch;
         if (!aiState.activeId) newThread();
         const threadId = aiState.activeId!;
         const userMsg: ChatMessage = {
@@ -320,7 +361,7 @@
         appendMessage(threadId, userMsg);
         input = '';
         pendingImages = [];
-        await runAssistant(threadId);
+        await runAssistant(threadId, user, epoch);
     }
 
     // ---- Pasted/dropped image handling -----------------------------------
@@ -356,9 +397,12 @@
 
     async function attachImageFiles(files: FileList | File[] | null) {
         if (!files) return;
+        const user = authState.activeUser;
+        const epoch = accountEpoch;
         const arr = Array.from(files).filter((f) => f.type.startsWith('image/'));
         if (!arr.length) return;
         const dataUrls = await Promise.all(arr.map((f) => compressImage(f).catch(() => null)));
+        if (authState.activeUser !== user || accountEpoch !== epoch) return;
         pendingImages = [...pendingImages, ...dataUrls.filter((u): u is string => !!u)];
     }
 
@@ -393,19 +437,32 @@
     /** Fire the LLM against an existing thread whose last message is
      *  already a user prompt — used by send() above and by the
      *  pendingAutoSend deep-link path (email AI suggestions). */
-    async function runAssistant(threadId: string) {
+    async function runAssistant(
+        threadId: string,
+        ownerUser: string | null = authState.activeUser,
+        ownerEpoch = accountEpoch
+    ) {
         if (sending) return;
+        if (authState.activeUser !== ownerUser || observedUser !== ownerUser || accountEpoch !== ownerEpoch) return;
         if (!isChatConfigured()) {
             showToast('error', 'Configure an OpenAI-compatible provider + API key in Settings → AI.');
             return;
         }
         sending = true;
+        const runId = ++runEpoch;
+        const controller = new AbortController();
+        abortCtrl = controller;
+        const stillOwner = () =>
+            runId === runEpoch
+            && ownerEpoch === accountEpoch
+            && observedUser === ownerUser
+            && authState.activeUser === ownerUser;
+        const stillRunning = () => stillOwner() && !controller.signal.aborted;
         scrollToBottom();
 
         const placeholder: ChatMessage = { role: 'assistant', content: '' };
         appendMessage(threadId, placeholder);
 
-        abortCtrl = new AbortController();
         try {
             const thread = aiState.threads.find((t) => t.id === threadId);
             if (!thread) return;
@@ -419,20 +476,28 @@
             let lastToolCount = 0;
             let lastToolLineLen = 0;
             for await (const ev of chatTurn(history, {
-                signal: abortCtrl.signal,
+                signal: controller.signal,
+                accountUser: ownerUser,
                 tools: toolCatalog,
                 systemPrompt,
                 modelOverride,
                 threadId,
-                confirmWrite: (call) => new Promise<boolean>((resolve) => {
-                    pendingWrites = [...pendingWrites, { threadId, name: call.name, args: call.args, resolve }];
-                    scrollToBottom();
-                }),
-                confirmPermission: (req) => new Promise<boolean>((resolve) => {
-                    pendingPermissions = [...pendingPermissions, { threadId, capability: req.capability, reason: req.reason, resolve }];
-                    scrollToBottom();
-                })
+                confirmWrite: (call) => {
+                    if (!stillRunning()) return Promise.resolve(false);
+                    return new Promise<boolean>((resolve) => {
+                        pendingWrites = [...pendingWrites, { threadId, accountUser: ownerUser, name: call.name, args: call.args, resolve }];
+                        scrollToBottom();
+                    });
+                },
+                confirmPermission: (req) => {
+                    if (!stillRunning()) return Promise.resolve(false);
+                    return new Promise<boolean>((resolve) => {
+                        pendingPermissions = [...pendingPermissions, { threadId, accountUser: ownerUser, capability: req.capability, reason: req.reason, resolve }];
+                        scrollToBottom();
+                    });
+                }
             })) {
+                if (!stillRunning()) break;
                 if (ev.type === 'tool_call') {
                     const td = toolDisplay(ev.toolName || '');
                     if (!td.hidden) {
@@ -479,44 +544,53 @@
                 scrollToBottom();
             }
         } catch (err) {
-            updateAssistant(threadId, `Error: ${(err as Error).message}`);
+            if (stillOwner() && (err as Error)?.name !== 'AbortError') {
+                updateAssistant(threadId, `Error: ${(err as Error).message}`);
+            }
         } finally {
-            sending = false;
-            abortCtrl = null;
-            scrollToBottom();
+            if (stillOwner()) {
+                sending = false;
+                if (abortCtrl === controller) abortCtrl = null;
+                scrollToBottom();
             // Soft chime + glow on the latest assistant message so the
             // user notices the reply landed even if they tabbed away or
             // were watching the thread list.
-            playNotify();
-            doneFlashThreadId = threadId;
-            doneFlashStamp = Date.now();
+                playNotify();
+                doneFlashThreadId = threadId;
+                doneFlashStamp = Date.now();
             // Best-effort browser notification when the page is hidden —
             // skipped silently if the user hasn't granted permission.
-            if (typeof document !== 'undefined' && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
-                try { new Notification('AI reply ready', { body: 'Your assistant has finished a response.', silent: false }); } catch { /* */ }
-            }
+                if (typeof document !== 'undefined' && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+                    try { new Notification('AI reply ready', { body: 'Your assistant has finished a response.', silent: false }); } catch { /* */ }
+                }
             // Generate a concise emoji + title for the thread once the
             // first assistant reply lands. Fire-and-forget; cosmetic.
             // Driven by the per-thread `aiTitled` flag rather than the
             // title string itself, so the cheap auto-derived title from
             // appendMessage (which can be a [[email:…]] sentinel for
             // action-spawned chats) doesn't lock us out of upgrading it.
-            const t = aiState.threads.find((th) => th.id === threadId);
-            const stripSentinel = (s: string) => parseEmailContext(s).display || s;
-            const firstUser = t?.messages.find((m) => m.role === 'user');
-            const firstAssistant = t?.messages.find((m) => m.role === 'assistant');
-            if (t && firstUser && firstAssistant && !t.aiTitled) {
-                generateThreadTitle(stripSentinel(firstUser.content), firstAssistant.content)
-                    .then((result) => {
-                        if (result) {
-                            renameThread(threadId, `${result.emoji} ${result.title}`, { ai: true });
-                        } else {
-                            // Mark titled even on failure so we don't burn
-                            // a title-gen request on every subsequent reply.
-                            renameThread(threadId, t.title, { ai: true });
-                        }
-                    })
-                    .catch(() => { renameThread(threadId, t.title, { ai: true }); });
+                const t = aiState.threads.find((th) => th.id === threadId);
+                const stripSentinel = (s: string) => parseEmailContext(s).display || s;
+                const firstUser = t?.messages.find((m) => m.role === 'user');
+                const firstAssistant = t?.messages.find((m) => m.role === 'assistant');
+                if (t && firstUser && firstAssistant && !t.aiTitled) {
+                    generateThreadTitle(stripSentinel(firstUser.content), firstAssistant.content)
+                        .then((result) => {
+                            if (!stillOwner() || !aiState.threads.some((th) => th.id === threadId)) return;
+                            if (result) {
+                                renameThread(threadId, `${result.emoji} ${result.title}`, { ai: true });
+                            } else {
+                                // Mark titled even on failure so we don't burn
+                                // a title-gen request on every subsequent reply.
+                                renameThread(threadId, t.title, { ai: true });
+                            }
+                        })
+                        .catch(() => {
+                            if (stillOwner() && aiState.threads.some((th) => th.id === threadId)) {
+                                renameThread(threadId, t.title, { ai: true });
+                            }
+                        });
+                }
             }
         }
     }
@@ -526,13 +600,19 @@
     $effect(() => {
         const id = aiState.pendingAutoSend;
         if (!id) return;
+        const user = authState.activeUser;
+        const epoch = accountEpoch;
         const t = aiState.threads.find((x) => x.id === id);
         const last = t?.messages[t.messages.length - 1];
         if (last?.role !== 'user') { clearAutoSend(); return; }
         clearAutoSend();
         // Defer to the next tick so the surface mounts before we start
         // pumping the chatTurn loop into it.
-        queueMicrotask(() => { void runAssistant(id); });
+        queueMicrotask(() => {
+            if (authState.activeUser === user && accountEpoch === epoch) {
+                void runAssistant(id, user, epoch);
+            }
+        });
     });
 
     function updateAssistant(threadId: string, text: string, reasoningContent?: string) {

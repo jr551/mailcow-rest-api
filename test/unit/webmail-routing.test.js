@@ -114,6 +114,8 @@ test('webmail: bare /webmail and /webmail/mobile redirect to their slash form', 
     const dist = makeDist();
     t.after(() => fs.rmSync(dist, { recursive: true, force: true }));
     const app = await buildWithWebmail({ dist });
+    const errors = [];
+    app.addHook('onError', async (_req, _reply, error) => { errors.push(error); });
     try {
         const a = await app.inject({ method: 'GET', url: '/webmail' });
         assert.equal(a.statusCode, 308);
@@ -122,6 +124,12 @@ test('webmail: bare /webmail and /webmail/mobile redirect to their slash form', 
         const b = await app.inject({ method: 'GET', url: '/webmail/mobile' });
         assert.equal(b.statusCode, 308);
         assert.equal(b.headers.location, '/webmail/mobile/');
+
+        // An async Fastify handler must return its reply. Without the return,
+        // Fastify tries to send a second response after the redirect and the
+        // error hook reports FST_ERR_REPLY_ALREADY_SENT even though the client
+        // received a 308.
+        assert.deepEqual(errors, []);
     } finally { await app.close(); }
 });
 

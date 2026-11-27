@@ -21,6 +21,7 @@
     } from '../../lib/chat.svelte';
     import { settings, capabilities } from '../../lib/settings.svelte';
     import { showToast } from '../../lib/store.svelte';
+    import { authState } from '../../lib/auth.svelte';
     import { playVoiceStart } from '../../lib/sounds.svelte';
     import {
         isVoiceAvailable, speakWithElevenLabs, stopSpeaking,
@@ -81,8 +82,25 @@
     let submittedTurn = false; // dedupe: once we send, don't re-send the same text
     let listeningStartedMs = 0; // for FIRST_AUDIO_TIMEOUT_MS hint
     let heardNothingHint = $state(false); // shown when STT produces zero text after the timeout
+    let observedUser = authState.activeUser;
+    let accountEpoch = 0;
 
     let activeThread = $derived(aiState.threads.find((t) => t.id === aiState.activeId) ?? null);
+
+    function stillOwner(user: string | null, epoch: number): boolean {
+        return alive && authState.activeUser === user && observedUser === user && accountEpoch === epoch;
+    }
+
+    $effect(() => {
+        const user = authState.activeUser;
+        if (user === observedUser) return;
+        observedUser = user;
+        accountEpoch += 1;
+        teardown();
+        interimTranscript = '';
+        currentText = '';
+        onClose();
+    });
 
     onMount(async () => {
         if (!aiState.activeId) newThread();
@@ -105,6 +123,8 @@
         recognizer = null;
         speakingAbort?.abort();
         abortCtrl?.abort();
+        abortCtrl = null;
+        speakingAbort = null;
         stopSpeaking();
         if (analyser) { try { analyser.disconnect(); } catch { /* */ } analyser = null; }
         if (audioCtx) { try { audioCtx.close(); } catch { /* */ } audioCtx = null; }
@@ -117,20 +137,29 @@
 
     async function initMic() {
         if (!alive) return;
+        const user = authState.activeUser;
+        const epoch = accountEpoch;
+        if (!user) return;
         if (!isSttAvailable()) {
             showToast('error', 'Speech recognition is not supported in this browser. Try Chrome, Edge, or Safari.');
             return;
         }
         try {
-            mediaStream = await navigator.mediaDevices.getUserMedia({
+            const stream = await navigator.mediaDevices.getUserMedia({
                 audio: {
                     echoCancellation: true,
                     noiseSuppression: true,
                     autoGainControl: true
                 }
             });
+            if (!stillOwner(user, epoch)) {
+                stream.getTracks().forEach((track) => track.stop());
+                return;
+            }
+            mediaStream = stream;
             micPermission = 'granted';
         } catch (err) {
+            if (!stillOwner(user, epoch)) return;
             micPermission = 'denied';
             const name = (err as Error).name;
             if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
@@ -151,6 +180,10 @@
             if (audioCtx.state === 'suspended') {
                 try { await audioCtx.resume(); } catch { /* noop */ }
             }
+            if (!stillOwner(user, epoch)) {
+                teardown();
+                return;
+            }
             analyser = audioCtx.createAnalyser();
             analyser.fftSize = 1024;
             analyser.smoothingTimeConstant = 0.6;
@@ -163,7 +196,7 @@
             // detection — fall back to onEnd-based submit.
         }
 
-        startListening();
+        if (stillOwner(user, epoch)) startListening();
     }
 
     function tickAnalyser() {
@@ -244,7 +277,9 @@
     }
 
     function startListening() {
-        if (!alive) return;
+        const user = authState.activeUser;
+        const epoch = accountEpoch;
+        if (!user || !stillOwner(user, epoch)) return;
         if (phase === 'thinking') return;
         playVoiceStart();
         phase = 'listening';
@@ -256,10 +291,11 @@
         listeningStartedMs = performance.now();
         heardNothingHint = false;
         submittedTurn = false;
-        attachRecognizer();
+        attachRecognizer(user, epoch);
     }
 
-    function attachRecognizer() {
+    function attachRecognizer(user = authState.activeUser, epoch = accountEpoch) {
+        if (!stillOwner(user, epoch)) return;
         try { recognizer?.stop(); } catch { /* */ }
         recognizer = createSpeechRecognizer({ continuous: true });
         if (!recognizer) {
@@ -269,6 +305,7 @@
         }
 
         recognizer.onResult((cumulative, gotFinal) => {
+            if (!stillOwner(user, epoch)) return;
             const now = performance.now();
             if (cumulative !== currentText) {
                 currentText = cumulative;
@@ -280,19 +317,19 @@
         });
 
         recognizer.onEnd(() => {
-            if (!alive) return;
+            if (!stillOwner(user, epoch)) return;
             // Some browsers stop the recognizer every ~30s even in continuous
             // mode. Just restart it as long as we're still in the listening
             // phase. The silence detector handles auto-submit independently.
             if (phase === 'listening' && !submittedTurn) {
                 recRestartTimer = setTimeout(() => {
-                    if (alive && phase === 'listening' && !submittedTurn) attachRecognizer();
+                    if (stillOwner(user, epoch) && phase === 'listening' && !submittedTurn) attachRecognizer(user, epoch);
                 }, 250);
             }
         });
 
         recognizer.onError((err) => {
-            if (!alive) return;
+            if (!stillOwner(user, epoch)) return;
             if (err === 'no-speech' || err === 'aborted') {
                 // Benign — recognizer will fire onEnd next.
                 return;
@@ -311,17 +348,22 @@
             }
             const delay = Math.min(MAX_RECOGNIZER_RESTART_DELAY, 200 * recErrors);
             recRestartTimer = setTimeout(() => {
-                if (alive && phase === 'listening') attachRecognizer();
+                if (stillOwner(user, epoch) && phase === 'listening') attachRecognizer(user, epoch);
             }, delay);
         });
 
         try { recognizer.start(); recErrors = 0; } catch {
-            recRestartTimer = setTimeout(() => { if (alive) attachRecognizer(); }, 300);
+            recRestartTimer = setTimeout(() => {
+                if (stillOwner(user, epoch)) attachRecognizer(user, epoch);
+            }, 300);
         }
     }
 
     async function submitTurn(text: string) {
         if (submittedTurn || !alive) return;
+        const user = authState.activeUser;
+        const epoch = accountEpoch;
+        if (!user || !stillOwner(user, epoch)) return;
         submittedTurn = true;
         interimTranscript = '';
         currentText = '';
@@ -338,18 +380,20 @@
         appendMessage(threadId, { role: 'user', content: text });
         scrollToBottom();
 
-        await runAssistant(threadId);
+        await runAssistant(threadId, user, epoch);
     }
 
-    async function runAssistant(threadId: string) {
-        if (!alive) return;
+    async function runAssistant(threadId: string, ownerUser: string, ownerEpoch: number) {
+        if (!stillOwner(ownerUser, ownerEpoch)) return;
         if (!isChatConfigured()) {
             showToast('error', 'Configure an AI provider in Settings → AI.');
             phase = 'idle';
             return;
         }
 
-        abortCtrl = new AbortController();
+        const controller = new AbortController();
+        abortCtrl = controller;
+        const ownsRun = () => stillOwner(ownerUser, ownerEpoch) && !controller.signal.aborted;
         const placeholder: ChatMessage = { role: 'assistant', content: '' };
         appendMessage(threadId, placeholder);
         scrollToBottom();
@@ -392,13 +436,15 @@
 
             let acc = '';
             for await (const ev of chatTurn(history, {
-                signal: abortCtrl.signal,
+                signal: controller.signal,
+                accountUser: ownerUser,
                 tools: toolCatalog,
                 systemPrompt,
                 modelOverride,
                 confirmWrite: async () => false,
                 confirmPermission: async () => false
             })) {
+                if (!ownsRun()) break;
                 if (ev.type === 'message') {
                     acc += ev.text || '';
                     updateAssistant(threadId, acc, ev.reasoningContent);
@@ -415,18 +461,19 @@
 
             const t = aiState.threads.find((th) => th.id === threadId);
             const last = t?.messages[t.messages.length - 1];
-            if (last?.role === 'assistant' && last.content) {
+            if (ownsRun() && last?.role === 'assistant' && last.content) {
                 if (isVoiceAvailable()) {
                     phase = 'speaking';
-                    speakingAbort = new AbortController();
+                    const speechController = new AbortController();
+                    speakingAbort = speechController;
                     voiceSince = 0;
                     try {
                         await speakWithElevenLabs(stripForSpeech(last.content), {
-                            signal: speakingAbort.signal
+                            signal: speechController.signal
                         });
                     } catch (err) {
                         const e = err as Error;
-                        if (e.name !== 'AbortError') {
+                        if (stillOwner(ownerUser, ownerEpoch) && e.name !== 'AbortError') {
                             console.warn('TTS failed:', err);
                             showToast('error', `Voice playback: ${e.message}`);
                         }
@@ -434,13 +481,17 @@
                 }
             }
         } catch (err) {
-            updateAssistant(threadId, `Error: ${(err as Error).message}`);
-            scrollToBottom();
+            if (stillOwner(ownerUser, ownerEpoch) && (err as Error).name !== 'AbortError') {
+                updateAssistant(threadId, `Error: ${(err as Error).message}`);
+                scrollToBottom();
+            }
         } finally {
-            abortCtrl = null;
-            speakingAbort = null;
+            if (stillOwner(ownerUser, ownerEpoch)) {
+                if (abortCtrl === controller) abortCtrl = null;
+                speakingAbort = null;
             // Loop back into listening for the next turn.
-            if (alive) startListening();
+                if (alive) startListening();
+            }
         }
     }
 
