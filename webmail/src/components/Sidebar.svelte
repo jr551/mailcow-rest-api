@@ -301,7 +301,7 @@
         {#if onRefresh}
             <button
                 type="button"
-                class={`btn btn-primary refresh-btn ${refreshSpinning ? 'spinning' : ''}`}
+                class={`btn btn-ghost refresh-btn ${refreshSpinning ? 'spinning' : ''}`}
                 onclick={handleRefresh}
                 title="Refresh inbox"
                 aria-label="Refresh inbox"
@@ -650,17 +650,17 @@
         font-weight: 600;
         box-shadow: var(--shadow-sm);
     }
-    /* Refresh inherits btn-primary so it tracks the active theme accent —
-     * matches compose visually so the two read as a paired action. */
+    /* Keep refresh secondary so Compose remains the clear primary action. */
     .refresh-btn {
         flex: 0 0 auto;
         display: inline-grid;
         place-items: center;
         width: 40px;
         padding: 0;
-        box-shadow: var(--shadow-sm);
+        border: 1px solid var(--border-subtle);
+        color: var(--text-secondary);
     }
-    .refresh-btn:hover { transform: translateY(-1px); }
+    .refresh-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
     .refresh-btn:active { transform: translateY(0); }
     .refresh-btn .refresh-icon {
         display: inline-flex;
@@ -798,9 +798,8 @@
     .folder:hover {
         background: var(--bg-hover);
         color: var(--text-primary);
-        transform: translateX(1px);
     }
-    .folder { transition: background-color var(--transition-fast), color var(--transition-fast), transform 120ms ease; }
+    .folder { transition: background-color var(--transition-fast), color var(--transition-fast); }
     .folder.active {
         background: var(--bg-selected);
         color: var(--accent-text);

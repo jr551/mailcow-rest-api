@@ -264,7 +264,7 @@ select:focus {
     white-space: nowrap;
     user-select: none;
 }
-.btn:hover { transform: translateY(-1px); }
+.btn:hover { transform: none; }
 .btn:active { transform: translateY(0); }
 .btn:disabled {
     opacity: 0.55;

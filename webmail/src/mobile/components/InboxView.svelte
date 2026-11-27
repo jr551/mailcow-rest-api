@@ -977,40 +977,10 @@
         height: 56px;
         flex-shrink: 0;
     }
-    /* Fresh: arrived in the last 10 minutes — sparkly halo so the user
-       spots brand-new mail without scanning timestamps. */
+    /* Fresh mail gets a quiet accent rail, not an animated halo. */
     .msg-row.fresh {
-        position: relative;
-        background:
-            radial-gradient(120% 220% at 0% 50%,
-                color-mix(in srgb, var(--accent) 16%, transparent) 0%,
-                transparent 55%),
-            var(--bg-surface);
-        animation: fresh-pulse-mobile 2.4s ease-in-out infinite;
-    }
-    .msg-row.fresh::after {
-        content: '';
-        position: absolute;
-        inset: 0;
-        pointer-events: none;
-        background-image:
-            radial-gradient(circle at 14% 28%, color-mix(in srgb, var(--accent) 75%, white) 0 1.4px, transparent 2px),
-            radial-gradient(circle at 30% 76%, color-mix(in srgb, var(--accent) 65%, white) 0 1.2px, transparent 2px),
-            radial-gradient(circle at 76% 22%, color-mix(in srgb, #d268f4 65%, white) 0 1.2px, transparent 2px),
-            radial-gradient(circle at 90% 66%, color-mix(in srgb, var(--accent) 75%, white) 0 1.4px, transparent 2px);
-        opacity: 0.85;
-        animation: fresh-twinkle-mobile 1.8s ease-in-out infinite;
-    }
-    @keyframes fresh-pulse-mobile {
-        0%, 100% { box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 70%, transparent); }
-        50%      { box-shadow: inset 3px 0 0 var(--accent), 0 0 12px color-mix(in srgb, var(--accent) 22%, transparent); }
-    }
-    @keyframes fresh-twinkle-mobile {
-        0%, 100% { opacity: 0.4; transform: scale(0.92); }
-        50%      { opacity: 0.95; transform: scale(1.08); }
-    }
-    @media (prefers-reduced-motion: reduce) {
-        .msg-row.fresh, .msg-row.fresh::after { animation: none; }
+        background: var(--bg-surface);
+        box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 70%, transparent);
     }
     .msg-row {
         display: flex;
@@ -1022,35 +992,21 @@
         transition: background-color 80ms;
         min-height: 68px;
     }
-    .msg-row.danger-4 { animation: danger-pulse-4 2.2s ease-in-out infinite; }
-    .msg-row.danger-3 { animation: danger-pulse-3 2.6s ease-in-out infinite; }
-    .msg-row.danger-2 { animation: danger-pulse-2 3s ease-in-out infinite; }
-    .msg-row.danger-1 { animation: danger-pulse-1 3.4s ease-in-out infinite; }
-    @keyframes danger-pulse-4 {
-        0%, 100% { box-shadow: inset 3px 0 0 color-mix(in srgb, #ef4444 70%, transparent); }
-        50%      { box-shadow: inset 3px 0 0 color-mix(in srgb, #ef4444 95%, transparent), 0 0 10px -2px color-mix(in srgb, #ef4444 22%, transparent); }
+    .msg-row.danger-4,
+    .msg-row.danger-3 {
+        background: color-mix(in srgb, #ef4444 8%, var(--bg-surface));
+        box-shadow: inset 3px 0 0 #ef4444;
     }
-    @keyframes danger-pulse-3 {
-        0%, 100% { box-shadow: inset 3px 0 0 color-mix(in srgb, #f97316 60%, transparent); }
-        50%      { box-shadow: inset 3px 0 0 color-mix(in srgb, #f97316 85%, transparent), 0 0 8px -2px color-mix(in srgb, #f97316 18%, transparent); }
+    .msg-row.danger-2 {
+        background: color-mix(in srgb, #eab308 7%, var(--bg-surface));
+        box-shadow: inset 3px 0 0 #eab308;
     }
-    @keyframes danger-pulse-2 {
-        0%, 100% { box-shadow: inset 3px 0 0 color-mix(in srgb, #eab308 55%, transparent); }
-        50%      { box-shadow: inset 3px 0 0 color-mix(in srgb, #eab308 80%, transparent), 0 0 6px -2px color-mix(in srgb, #eab308 15%, transparent); }
-    }
-    @keyframes danger-pulse-1 {
-        0%, 100% { box-shadow: inset 3px 0 0 color-mix(in srgb, #22c55e 50%, transparent); }
-        50%      { box-shadow: inset 3px 0 0 color-mix(in srgb, #22c55e 75%, transparent), 0 0 6px -2px color-mix(in srgb, #22c55e 12%, transparent); }
-    }
-    @media (prefers-reduced-motion: reduce) {
-        .msg-row.danger-1, .msg-row.danger-2, .msg-row.danger-3, .msg-row.danger-4 { animation: none; }
-        .msg-row.danger-4 { box-shadow: inset 3px 0 0 color-mix(in srgb, #ef4444 80%, transparent); }
-        .msg-row.danger-3 { box-shadow: inset 3px 0 0 color-mix(in srgb, #f97316 70%, transparent); }
-        .msg-row.danger-2 { box-shadow: inset 3px 0 0 color-mix(in srgb, #eab308 65%, transparent); }
-        .msg-row.danger-1 { box-shadow: inset 3px 0 0 color-mix(in srgb, #22c55e 60%, transparent); }
+    .msg-row.danger-1 {
+        background: color-mix(in srgb, #22c55e 6%, var(--bg-surface));
+        box-shadow: inset 3px 0 0 #22c55e;
     }
     .msg-row.spy-tracked {
-        animation: spy-pulse-glow 2.8s ease-in-out infinite;
+        box-shadow: inset 3px 0 0 color-mix(in srgb, #10b981 55%, var(--border-subtle));
     }
     .spy-mark {
         display: inline-flex;
@@ -1065,24 +1021,8 @@
         border-radius: 50%;
     }
     .msg-row.spy-tracked .msg-subject {
-        color: color-mix(in srgb, #10b981 75%, var(--text-secondary));
+        color: var(--text-primary);
         font-weight: 600;
-    }
-    @keyframes spy-pulse-glow {
-        0%, 100% {
-            box-shadow: inset 3px 0 0 color-mix(in srgb, #10b981 55%, transparent);
-        }
-        50% {
-            box-shadow:
-                inset 3px 0 0 color-mix(in srgb, #10b981 90%, transparent),
-                0 0 10px -2px color-mix(in srgb, #10b981 25%, transparent);
-        }
-    }
-    @media (prefers-reduced-motion: reduce) {
-        .msg-row.spy-tracked { animation: none; }
-        .msg-row.spy-tracked {
-            box-shadow: inset 3px 0 0 color-mix(in srgb, #10b981 70%, transparent);
-        }
     }
     .msg-row:active { background: var(--bg-hover); }
     .msg-body {
@@ -1145,26 +1085,15 @@
         font-size: 13px;
     }
 
-    /* Client-side rule animation: shimmer while running, pop-away on
-     * completion. Mirrors the desktop treatment so the user sees the
-     * same effect on either form factor. */
+    /* Running rules use a static accent rail; completion keeps a brief
+     * exit transition so the row's removal remains understandable. */
     .msg-row.rule-running {
-        position: relative;
-        background: linear-gradient(
-            90deg,
-            transparent 0%,
-            color-mix(in srgb, var(--accent) 14%, transparent) 50%,
-            transparent 100%);
-        background-size: 200% 100%;
-        animation: rule-shimmer 1.6s ease-in-out infinite;
+        background: color-mix(in srgb, var(--accent) 9%, var(--bg-surface));
+        box-shadow: inset 3px 0 0 var(--accent);
     }
     .msg-row.rule-popping {
         animation: rule-pop 360ms cubic-bezier(0.4, 0.0, 1, 1) forwards;
         pointer-events: none;
-    }
-    @keyframes rule-shimmer {
-        0%   { background-position: 100% 50%; }
-        100% { background-position: -100% 50%; }
     }
     @keyframes rule-pop {
         0%   { transform: scale(1) translateX(0);   opacity: 1; filter: blur(0); }
@@ -1172,7 +1101,6 @@
         100% { transform: scale(0.6) translateX(40px); opacity: 0; filter: blur(2px); }
     }
     @media (prefers-reduced-motion: reduce) {
-        .msg-row.rule-running { animation: none; }
         .msg-row.rule-popping { animation: none; opacity: 0.4; }
     }
 </style>

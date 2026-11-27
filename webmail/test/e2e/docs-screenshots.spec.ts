@@ -28,6 +28,11 @@ function seedSettings(extra: Record<string, unknown> = {}) {
 }
 
 async function settleForScreenshot(page: Page) {
+    // The fixture app still renders latency readouts from request timing;
+    // keep telemetry out of the committed documentation images.
+    await page.addStyleTag({
+        content: '[data-testid="latency-chip"], [data-testid="server-ping"] { display: none !important; }'
+    });
     await page.evaluate(() => document.fonts.ready);
     await page.waitForTimeout(450);
 }

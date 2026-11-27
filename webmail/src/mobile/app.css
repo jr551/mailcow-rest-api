@@ -351,7 +351,7 @@ body {
     background: var(--bg-surface);
     color: var(--text-primary);
 }
-.btn:hover { transform: translateY(-1px); }
+.btn:hover { transform: none; }
 .btn:active { transform: translateY(0); }
 .btn:disabled { opacity: 0.55; cursor: not-allowed; transform: none !important; }
 .btn-primary { background: var(--accent); color: var(--text-on-accent); }
