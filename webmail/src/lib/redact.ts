@@ -20,7 +20,7 @@ const RX_VENDOR_TOKEN = /\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|g
 // Authorization headers and URL user-info can appear in fetch errors without
 // a vendor prefix. Mirror the server scrubber so direct-to-provider Error
 // Doctor requests get the same protection as server-brokered AI calls.
-const RX_BEARER = /\b(Bearer\s+)(?=[A-Za-z0-9._~+\/-]*\d)[A-Za-z0-9._~+\/-]{16,}=*/gi;
+const RX_BEARER = /\b(Bearer\s+)[A-Za-z0-9._~+\/-]{16,}=*/gi;
 const RX_BASIC_AUTH = /\b(Authorization\s*:\s*Basic\s+)[A-Za-z0-9+\/]{8,}=*/gi;
 const RX_URL_CREDENTIALS = /\b([a-z][a-z0-9+.-]*:\/\/)([^\s/:@]+):([^\s/@]+)@/gi;
 const RX_PRIVATE_KEY = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g;

@@ -96,6 +96,10 @@ test('redact: secret that appears inside its label does not leak or mangle the l
         'Authorization: Bearer [REDACTED]'
     );
     assert.equal(
+        redactSecrets('Authorization: Bearer abcdefghijklmnopqrstuvwxyz'),
+        'Authorization: Bearer [REDACTED]'
+    );
+    assert.equal(
         redactSecrets('eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnop'),
         '[REDACTED]'
     );

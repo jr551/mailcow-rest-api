@@ -56,7 +56,7 @@ const LABELLED_SECRET = new RegExp(
 // "Bearer <token>" and "Authorization: Basic <base64>". Bearer needs a digit
 // in the token so prose like "bearer of good news" is left alone.
 const AUTH_HEADER_PATTERNS = [
-    [/\b(Bearer\s+)(?=[A-Za-z0-9._~+\/-]*\d)[A-Za-z0-9._~+\/-]{16,}=*/gi, 'bearer-token'],
+    [/\b(Bearer\s+)[A-Za-z0-9._~+\/-]{16,}=*/gi, 'bearer-token'],
     [/\b(Authorization\s*:\s*Basic\s+)[A-Za-z0-9+\/]{8,}=*/gi, 'basic-auth']
 ];
 

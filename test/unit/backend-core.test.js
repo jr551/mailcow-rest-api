@@ -74,6 +74,7 @@ test('secret-scrub: quoted multi-word values, "is:" separators and bearer tokens
     assert.equal(scrub('password: "correct horse battery"'), 'password: "[redacted]"');
     assert.equal(scrub('password is: Abc123xyz'), 'password is: [redacted]');
     assert.equal(scrub('Authorization: Bearer abcdef1234567890'), 'Authorization: Bearer [redacted]');
+    assert.equal(scrub('Authorization: Bearer abcdefghijklmnopqrstuvwxyz'), 'Authorization: Bearer [redacted]');
     assert.equal(scrub('Authorization: Basic dXNlcjpwYXNzd29yZA=='), 'Authorization: Basic [redacted]');
     // Prose stays untouched.
     const prose = 'The bearer of this letter is a basic person';
