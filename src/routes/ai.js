@@ -13,7 +13,7 @@ const {
 const llm = require('../llm');
 const config = require('../config');
 const { problem } = require('../errors');
-const { scrubMessages, scrubMessagesPii } = require('../secret-scrub');
+const { scrubMessages, scrubMessagesPii, scrubText } = require('../secret-scrub');
 const { sendDecoys } = require('../llm-decoys');
 
 // Loopback / RFC1918 / link-local hosts are treated as local — the PII pass
@@ -546,9 +546,11 @@ module.exports = async function aiRoutes(app, opts = {}) {
         } finally {
             await closeDispatcher(dispatcher);
         }
+        let detail = scrubText(String(result.detail || ''), {});
+        if (provider.apiKey) detail = detail.split(provider.apiKey).join('[redacted]');
         const value = result.ok
             ? { models: result.models }
-            : { models: [], error: `${result.title}: ${result.detail}` };
+            : { models: [], error: `${result.title}: ${detail}` };
         writeModelListCache(key, value);
         if (!result.ok) {
             req.log.warn({ detail: value.error }, 'AI model catalog probe failed');

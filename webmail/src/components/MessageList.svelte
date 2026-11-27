@@ -395,8 +395,13 @@
         ctxSelectRow(uid);
         void tick().then(() => focusCtxItem(0));
     }
-    function rowOf(uid: number) {
-        return ui.messages.find((m) => m.uid === uid);
+    function rowOf(uid: number, mailbox?: string) {
+        const matches = ui.messages.filter((m) => m.uid === uid);
+        if (mailbox) return matches.find((m) => m.mailbox === mailbox);
+        // UIDs are unique only within a mailbox. If an aggregate result is
+        // missing its source folder, refuse an ambiguous match instead of
+        // silently acting on the first row with the same UID.
+        return matches.length === 1 ? matches[0] : undefined;
     }
 
     // Folder destinations for the context menu's Move submenu. Deliberately
@@ -491,7 +496,9 @@
     async function sendSenderToWebhook(webhookId: string) {
         const target = ctx?.uid;
         if (target == null) return;
-        const from = rowOf(target)?.envelope?.from?.[0]?.address;
+        const mailbox = ctx?.mailbox;
+        const user = authState.activeUser;
+        const from = rowOf(target, mailbox)?.envelope?.from?.[0]?.address;
         closeCtx();
         if (!from) {
             showToast('error', 'That message has no sender address to match on');
@@ -507,6 +514,7 @@
                 condition: { type: 'from-contains', value: from },
                 action: { type: 'webhook', webhookId }
             });
+            if (authState.activeUser !== user) return;
             // The future-only wording is the single most common source of
             // "I made the rule and nothing happened" — Sieve runs on arrival,
             // nothing re-runs against the mailbox. RuleFromMessageDialog
@@ -514,6 +522,7 @@
             // rather than inventing a third variant of it.
             showToast('success', `Mail from ${from} will go to that webhook as it arrives`);
         } catch (err) {
+            if (authState.activeUser !== user) return;
             const msg = err instanceof Error ? err.message : 'Could not create the rule';
             showToast('error', msg);
         }
@@ -1982,7 +1991,7 @@
 />
 
 {#if ctx}
-    {@const m = rowOf(ctx.uid)}
+    {@const m = rowOf(ctx.uid, ctx.mailbox)}
     {#if m}
         {@const isUnread = unread(m.flags)}
         {@const isFlagged = flagged(m.flags)}

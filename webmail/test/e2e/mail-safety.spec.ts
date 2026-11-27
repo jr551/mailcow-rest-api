@@ -302,6 +302,40 @@ test('aggregated search results cannot mutate the wrong folder', async ({ page }
     await expect(page.getByTestId('search-scope-all')).toBeVisible();
 });
 
+test('aggregate context menus resolve the clicked folder when UIDs collide', async ({ page }) => {
+    await applyMocks(page);
+    const sentMessage = {
+        ...messages[0],
+        uid: 1001,
+        seq: 1,
+        envelope: {
+            ...messages[0].envelope,
+            subject: 'Sent invoice follow-up',
+            messageId: '<sent-invoice@example.test>',
+            inReplyTo: null,
+            from: [{ name: 'Sent Sender', address: 'sent-sender@example.test' }]
+        }
+    };
+    await page.route('**/v1/mailboxes/Sent/messages?*', (route) => {
+        route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({ path: 'Sent', page: 0, pageSize: 100, total: 1, messages: [sentMessage] })
+        });
+    });
+
+    await login(page);
+    await page.getByTestId('search-input').fill('invoice');
+    await page.getByTestId('search-scope-all').click();
+    const sentRow = page.locator('.row').filter({ hasText: 'Sent Sender' });
+    await expect(sentRow).toBeVisible();
+    await sentRow.click({ button: 'right' });
+    await page.getByTestId('msg-ctx').getByRole('menuitem', { name: 'Create rule from message' }).click();
+
+    await expect(page.getByTestId('rule-from-message-source')).toContainText('sent-sender@example.test');
+    await expect(page.getByTestId('rule-condition-value')).toHaveValue('sent-sender@example.test');
+});
+
 test('opening a global-search result cancels remaining folder requests', async ({ page }) => {
     await applyMocks(page);
 

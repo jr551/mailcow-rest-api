@@ -8,6 +8,7 @@ import { isChatConfigured, resolveBaseUrl, resolveModel, resolveApiKey } from '.
 import { apiBase, apiUrl } from './api';
 import { settings } from './settings.svelte';
 import { redactSecrets } from './redact';
+import { getAccountUser, onAccountUserChange } from './account-context';
 
 const SUPPRESS_KEY = 'webmail.error-doctor.suppress';
 
@@ -33,6 +34,7 @@ export interface ErrorIncident {
     url?: string;
     stack?: string;
     detail?: string;
+    accountUser?: string | null;
     diagnosis: string | null;
     diagnosisLoading: boolean;
 }
@@ -61,9 +63,14 @@ const QUIET_MS = 10000;
 // query string or fragment that may carry mail/share data. The same helper is
 // used for the AI diagnosis prompt so neither egress gets the full URL.
 const CAPABILITY_PATH_RE = /(\/v1\/(?:public\/(?:ical|event)|messages\/(?:approve|deny)|webhook-inbox|webhook-message)\/|\/v1\/webhook-staging\/[^/?]+\/)[^/?#]+/g;
+const URL_WITH_QUERY_RE = /(?:https?:\/\/|\/(?:v1|imap-rest)\/)[^\s<>"']+/gi;
+
+function stripUrlQueries(text: string): string {
+    return text.replace(URL_WITH_QUERY_RE, (value) => value.split(/[?#]/, 1)[0]);
+}
 
 function redactErrorText(text: string): string {
-    return redactSecrets(text.replace(CAPABILITY_PATH_RE, '$1[redacted]'));
+    return redactSecrets(stripUrlQueries(text).replace(CAPABILITY_PATH_RE, '$1[redacted]'));
 }
 
 function safeErrorUrl(raw?: string): string | undefined {
@@ -111,6 +118,14 @@ const SILENT_ROUTES: RegExp[] = [
 const recentReports = new Map<string, number>();
 const REPORT_DEDUP_MS = 30_000;
 
+// Errors and buffered diagnoses belong to the account that was active when
+// they happened. A late response from the previous account must not appear in
+// the new account's Error Doctor or be sent to its configured provider.
+onAccountUserChange(() => {
+    dismissIncident();
+    recentReports.clear();
+});
+
 // 5xx on any of our own routes feeds the server-health watcher so the
 // maintenance overlay can flip up when things are properly broken.
 function isOwnRoute(url?: string): boolean {
@@ -126,7 +141,12 @@ export function reportCriticalError(opts: {
     url?: string;
     stack?: string;
     detail?: string;
+    accountUser?: string | null;
 }) {
+    const activeUser = getAccountUser();
+    // API callers tag the session that started the request. If it no longer
+    // matches, the failure is stale cross-account state and is not reportable.
+    if (opts.accountUser !== undefined && activeUser !== undefined && opts.accountUser !== activeUser) return;
     if (typeof opts.status === 'number' && opts.status >= 500 && opts.status <= 599 && isOwnRoute(opts.url)) {
         // Lazy import to avoid a circular load at module init.
         import('./server-health.svelte').then((h) => h.noteServer5xx()).catch(() => { /* noop */ });
@@ -192,6 +212,7 @@ export function reportCriticalError(opts: {
         url: opts.url,
         stack: opts.stack,
         detail: opts.detail,
+        accountUser: activeUser,
         diagnosis: null,
         diagnosisLoading: false
     };
@@ -227,6 +248,7 @@ function flushBuffer() {
             status: batch.find(i => i.status)?.status,
             url: batch.find(i => i.url)?.url,
             detail: batch.map((i, idx) => `(${idx + 1}) [${i.type}] ${i.message}${i.detail ? ': ' + i.detail : ''}`).join('\n'),
+            accountUser: batch[0]?.accountUser,
             diagnosis: null,
             diagnosisLoading: false
         };
@@ -283,17 +305,19 @@ async function runDiagnosis(incident: ErrorIncident, batch?: ErrorIncident[]) {
                 max_tokens: 300 // keep it fast
             })
         });
+        if (getAccountUser() !== incident.accountUser) return;
         if (!res.ok) {
             incident.diagnosis = null;
             return;
         }
         const data = await res.json();
+        if (getAccountUser() !== incident.accountUser) return;
         const text = data?.choices?.[0]?.message?.content || '';
         incident.diagnosis = text.trim() || null;
     } catch {
-        incident.diagnosis = null;
+        if (getAccountUser() === incident.accountUser) incident.diagnosis = null;
     } finally {
-        incident.diagnosisLoading = false;
+        if (getAccountUser() === incident.accountUser) incident.diagnosisLoading = false;
     }
 }
 

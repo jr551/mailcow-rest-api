@@ -31,6 +31,7 @@ process.on('exit', () => { try { rmSync(tmp, { recursive: true, force: true }); 
 const urlOf = (f) => pathToFileURL(path.join(tmp, f)).href;
 const MODULES = {
     './keychain': 'keychain.mjs',
+    './account-context': 'account-context.mjs',
     './auth.svelte': 'auth.mjs',
     './settings.svelte': 'settings.mjs',
     './settings-sync': 'sync.mjs',
@@ -42,6 +43,7 @@ const MODULES = {
 
 for (const [src, out] of [
     ['keychain.ts', 'keychain.mjs'],
+    ['account-context.ts', 'account-context.mjs'],
     ['auth.svelte.ts', 'auth.mjs'],
     ['settings.svelte.ts', 'settings.mjs'],
     ['settings-sync.ts', 'sync.mjs'],

@@ -22,13 +22,18 @@ function clip(s, max = MAX_FIELD_CHARS) {
 
 function scrub(s, max = MAX_FIELD_CHARS) {
     if (typeof s !== 'string') return undefined;
-    return clip(scrubText(s, {}).replace(CAPABILITY_PATH_RE, '$1[redacted]'), max);
+    return clip(scrubText(stripUrlQueries(s), {}).replace(CAPABILITY_PATH_RE, '$1[redacted]'), max);
 }
 
 // A failed search or signed share link can put credentials and private text
 // in the query/fragment. Diagnostics need the route, not those values. Old
 // clients may still send the full URL, so strip it again at the sink.
 const CAPABILITY_PATH_RE = /(\/v1\/(?:public\/(?:ical|event)|messages\/(?:approve|deny)|webhook-inbox|webhook-message)\/|\/v1\/webhook-staging\/[^/?]+\/)[^/?#]+/g;
+const URL_WITH_QUERY_RE = /(?:https?:\/\/|\/(?:v1|imap-rest)\/)[^\s<>"']+/gi;
+
+function stripUrlQueries(text) {
+    return text.replace(URL_WITH_QUERY_RE, (value) => value.split(/[?#]/, 1)[0]);
+}
 
 function scrubUrl(s, max = 1000) {
     if (typeof s !== 'string') return undefined;

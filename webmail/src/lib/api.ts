@@ -197,7 +197,8 @@ async function request<T>(
             type: 'network',
             message: (err as Error).message || 'Network request failed',
             url: target,
-            detail: `${method} ${target}`
+            detail: `${method} ${target}`,
+            accountUser: requestSession?.user
         });
         throw err;
     }
@@ -210,7 +211,8 @@ async function request<T>(
                 message: problem.title,
                 status: problem.status,
                 url,
-                detail: problem.detail
+                detail: problem.detail,
+                accountUser: requestSession?.user
             });
         }
         throw new ApiError(problem);

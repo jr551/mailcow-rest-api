@@ -20,6 +20,7 @@ const PERM_STORAGE_KEY = 'webmail.session.perm.v1';
 const COOKIE_NAME = 'webmail_session';
 import { rememberCreds, recallCreds, forgetCreds } from './keychain';
 import { apiUrl } from './api';
+import { setAccountUser } from './account-context';
 
 // Mobile detection — the mobile app is served at /webmail/mobile/
 const isMobile = typeof window !== 'undefined' && window.location.pathname.startsWith('/webmail/mobile/');
@@ -192,6 +193,7 @@ const state = $state<AuthState>({
 });
 
 export const authState = state;
+setAccountUser(state.activeUser);
 
 // ---------- Active session helpers ----------
 
@@ -217,6 +219,7 @@ export function upsertSession(session: Session) {
     if (idx >= 0) state.sessions[idx] = session;
     else state.sessions.push(session);
     state.activeUser = session.user;
+    setAccountUser(session.user);
     state.addingAccount = false;
     state.expiringSoon = false;
     persist(state);
@@ -240,6 +243,7 @@ function dropSession(user: string) {
     state.sessions = filtered;
     if (state.activeUser === user) {
         state.activeUser = filtered[0]?.user || null;
+        setAccountUser(state.activeUser);
     }
     persist(state);
     if (!filtered.length) clearPerm();
@@ -256,6 +260,7 @@ export function removeSession(user: string) {
 export function switchTo(user: string) {
     if (state.sessions.find((s) => s.user === user)) {
         state.activeUser = user;
+        setAccountUser(user);
         persist(state);
         if (permanentSignInOn()) persistPerm(state);
     }

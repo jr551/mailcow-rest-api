@@ -15,7 +15,15 @@ const RX_API_KEY_LABELLED = /\b(?:api[_\s-]?key|secret(?:[_\s-]?key)?|access[_\s
 // Distinctive vendor-token shapes do not need a label. This matters for
 // direct-to-provider calls and Error Doctor, where an upstream error can
 // quote a key without ever saying "apiKey:" first.
-const RX_VENDOR_TOKEN = /\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,}|(?:AKIA|ASIA)[A-Z0-9]{16}|AIza[A-Za-z0-9_-]{30,}|xox[abposr]-[A-Za-z0-9-]{10,})\b/g;
+const RX_VENDOR_TOKEN = /\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,}|(?:AKIA|ASIA)[A-Z0-9]{16}|AIza[A-Za-z0-9_-]{30,}|xox[abposr]-[A-Za-z0-9-]{10,}|[rs]k_(?:live|test)_[A-Za-z0-9]{16,}|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})\b/g;
+
+// Authorization headers and URL user-info can appear in fetch errors without
+// a vendor prefix. Mirror the server scrubber so direct-to-provider Error
+// Doctor requests get the same protection as server-brokered AI calls.
+const RX_BEARER = /\b(Bearer\s+)(?=[A-Za-z0-9._~+\/-]*\d)[A-Za-z0-9._~+\/-]{16,}=*/gi;
+const RX_BASIC_AUTH = /\b(Authorization\s*:\s*Basic\s+)[A-Za-z0-9+\/]{8,}=*/gi;
+const RX_URL_CREDENTIALS = /\b([a-z][a-z0-9+.-]*:\/\/)([^\s/:@]+):([^\s/@]+)@/gi;
+const RX_PRIVATE_KEY = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g;
 
 // 13–19 digit runs grouped by spaces or dashes, validated against Luhn.
 // The grouping rules out long numeric IDs that aren't actually card-like.
@@ -56,6 +64,10 @@ export function redactSecrets(text: string): string {
     out = out.replace(RX_PASSWORD_LABELLED, redactCapture);
     out = out.replace(RX_API_KEY_LABELLED, redactCapture);
     out = out.replace(RX_VENDOR_TOKEN, '[REDACTED]');
+    out = out.replace(RX_PRIVATE_KEY, '[REDACTED]');
+    out = out.replace(RX_BEARER, '$1[REDACTED]');
+    out = out.replace(RX_BASIC_AUTH, '$1[REDACTED]');
+    out = out.replace(RX_URL_CREDENTIALS, (_m, scheme, user) => `${scheme}${user}:[REDACTED]@`);
 
     out = out.replace(RX_CARD_CANDIDATE, (m) => {
         const digits = m.replace(/[\s-]/g, '');

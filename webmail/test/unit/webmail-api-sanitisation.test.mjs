@@ -91,6 +91,16 @@ test('redact: secret that appears inside its label does not leak or mangle the l
     assert.equal(redactSecrets('api key: abcdefghijklmnop1234'), 'api key: [REDACTED]');
     assert.equal(redactSecrets('upstream echoed sk-abcdefghijklmnop1234'), 'upstream echoed [REDACTED]');
     assert.equal(redactSecrets('upstream echoed ghp_abcdefghijklmnop1234'), 'upstream echoed [REDACTED]');
+    assert.equal(
+        redactSecrets('Authorization: Bearer abcdefghijklmnop123456'),
+        'Authorization: Bearer [REDACTED]'
+    );
+    assert.equal(
+        redactSecrets('eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnop'),
+        '[REDACTED]'
+    );
+    assert.equal(redactSecrets('sk_live_abcdefghijklmnop1234'), '[REDACTED]');
+    assert.equal(redactSecrets('https://user:secret-value@example.test/path'), 'https://user:[REDACTED]@example.test/path');
 });
 
 test('domain-scope: path, port, query, fragment and percent-encoding are not hosts', () => {

@@ -42,4 +42,14 @@ test('error telemetry is opt-in and sends a redacted, query-free report', async 
     expect(JSON.stringify(report)).not.toContain('private-feed.ics');
     expect(JSON.stringify(report)).not.toContain('hunter2');
     expect(JSON.stringify(report)).not.toContain('sk-browser-secret');
+
+    // Network failures used to copy the full request target into `detail`,
+    // bypassing the query-free URL field. Exercise the real search request.
+    await page.route('**/v1/mailboxes/INBOX/messages?*', (route) => route.abort('failed'));
+    await page.getByTestId('search-input').fill('private phrase');
+    await page.getByTestId('search-input').press('Enter');
+    await expect.poll(() => reports.some((report) => report.type === 'network')).toBe(true);
+    const networkReport = reports.find((report) => report.type === 'network');
+    expect(networkReport?.detail).toBe('GET /v1/mailboxes/INBOX/messages');
+    expect(JSON.stringify(networkReport)).not.toContain('private phrase');
 });
